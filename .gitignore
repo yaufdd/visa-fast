@@ -1,0 +1,6 @@
+backend/uploads/
+backend/.env
+frontend/node_modules/
+frontend/dist/
+*.zip
+*.pdf

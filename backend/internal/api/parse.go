@@ -1,0 +1,268 @@
+package api
+
+import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"fujitravel-admin/backend/internal/ai"
+	"fujitravel-admin/backend/internal/storage"
+)
+
+// convertDate converts DD.MM.YYYY → YYYY-MM-DD for PostgreSQL date fields.
+func convertDate(s string) string {
+	if len(s) == 10 && s[2] == '.' && s[5] == '.' {
+		return s[6:10] + "-" + s[3:5] + "-" + s[0:2]
+	}
+	return s
+}
+
+// ParseTourist handles POST /api/tourists/:id/parse
+// Reads uploads for a specific tourist, runs Pass 1, saves raw_json.
+func ParseTourist(db *pgxpool.Pool, apiKey string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		touristID := chi.URLParam(r, "id")
+
+		rows, err := db.Query(r.Context(),
+			`SELECT file_path FROM uploads WHERE tourist_id = $1 ORDER BY created_at`, touristID)
+		if err != nil {
+			slog.Error("fetch tourist uploads", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		defer rows.Close()
+
+		files := map[string][]byte{}
+		for rows.Next() {
+			var path string
+			if err := rows.Scan(&path); err != nil {
+				continue
+			}
+			data, err := storage.ReadFile(path)
+			if err != nil {
+				slog.Error("read tourist upload", "path", path, "err", err)
+				writeError(w, http.StatusInternalServerError, "failed to read file")
+				return
+			}
+			files[path] = data
+		}
+		rows.Close()
+
+		if len(files) == 0 {
+			writeError(w, http.StatusBadRequest, "no uploads found for this tourist")
+			return
+		}
+
+		results, err := ai.ParseDocuments(r.Context(), apiKey, files)
+		if err != nil {
+			slog.Error("ai pass1 tourist", "err", err)
+			writeError(w, http.StatusInternalServerError, "AI parsing failed: "+err.Error())
+			return
+		}
+
+		// Use first result (tourist-specific upload should yield one person).
+		if len(results) == 0 {
+			writeError(w, http.StatusInternalServerError, "AI returned no results")
+			return
+		}
+		result := results[0]
+		rawJSON, _ := json.Marshal(result)
+
+		if _, err := db.Exec(r.Context(),
+			`UPDATE tourists SET raw_json = $1, updated_at = now() WHERE id = $2`,
+			rawJSON, touristID); err != nil {
+			slog.Error("update tourist raw_json", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+
+		// Auto-populate group_hotels from voucher data if not already set.
+		if len(result.HotelsFromVouchers) > 0 {
+			var existing int
+			_ = db.QueryRow(r.Context(),
+				`SELECT COUNT(*) FROM group_hotels WHERE group_id = (SELECT group_id FROM tourists WHERE id = $1)`,
+				touristID).Scan(&existing)
+
+			if existing == 0 {
+				var groupID string
+				_ = db.QueryRow(r.Context(), `SELECT group_id FROM tourists WHERE id = $1`, touristID).Scan(&groupID)
+
+				for i, vh := range result.HotelsFromVouchers {
+					// Find hotel by fuzzy name match in DB.
+					var hotelID string
+					err := db.QueryRow(r.Context(),
+						`SELECT id FROM hotels WHERE lower(name_en) ILIKE $1 LIMIT 1`,
+						"%"+vh.Name+"%",
+					).Scan(&hotelID)
+					if err != nil {
+						// Try substring match the other way.
+						_ = db.QueryRow(r.Context(),
+							`SELECT id FROM hotels WHERE $1 ILIKE '%' || lower(name_en) || '%' LIMIT 1`,
+							strings.ToLower(vh.Name),
+						).Scan(&hotelID)
+					}
+					if hotelID == "" {
+						// Hotel not in DB — create it automatically from voucher data.
+						err = db.QueryRow(r.Context(),
+							`INSERT INTO hotels (name_en, city) VALUES ($1, '') RETURNING id`,
+							vh.Name,
+						).Scan(&hotelID)
+						if err != nil {
+							slog.Warn("auto-create hotel from voucher failed", "name", vh.Name, "err", err)
+							continue
+						}
+						slog.Info("auto-created hotel from voucher", "name", vh.Name, "id", hotelID)
+					}
+					// Convert DD.MM.YYYY → YYYY-MM-DD for PostgreSQL.
+					checkIn := convertDate(vh.CheckIn)
+					checkOut := convertDate(vh.CheckOut)
+					if _, err := db.Exec(r.Context(),
+						`INSERT INTO group_hotels (group_id, hotel_id, check_in, check_out, sort_order)
+						 VALUES ($1, $2, $3::date, $4::date, $5)
+						 ON CONFLICT DO NOTHING`,
+						groupID, hotelID, checkIn, checkOut, i,
+					); err != nil {
+						slog.Warn("insert group_hotel from voucher", "err", err)
+					}
+				}
+			}
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"result": result})
+	}
+}
+
+// ParseGroup handles POST /api/groups/:id/parse
+// Reads all uploads for the group, sends them to Claude Pass 1, saves results as tourists.
+// If a SheetsSearcher is provided, automatically tries to match the tourist against Google Sheets.
+func ParseGroup(db *pgxpool.Pool, apiKey string, sheets ...SheetsSearcher) http.HandlerFunc {
+	var sheetsClient SheetsSearcher
+	if len(sheets) > 0 {
+		sheetsClient = sheets[0]
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		groupID := chi.URLParam(r, "id")
+
+		// Verify group exists.
+		var groupExists bool
+		if err := db.QueryRow(r.Context(), `SELECT true FROM groups WHERE id = $1`, groupID).Scan(&groupExists); err != nil {
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+
+		// Fetch all uploads for this group.
+		rows, err := db.Query(r.Context(),
+			`SELECT id, file_type, file_path FROM uploads WHERE group_id = $1 ORDER BY created_at`,
+			groupID)
+		if err != nil {
+			slog.Error("fetch uploads", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		defer rows.Close()
+
+		type uploadRow struct {
+			id       string
+			fileType string
+			filePath string
+		}
+		var uploads []uploadRow
+		for rows.Next() {
+			var u uploadRow
+			if err := rows.Scan(&u.id, &u.fileType, &u.filePath); err != nil {
+				slog.Error("scan upload row", "err", err)
+				writeError(w, http.StatusInternalServerError, "scan error")
+				return
+			}
+			uploads = append(uploads, u)
+		}
+		rows.Close()
+
+		if len(uploads) == 0 {
+			writeError(w, http.StatusBadRequest, "no uploads found for this group")
+			return
+		}
+
+		// Group files by tourist (group by "passport" boundary — each passport = one tourist set).
+		// Strategy: collect all files into one map and send together for now. For large groups with
+		// multiple tourists, the caller should upload files per-tourist. The AI prompt is resilient
+		// to multiple documents.
+		files := make(map[string][]byte, len(uploads))
+		for _, u := range uploads {
+			data, err := storage.ReadFile(u.filePath)
+			if err != nil {
+				slog.Error("read upload file", "path", u.filePath, "err", err)
+				writeError(w, http.StatusInternalServerError, "failed to read uploaded file")
+				return
+			}
+			files[u.filePath] = data
+		}
+
+		// Update group status to processing.
+		if _, err := db.Exec(r.Context(),
+			`UPDATE groups SET status = 'processing', updated_at = now() WHERE id = $1`, groupID); err != nil {
+			slog.Error("update group status", "err", err)
+		}
+
+		result, err := ai.ParseDocuments(r.Context(), apiKey, files)
+		if err != nil {
+			slog.Error("ai pass1", "err", err)
+			writeError(w, http.StatusInternalServerError, "AI parsing failed: "+err.Error())
+			return
+		}
+
+		type touristOut struct {
+			TouristID     string        `json:"tourist_id"`
+			Result        ai.Pass1Result `json:"result"`
+			MatchConfirmed bool          `json:"match_confirmed"`
+		}
+		var created []touristOut
+
+		for _, t := range result {
+			rawJSON, err := json.Marshal(t)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "marshal result error")
+				return
+			}
+
+			var matchedRowJSON []byte
+			matchConfirmed := false
+			if sheetsClient != nil {
+				query := t.NameLat
+				if query == "" {
+					query = t.NameCyr
+				}
+				matches, merr := sheetsClient.SearchByName(r.Context(), query, 1)
+				if merr != nil {
+					slog.Warn("auto-match sheets search failed", "err", merr)
+				} else if len(matches) > 0 && matches[0].Score >= 0.5 {
+					matchedRowJSON, _ = json.Marshal(matches[0].Row)
+					matchConfirmed = true
+					slog.Info("auto-matched tourist", "name", query, "score", matches[0].Score)
+				}
+			}
+
+			var touristID string
+			err = db.QueryRow(r.Context(),
+				`INSERT INTO tourists (group_id, raw_json, matched_sheet_row, match_confirmed)
+				 VALUES ($1, $2, $3, $4) RETURNING id`,
+				groupID, rawJSON, matchedRowJSON, matchConfirmed,
+			).Scan(&touristID)
+			if err != nil {
+				slog.Error("insert tourist", "err", err)
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
+			created = append(created, touristOut{TouristID: touristID, Result: t, MatchConfirmed: matchConfirmed})
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"tourists": created,
+			"count":    len(created),
+		})
+	}
+}
