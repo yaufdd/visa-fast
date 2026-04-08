@@ -1,4 +1,4 @@
-const API = 'http://localhost:8080';
+const API = 'http://localhost:8081';
 
 // Groups
 export async function getGroups() {
@@ -52,6 +52,17 @@ export async function parseDocuments(groupId) {
     method: 'POST',
   });
   if (!res.ok) throw new Error('Failed to start parsing');
+  return res.json();
+}
+
+export async function parseGroup(groupId, notes = '') {
+  const url = new URL(`${API}/api/groups/${groupId}/parse`);
+  if (notes.trim()) url.searchParams.set('notes', notes.trim());
+  const res = await fetch(url.toString(), { method: 'POST' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to parse group');
+  }
   return res.json();
 }
 

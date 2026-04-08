@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"fujitravel-admin/backend/internal/ai"
 	"fujitravel-admin/backend/internal/storage"
 )
 
@@ -63,7 +65,7 @@ func ListUploads(db *pgxpool.Pool) http.HandlerFunc {
 }
 
 // UploadTouristFile handles POST /api/tourists/:id/uploads
-func UploadTouristFile(db *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
+func UploadTouristFile(db *pgxpool.Pool, uploadsDir, apiKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		touristID := chi.URLParam(r, "id")
 
@@ -85,18 +87,33 @@ func UploadTouristFile(db *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		savedPath, err := storage.SaveFile(uploadsDir, groupID, "unknown", header.Filename, file)
+		fileData, err := io.ReadAll(file)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read file")
+			return
+		}
+
+		savedPath, err := storage.SaveFileBytes(uploadsDir, groupID, "unknown", header.Filename, fileData)
 		if err != nil {
 			slog.Error("save tourist upload", "err", err)
 			writeError(w, http.StatusInternalServerError, "failed to save file")
 			return
 		}
 
+		// Upload to Anthropic Files API (non-fatal if it fails).
+		var anthropicFileID string
+		if fid, err := ai.UploadFileToAnthropic(apiKey, header.Filename, fileData); err != nil {
+			slog.Warn("anthropic file upload failed, will use inline fallback", "err", err)
+		} else {
+			anthropicFileID = fid
+		}
+
 		var uploadID string
 		var createdAt time.Time
 		err = db.QueryRow(r.Context(),
-			`INSERT INTO uploads (group_id, tourist_id, file_type, file_path) VALUES ($1, $2, 'unknown', $3) RETURNING id, created_at`,
-			groupID, touristID, savedPath,
+			`INSERT INTO uploads (group_id, tourist_id, file_type, file_path, anthropic_file_id)
+			 VALUES ($1, $2, 'unknown', $3, NULLIF($4,'')) RETURNING id, created_at`,
+			groupID, touristID, savedPath, anthropicFileID,
 		).Scan(&uploadID, &createdAt)
 		if err != nil {
 			slog.Error("insert tourist upload", "err", err)
@@ -105,12 +122,12 @@ func UploadTouristFile(db *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusCreated, map[string]any{
-			"id":          uploadID,
-			"tourist_id":  touristID,
-			"group_id":    groupID,
-			"file_path":   savedPath,
-			"filename":    header.Filename,
-			"created_at":  createdAt,
+			"id":         uploadID,
+			"tourist_id": touristID,
+			"group_id":   groupID,
+			"file_path":  savedPath,
+			"filename":   header.Filename,
+			"created_at": createdAt,
 		})
 	}
 }
@@ -156,7 +173,7 @@ func ListTouristUploads(db *pgxpool.Pool) http.HandlerFunc {
 }
 
 // UploadFile handles POST /api/groups/:id/uploads
-func UploadFile(db *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
+func UploadFile(db *pgxpool.Pool, uploadsDir, apiKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 
@@ -173,9 +190,8 @@ func UploadFile(db *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 		}
 
 		fileType := r.FormValue("file_type")
-		if !allowedFileTypes[fileType] {
-			writeError(w, http.StatusBadRequest, "file_type must be one of: passport, ticket, voucher")
-			return
+		if fileType == "" {
+			fileType = "document"
 		}
 
 		file, header, err := r.FormFile("file")
@@ -185,18 +201,33 @@ func UploadFile(db *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		savedPath, err := storage.SaveFile(uploadsDir, groupID, fileType, header.Filename, file)
+		fileData, err := io.ReadAll(file)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read file")
+			return
+		}
+
+		savedPath, err := storage.SaveFileBytes(uploadsDir, groupID, fileType, header.Filename, fileData)
 		if err != nil {
 			slog.Error("save upload file", "err", err)
 			writeError(w, http.StatusInternalServerError, "failed to save file")
 			return
 		}
 
+		// Upload to Anthropic Files API (non-fatal if it fails).
+		var anthropicFileID string
+		if fid, err := ai.UploadFileToAnthropic(apiKey, header.Filename, fileData); err != nil {
+			slog.Warn("anthropic file upload failed, will use inline fallback", "err", err)
+		} else {
+			anthropicFileID = fid
+		}
+
 		var uploadID string
 		var createdAt time.Time
 		err = db.QueryRow(r.Context(),
-			`INSERT INTO uploads (group_id, file_type, file_path) VALUES ($1, $2, $3) RETURNING id, created_at`,
-			groupID, fileType, savedPath,
+			`INSERT INTO uploads (group_id, file_type, file_path, anthropic_file_id)
+			 VALUES ($1, $2, $3, NULLIF($4,'')) RETURNING id, created_at`,
+			groupID, fileType, savedPath, anthropicFileID,
 		).Scan(&uploadID, &createdAt)
 		if err != nil {
 			slog.Error("insert upload record", "err", err)

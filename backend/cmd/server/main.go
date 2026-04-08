@@ -96,7 +96,7 @@ func main() {
 
 		// Uploads
 		r.Get("/groups/{id}/uploads", api.ListUploads(pool))
-		r.Post("/groups/{id}/uploads", api.UploadFile(pool, uploadsDir))
+		r.Post("/groups/{id}/uploads", api.UploadFile(pool, uploadsDir, anthropicKey))
 
 		// Parse (AI Pass 1 + auto-match)
 		if sheetsClient != nil {
@@ -113,7 +113,7 @@ func main() {
 
 		// Per-tourist uploads & parse
 		r.Get("/tourists/{id}/uploads", api.ListTouristUploads(pool))
-		r.Post("/tourists/{id}/uploads", api.UploadTouristFile(pool, uploadsDir))
+		r.Post("/tourists/{id}/uploads", api.UploadTouristFile(pool, uploadsDir, anthropicKey))
 		r.Post("/tourists/{id}/parse", api.ParseTourist(pool, anthropicKey))
 
 		// Group hotels
