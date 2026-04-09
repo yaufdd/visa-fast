@@ -113,6 +113,48 @@ func ZipDocsDir(uploadsDir, groupID, zipName string) (string, error) {
 	return zipPath, nil
 }
 
+// ZipSubgroupDir walks uploadsDir/{groupID}/docs/{subgroupName}/ and creates a ZIP
+// containing only that subgroup's documents.
+func ZipSubgroupDir(uploadsDir, groupID, subgroupName, zipName string) (string, error) {
+	subDir := filepath.Join(uploadsDir, groupID, "docs", subgroupName)
+	zipPath := filepath.Join(uploadsDir, groupID, zipName)
+
+	zf, err := os.Create(zipPath)
+	if err != nil {
+		return "", fmt.Errorf("create zip: %w", err)
+	}
+	defer zf.Close()
+
+	zw := zip.NewWriter(zf)
+	defer zw.Close()
+
+	err = filepath.WalkDir(subDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(subDir, path)
+		if err != nil {
+			return err
+		}
+		// Place files inside a top-level folder named after the subgroup.
+		w, err := zw.Create(filepath.Join(subgroupName, rel))
+		if err != nil {
+			return err
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(w, f)
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("walk subgroup dir: %w", err)
+	}
+	return zipPath, nil
+}
+
 // safeFilename strips characters unsafe for filenames.
 func safeFilename(s string) string {
 	out := make([]rune, 0, len(s))

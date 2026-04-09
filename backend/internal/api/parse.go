@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -13,6 +15,36 @@ import (
 	"fujitravel-admin/backend/internal/ai"
 	"fujitravel-admin/backend/internal/storage"
 )
+
+// loadUploadsAsFileInputs reads the given uploads and, for each row missing an
+// anthropic_file_id, tries to upload it to the Anthropic Files API now and cache
+// the returned ID. Falls back to inline bytes only if the upload still fails.
+func loadUploadsAsFileInputs(ctx context.Context, db *pgxpool.Pool, apiKey string, uploads []struct{ Path, FileID string }) ([]ai.FileInput, error) {
+	var inputs []ai.FileInput
+	for _, u := range uploads {
+		if u.FileID != "" {
+			inputs = append(inputs, ai.FileInput{AnthropicFileID: u.FileID, Name: filepath.Base(u.Path)})
+			continue
+		}
+		data, err := storage.ReadFile(u.Path)
+		if err != nil {
+			return nil, fmt.Errorf("read upload %s: %w", u.Path, err)
+		}
+		// Lazy upload to Anthropic Files API.
+		if fid, err := ai.UploadFileToAnthropic(apiKey, filepath.Base(u.Path), data); err == nil && fid != "" {
+			_, _ = db.Exec(ctx,
+				`UPDATE uploads SET anthropic_file_id = $1 WHERE file_path = $2`,
+				fid, u.Path)
+			inputs = append(inputs, ai.FileInput{AnthropicFileID: fid, Name: filepath.Base(u.Path)})
+		} else {
+			if err != nil {
+				slog.Warn("lazy anthropic upload failed, using inline", "path", u.Path, "err", err)
+			}
+			inputs = append(inputs, ai.FileInput{Name: filepath.Base(u.Path), Data: data})
+		}
+	}
+	return inputs, nil
+}
 
 // convertDate converts DD.MM.YYYY → YYYY-MM-DD for PostgreSQL date fields.
 func convertDate(s string) string {
@@ -37,25 +69,22 @@ func ParseTourist(db *pgxpool.Pool, apiKey string) http.HandlerFunc {
 		}
 		defer rows.Close()
 
-		var inputs []ai.FileInput
+		var uploadsList []struct{ Path, FileID string }
 		for rows.Next() {
 			var path, fileID string
 			if err := rows.Scan(&path, &fileID); err != nil {
 				continue
 			}
-			if fileID != "" {
-				inputs = append(inputs, ai.FileInput{AnthropicFileID: fileID, Name: filepath.Base(path)})
-			} else {
-				data, err := storage.ReadFile(path)
-				if err != nil {
-					slog.Error("read tourist upload", "path", path, "err", err)
-					writeError(w, http.StatusInternalServerError, "failed to read file")
-					return
-				}
-				inputs = append(inputs, ai.FileInput{Name: filepath.Base(path), Data: data})
-			}
+			uploadsList = append(uploadsList, struct{ Path, FileID string }{path, fileID})
 		}
 		rows.Close()
+
+		inputs, err := loadUploadsAsFileInputs(r.Context(), db, apiKey, uploadsList)
+		if err != nil {
+			slog.Error("load uploads as file inputs", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to prepare files: "+err.Error())
+			return
+		}
 
 		if len(inputs) == 0 {
 			writeError(w, http.StatusBadRequest, "no uploads found for this tourist")
@@ -170,7 +199,7 @@ func ParseGroup(db *pgxpool.Pool, apiKey string, sheets ...SheetsSearcher) http.
 		}
 		defer rows.Close()
 
-		var inputs []ai.FileInput
+		var uploadsList []struct{ Path, FileID string }
 		for rows.Next() {
 			var path, fileID string
 			if err := rows.Scan(&path, &fileID); err != nil {
@@ -178,19 +207,16 @@ func ParseGroup(db *pgxpool.Pool, apiKey string, sheets ...SheetsSearcher) http.
 				writeError(w, http.StatusInternalServerError, "scan error")
 				return
 			}
-			if fileID != "" {
-				inputs = append(inputs, ai.FileInput{AnthropicFileID: fileID, Name: filepath.Base(path)})
-			} else {
-				data, err := storage.ReadFile(path)
-				if err != nil {
-					slog.Error("read upload file", "path", path, "err", err)
-					writeError(w, http.StatusInternalServerError, "failed to read uploaded file")
-					return
-				}
-				inputs = append(inputs, ai.FileInput{Name: filepath.Base(path), Data: data})
-			}
+			uploadsList = append(uploadsList, struct{ Path, FileID string }{path, fileID})
 		}
 		rows.Close()
+
+		inputs, err := loadUploadsAsFileInputs(r.Context(), db, apiKey, uploadsList)
+		if err != nil {
+			slog.Error("load uploads as file inputs", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to prepare files: "+err.Error())
+			return
+		}
 
 		if len(inputs) == 0 {
 			writeError(w, http.StatusBadRequest, "no uploads found for this group")
@@ -387,25 +413,22 @@ func ParseSubgroup(db *pgxpool.Pool, apiKey string, sheets ...SheetsSearcher) ht
 		}
 		defer rows.Close()
 
-		var inputs []ai.FileInput
+		var uploadsList []struct{ Path, FileID string }
 		for rows.Next() {
 			var path, fileID string
 			if err := rows.Scan(&path, &fileID); err != nil {
 				continue
 			}
-			if fileID != "" {
-				inputs = append(inputs, ai.FileInput{AnthropicFileID: fileID, Name: filepath.Base(path)})
-			} else {
-				data, err := storage.ReadFile(path)
-				if err != nil {
-					slog.Error("read subgroup upload", "path", path, "err", err)
-					writeError(w, http.StatusInternalServerError, "failed to read file")
-					return
-				}
-				inputs = append(inputs, ai.FileInput{Name: filepath.Base(path), Data: data})
-			}
+			uploadsList = append(uploadsList, struct{ Path, FileID string }{path, fileID})
 		}
 		rows.Close()
+
+		inputs, err := loadUploadsAsFileInputs(r.Context(), db, apiKey, uploadsList)
+		if err != nil {
+			slog.Error("load uploads as file inputs", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to prepare files: "+err.Error())
+			return
+		}
 
 		if len(inputs) == 0 {
 			writeError(w, http.StatusBadRequest, "no uploads found for this subgroup")
@@ -504,10 +527,10 @@ func ParseSubgroup(db *pgxpool.Pool, apiKey string, sheets ...SheetsSearcher) ht
 			created = append(created, touristOut{TouristID: touristID, Result: t, MatchConfirmed: existingID != ""})
 		}
 
-		// Auto-populate group_hotels from vouchers if not yet configured.
+		// Auto-populate hotels for THIS subgroup from vouchers (only if subgroup has none yet).
 		var existingHotels int
 		_ = db.QueryRow(r.Context(),
-			`SELECT COUNT(*) FROM group_hotels WHERE group_id = $1`, groupID).Scan(&existingHotels)
+			`SELECT COUNT(*) FROM group_hotels WHERE subgroup_id = $1`, subgroupID).Scan(&existingHotels)
 		if existingHotels == 0 {
 			var vouchers []ai.VoucherHotel
 			for _, t := range result {
@@ -538,10 +561,10 @@ func ParseSubgroup(db *pgxpool.Pool, apiKey string, sheets ...SheetsSearcher) ht
 				checkIn := convertDate(vh.CheckIn)
 				checkOut := convertDate(vh.CheckOut)
 				if _, err := db.Exec(r.Context(),
-					`INSERT INTO group_hotels (group_id, hotel_id, check_in, check_out, sort_order)
-					 VALUES ($1, $2, $3::date, $4::date, $5) ON CONFLICT DO NOTHING`,
-					groupID, hotelID, checkIn, checkOut, i); err != nil {
-					slog.Warn("insert group_hotel from voucher", "err", err)
+					`INSERT INTO group_hotels (group_id, subgroup_id, hotel_id, check_in, check_out, sort_order)
+					 VALUES ($1, $2, $3, $4::date, $5::date, $6) ON CONFLICT DO NOTHING`,
+					groupID, subgroupID, hotelID, checkIn, checkOut, i); err != nil {
+					slog.Warn("insert subgroup hotel from voucher", "err", err)
 				}
 			}
 		}

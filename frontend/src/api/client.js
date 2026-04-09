@@ -217,6 +217,35 @@ export async function assignTouristSubgroup(touristId, subgroupId) {
   return res.json();
 }
 
+export async function getSubgroupHotels(subgroupId) {
+  const res = await fetch(`${API}/api/subgroups/${subgroupId}/hotels`);
+  if (!res.ok) throw new Error('Failed to fetch subgroup hotels');
+  return res.json();
+}
+
+export async function saveSubgroupHotels(subgroupId, hotels) {
+  const res = await fetch(`${API}/api/subgroups/${subgroupId}/hotels`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(hotels),
+  });
+  if (!res.ok) throw new Error('Failed to save subgroup hotels');
+  return res.json();
+}
+
+export async function generateSubgroupDocuments(subgroupId) {
+  const res = await fetch(`${API}/api/subgroups/${subgroupId}/generate`, { method: 'POST' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to generate subgroup documents');
+  }
+  return res.json();
+}
+
+export function getSubgroupDownloadUrl(subgroupId) {
+  return `${API}/api/subgroups/${subgroupId}/download`;
+}
+
 export async function parseSubgroup(subgroupId, notes = '') {
   const url = new URL(`${API}/api/subgroups/${subgroupId}/parse`);
   if (notes.trim()) url.searchParams.set('notes', notes.trim());

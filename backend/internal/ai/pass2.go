@@ -123,7 +123,9 @@ Google Sheets column mapping (Russian column names → output fields):
   "Была ли судимость"      → criminal_record (map: "Нет"→"No", "Да"→"Yes")
   "Был ли в Японии"        → been_to_japan (map: "Нет"→"No", "Да"→"Yes")
   "Даты прошлых визитов"   → previous_visits
-  "Была ли другая фамилия" → maiden_name (if non-empty and not "Нет", include it; else "")
+  "Была ли другая фамилия" → maiden_name
+    - If empty or "Нет" → "" (Python will output "NO" in the PDF)
+    - If non-empty → transliterate the surname to Latin UPPERCASE (e.g. "Иванова" → "IVANOVA", "Петрова Сидорова" → "PETROVA SIDOROVA"). The surname MUST always be in Latin letters, never Cyrillic, since this goes into an English visa form field.
 
 Priority rule: raw_json fields (from actual passport scan) take priority over sheet row fields for passport data (passport_number, birth_date, issue_date, expiry_date, nationality, place_of_birth, gender, passport_type). Sheet row fills in fields not present in raw_json.
 

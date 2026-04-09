@@ -10,7 +10,22 @@ import (
 	"net/textproto"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// isTransientHTTP returns true for network-level errors worth retrying.
+func isTransientHTTP(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "EOF") ||
+		strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "i/o timeout") ||
+		strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "TLS handshake") ||
+		strings.Contains(s, "broken pipe")
+}
 
 const anthropicFilesAPI = "https://api.anthropic.com/v1/files"
 
@@ -47,25 +62,41 @@ func UploadFileToAnthropic(apiKey, filename string, data []byte) (string, error)
 	mw.Close()
 
 	bodyBytes := buf.Bytes()
-	req, err := http.NewRequest(http.MethodPost, anthropicFilesAPI, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return "", fmt.Errorf("build files API request: %w", err)
-	}
-	req.ContentLength = int64(len(bodyBytes))
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	req.Header.Set("x-api-key", apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("anthropic-beta", "files-api-2025-04-14")
+	contentType := mw.FormDataContentType()
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("files API http: %w", err)
-	}
-	defer resp.Body.Close()
+	// Retry transient network errors (Anthropic endpoint occasionally drops EOF mid-upload).
+	var resp *http.Response
+	var body []byte
+	backoff := 500 * time.Millisecond
+	client := &http.Client{Timeout: 120 * time.Second}
+	for attempt := 0; attempt < 4; attempt++ {
+		req, rerr := http.NewRequest(http.MethodPost, anthropicFilesAPI, bytes.NewReader(bodyBytes))
+		if rerr != nil {
+			return "", fmt.Errorf("build files API request: %w", rerr)
+		}
+		req.ContentLength = int64(len(bodyBytes))
+		req.Header.Set("Content-Type", contentType)
+		req.Header.Set("x-api-key", apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		req.Header.Set("anthropic-beta", "files-api-2025-04-14")
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read files API response: %w", err)
+		var derr error
+		resp, derr = client.Do(req)
+		if derr == nil {
+			body, derr = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if derr == nil {
+				break
+			}
+		}
+		if !isTransientHTTP(derr) {
+			return "", fmt.Errorf("files API http: %w", derr)
+		}
+		time.Sleep(backoff)
+		backoff *= 2
+		if attempt == 3 {
+			return "", fmt.Errorf("files API http (after retries): %w", derr)
+		}
 	}
 
 	var result struct {

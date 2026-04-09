@@ -112,6 +112,10 @@ func main() {
 		r.Delete("/subgroups/{id}", api.DeleteSubgroup(pool))
 		r.Put("/tourists/{id}/subgroup", api.AssignTouristSubgroup(pool))
 		r.Post("/subgroups/{id}/parse", api.ParseSubgroup(pool, anthropicKey))
+		r.Get("/subgroups/{id}/hotels", api.ListSubgroupHotels(pool))
+		r.Post("/subgroups/{id}/hotels", api.UpsertSubgroupHotels(pool))
+		r.Post("/subgroups/{id}/generate", api.GenerateSubgroupDocuments(pool, anthropicKey, uploadsDir, pythonScript))
+		r.Get("/subgroups/{id}/download", api.DownloadSubgroupZIP(pool, uploadsDir))
 
 		// Tourists
 		r.Get("/groups/{id}/tourists", api.ListTourists(pool))

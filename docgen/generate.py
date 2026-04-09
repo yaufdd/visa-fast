@@ -302,11 +302,14 @@ def generate_vc_request(data, out_path):
 
     # Table 1 — applicants
     t1 = doc.tables[1]
+    template_tr = copy.deepcopy(t1.rows[2]._tr)  # snapshot BEFORE mutating text
     set_cell_text(t1.rows[2].cells[0], vc["applicants"][0])
-    for name in vc["applicants"][1:]:
-        new_row = copy.deepcopy(t1.rows[2]._tr)
-        t1.rows[2]._tr.addnext(new_row)
-        set_cell_text(t1.rows[3].cells[0], name)
+    # Insert each additional applicant AFTER the previously inserted row to
+    # preserve the list order (not reversed).
+    for i, name in enumerate(vc["applicants"][1:], start=1):
+        new_row = copy.deepcopy(template_tr)
+        t1.rows[2 + i - 1]._tr.addnext(new_row)
+        set_cell_text(t1.rows[2 + i].cells[0], name)
 
     # Update count row (last row of table 1)
     count_row = t1.rows[-1]
@@ -354,8 +357,10 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
     last_name  = parts[0] if parts else ""
     first_name = " ".join(parts[1:]) if len(parts) > 1 else ""
 
-    # maiden_name: use "NO" if empty (form expects explicit No when no other name)
+    # "Other names" (T16[1]) — maiden name from sheet; "NO" if empty.
+    # Pass 2 transliterates the surname to Latin if present.
     maiden_name_val = tourist.get("maiden_name", "") or "NO"
+    previous_visits_val = tourist.get("previous_visits", "") or "NO"
 
     # Compute intended stay days from actual dates (AI often gets this wrong).
     # Stay = departure_date - arrival_date + 1 (both endpoints inclusive).
@@ -377,8 +382,8 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
         "topmostSubform[0].Page1[0].T7[0]":  first_name,
         "topmostSubform[0].Page1[0].T49[0]": tourist.get("passport_number", ""),
         "topmostSubform[0].Page1[0].T50[0]": anketa.get("nationality_iso", "RUS"),
-        "topmostSubform[0].Page1[0].T34[0]": "  ",  # dropdown only accepts country names; NO/USSR → blank
-        "topmostSubform[0].Page1[0].T37[0]": maiden_name_val,
+        "topmostSubform[0].Page1[0].T34[0]": "  ",  # Former nationalities — dropdown only accepts country names; blank
+        "topmostSubform[0].Page1[0].T37[0]": "NO",  # ID No. issued by government — always NO for Russians
         "topmostSubform[0].Page1[0].#area[4].T14[0]": tourist.get("birth_date", ""),
         "topmostSubform[0].Page1[0].#area[4].T16[0]": tourist.get("place_of_birth", ""),
         "topmostSubform[0].Page1[0].#area[5].#area[6].#area[7].RB1[0]": anketa.get("gender_rb", "0"),
@@ -393,7 +398,8 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
         "topmostSubform[0].Page1[0].emp_adr[0]":           tourist.get("employer_address", ""),
         "topmostSubform[0].Page1[0].T0[1]":  tourist.get("home_address", ""),
         "topmostSubform[0].Page1[0].#area[11].T3[0]": tourist.get("phone", ""),  # applicant phone
-        "topmostSubform[0].Page1[0].T64[0]": "no",   # Certificate of Eligibility — always No
+        "topmostSubform[0].Page1[0].T62[0]": "NO",                      # Certificate of Eligibility No. — always NO
+        "topmostSubform[0].Page1[0].T64[0]": previous_visits_val,       # Dates/duration of previous stays in Japan
         "topmostSubform[0].Page1[0].T66[0]": anketa.get("arrival_date_japan", ""),
         "topmostSubform[0].Page1[0].#area[10].T68[0]": anketa.get("port_of_entry", ""),
         "topmostSubform[0].Page1[0].#area[10].T68[1]": anketa.get("airline_flight", ""),
@@ -403,9 +409,7 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
         "topmostSubform[0].Page1[0].#area[12].emp_name[1]": anketa.get("first_hotel_name", ""),
         "topmostSubform[0].Page1[0].#area[12].emp_tel[1]":  anketa.get("first_hotel_phone", ""),
         "topmostSubform[0].Page1[0].T3[1]": anketa.get("email", "tour@fujitravel.ru"),
-        "topmostSubform[0].Page1[0].T16[1]": tourist.get("been_to_japan", "No"),
-        "topmostSubform[0].Page1[0].T62[0]": tourist.get("previous_visits", ""),
-        "topmostSubform[0].Page1[0].#area[11].T97[0]": tourist.get("criminal_record", "No"),
+        "topmostSubform[0].Page1[0].T16[1]": maiden_name_val,  # Other names — maiden_name or NO
         # Page 2
         "topmostSubform[0].Page2[0].T150[0]": anketa.get("date_of_application", ""),
         "topmostSubform[0].Page2[0].#area[4].RB5[0]":         anketa.get("criminal_rb", "1"),
