@@ -267,6 +267,7 @@ function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, on
   const [parseError, setParseError] = useState(null);
   const [notes, setNotes] = useState('');
   const [hotelsReloadKey, setHotelsReloadKey] = useState(0);
+  const [hotelsExpanded, setHotelsExpanded] = useState(false);
 
   const tourists = allTourists.filter(t => t.subgroup_id === group.id);
   const uploads = allUploads.filter(u => u.subgroup_id === group.id);
@@ -509,12 +510,39 @@ function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, on
             </div>
           </div>
 
-          {/* Hotels for this subgroup */}
+          {/* Hotels for this subgroup — collapsible, collapsed by default */}
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-            <div style={{ fontSize: 12, color: 'var(--white-dim)', fontWeight: 500, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Отели группы
+            <div
+              onClick={() => setHotelsExpanded(e => !e)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                cursor: 'pointer',
+                userSelect: 'none',
+                marginBottom: hotelsExpanded ? 10 : 0,
+              }}
+            >
+              <span style={{
+                fontSize: 10,
+                color: 'var(--white-dim)',
+                transition: 'transform 0.2s',
+                display: 'inline-block',
+                transform: hotelsExpanded ? 'rotate(90deg)' : 'none',
+              }}>▶</span>
+              <span style={{
+                fontSize: 12,
+                color: 'var(--white-dim)',
+                fontWeight: 500,
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}>
+                Отели группы
+              </span>
             </div>
-            <SubgroupHotelsSection subgroupId={group.id} reloadKey={hotelsReloadKey} />
+            {hotelsExpanded && (
+              <SubgroupHotelsSection subgroupId={group.id} reloadKey={hotelsReloadKey} />
+            )}
           </div>
         </div>
       )}
