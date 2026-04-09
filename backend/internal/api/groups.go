@@ -14,15 +14,25 @@ type Group struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Status    string    `json:"status"`
+	Notes     string    `json:"notes"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// allowedGroupStatuses is the canonical set of statuses a manager may set.
+var allowedGroupStatuses = map[string]bool{
+	"draft":       true,
+	"in_progress": true,
+	"docs_ready":  true,
+	"submitted":   true,
+	"visa_issued": true,
 }
 
 // ListGroups handles GET /api/groups
 func ListGroups(db *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query(r.Context(),
-			`SELECT id, name, status, created_at, updated_at FROM groups ORDER BY created_at DESC`)
+			`SELECT id, name, status, COALESCE(notes,''), created_at, updated_at FROM groups ORDER BY created_at DESC`)
 		if err != nil {
 			slog.Error("list groups query", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
@@ -33,7 +43,7 @@ func ListGroups(db *pgxpool.Pool) http.HandlerFunc {
 		var groups []Group
 		for rows.Next() {
 			var g Group
-			if err := rows.Scan(&g.ID, &g.Name, &g.Status, &g.CreatedAt, &g.UpdatedAt); err != nil {
+			if err := rows.Scan(&g.ID, &g.Name, &g.Status, &g.Notes, &g.CreatedAt, &g.UpdatedAt); err != nil {
 				slog.Error("scan group row", "err", err)
 				writeError(w, http.StatusInternalServerError, "scan error")
 				return
@@ -60,9 +70,9 @@ func CreateGroup(db *pgxpool.Pool) http.HandlerFunc {
 
 		var g Group
 		err := db.QueryRow(r.Context(),
-			`INSERT INTO groups (name) VALUES ($1) RETURNING id, name, status, created_at, updated_at`,
+			`INSERT INTO groups (name) VALUES ($1) RETURNING id, name, status, COALESCE(notes,''), created_at, updated_at`,
 			body.Name,
-		).Scan(&g.ID, &g.Name, &g.Status, &g.CreatedAt, &g.UpdatedAt)
+		).Scan(&g.ID, &g.Name, &g.Status, &g.Notes, &g.CreatedAt, &g.UpdatedAt)
 		if err != nil {
 			slog.Error("insert group", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
@@ -97,8 +107,8 @@ func GetGroup(db *pgxpool.Pool) http.HandlerFunc {
 
 		var g Group
 		err := db.QueryRow(r.Context(),
-			`SELECT id, name, status, created_at, updated_at FROM groups WHERE id = $1`, id,
-		).Scan(&g.ID, &g.Name, &g.Status, &g.CreatedAt, &g.UpdatedAt)
+			`SELECT id, name, status, COALESCE(notes,''), created_at, updated_at FROM groups WHERE id = $1`, id,
+		).Scan(&g.ID, &g.Name, &g.Status, &g.Notes, &g.CreatedAt, &g.UpdatedAt)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "group not found")
 			return
@@ -195,5 +205,67 @@ func GetGroup(db *pgxpool.Pool) http.HandlerFunc {
 			"tourists": tourists,
 			"hotels":   hotels,
 		})
+	}
+}
+
+// UpdateGroupStatus handles PUT /api/groups/{id}/status.
+// Body: {"status": "in_progress"}. Status is manager-driven only.
+func UpdateGroupStatus(db *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		var body struct {
+			Status string `json:"status"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if !allowedGroupStatuses[body.Status] {
+			writeError(w, http.StatusBadRequest, "invalid status value")
+			return
+		}
+
+		var g Group
+		err := db.QueryRow(r.Context(),
+			`UPDATE groups SET status = $1, updated_at = now()
+			  WHERE id = $2
+			  RETURNING id, name, status, COALESCE(notes,''), created_at, updated_at`,
+			body.Status, id,
+		).Scan(&g.ID, &g.Name, &g.Status, &g.Notes, &g.CreatedAt, &g.UpdatedAt)
+		if err != nil {
+			slog.Error("update group status", "err", err)
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, g)
+	}
+}
+
+// UpdateGroupNotes handles PUT /api/groups/{id}/notes.
+// Body: {"notes": "..."}. Empty string is allowed.
+func UpdateGroupNotes(db *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		var body struct {
+			Notes string `json:"notes"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		var g Group
+		err := db.QueryRow(r.Context(),
+			`UPDATE groups SET notes = $1, updated_at = now()
+			  WHERE id = $2
+			  RETURNING id, name, status, COALESCE(notes,''), created_at, updated_at`,
+			body.Notes, id,
+		).Scan(&g.ID, &g.Name, &g.Status, &g.Notes, &g.CreatedAt, &g.UpdatedAt)
+		if err != nil {
+			slog.Error("update group notes", "err", err)
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, g)
 	}
 }

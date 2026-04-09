@@ -10,7 +10,9 @@ import {
   getSheetRows,
   getSubgroups, createSubgroup, updateSubgroup, deleteSubgroup,
   assignTouristSubgroup, parseSubgroup, parseGroup,
+  updateGroupStatus,
 } from '../api/client';
+import StatusSection from '../components/StatusSection';
 
 // Folder-download icon.
 const FolderIcon = () => (
@@ -900,7 +902,9 @@ function SubgroupDocsRow({ subgroup }) {
   );
 }
 
-function DocumentsTab({ groupId }) {
+const LOCKED_STATUSES = ['docs_ready', 'submitted', 'visa_issued'];
+
+function DocumentsTab({ groupId, group, onGroupUpdated }) {
   const [subgroups, setSubgroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -908,6 +912,25 @@ function DocumentsTab({ groupId }) {
   const [finalGeneratedAt, setFinalGeneratedAt] = useState(null);
   const [finalizing, setFinalizing] = useState(false);
   const [finalError, setFinalError] = useState(null);
+  const [markingReady, setMarkingReady] = useState(false);
+  const [markReadyError, setMarkReadyError] = useState(null);
+
+  const currentStatus = group?.status || 'draft';
+  const alreadyReady = LOCKED_STATUSES.includes(currentStatus);
+
+  const handleMarkReady = async () => {
+    if (alreadyReady) return;
+    setMarkingReady(true);
+    setMarkReadyError(null);
+    try {
+      const updated = await updateGroupStatus(groupId, 'docs_ready');
+      onGroupUpdated?.(updated);
+    } catch (e) {
+      setMarkReadyError(e.message);
+    } finally {
+      setMarkingReady(false);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -945,6 +968,46 @@ function DocumentsTab({ groupId }) {
 
   return (
     <div>
+      <div
+        className="card"
+        style={{
+          marginBottom: 20,
+          padding: '14px 18px',
+          background: 'var(--graphite)',
+          border: '1px solid var(--border)',
+          borderRadius: 8,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 14,
+          flexWrap: 'wrap',
+        }}
+      >
+        <button
+          className="btn btn-primary"
+          onClick={handleMarkReady}
+          disabled={alreadyReady || markingReady}
+          style={alreadyReady ? { opacity: 0.6, cursor: 'default' } : undefined}
+        >
+          {markingReady
+            ? <><span className="spinner" /> Сохранение...</>
+            : 'Все правильно сгенерировано ✓'}
+        </button>
+        {alreadyReady && (
+          <span style={{
+            fontSize: 12,
+            color: '#22c55e',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+          }}>
+            Документы отмечены как готовые
+          </span>
+        )}
+        {markReadyError && (
+          <span style={{ fontSize: 12, color: 'var(--danger, #ef4444)' }}>{markReadyError}</span>
+        )}
+      </div>
+
       <div className="section-header">
         <div className="section-title">Документы по группам</div>
       </div>
@@ -1013,6 +1076,7 @@ function DocumentsTab({ groupId }) {
 const TABS = [
   { id: 'groups', label: 'Группы' },
   { id: 'documents', label: 'Документы' },
+  { id: 'status', label: 'Статус' },
 ];
 
 export default function GroupDetailPage() {
@@ -1027,7 +1091,9 @@ export default function GroupDetailPage() {
     (async () => {
       try {
         const data = await getGroup(id);
-        setGroup(data);
+        // getGroup returns { group, tourists, hotels } — unwrap to the flat group object
+        // so downstream components (StatusSection, DocumentsTab) see group.id directly.
+        setGroup(data?.group ?? data);
       } catch (e) {
         setError(e.message);
       } finally {
@@ -1079,8 +1145,11 @@ export default function GroupDetailPage() {
         ))}
       </div>
 
+      {activeTab === 'status' && <StatusSection group={group} onGroupUpdated={setGroup} />}
       {activeTab === 'groups' && <GroupsTab groupId={id} />}
-      {activeTab === 'documents' && <DocumentsTab groupId={id} />}
+      {activeTab === 'documents' && (
+        <DocumentsTab groupId={id} group={group} onGroupUpdated={setGroup} />
+      )}
     </div>
   );
 }

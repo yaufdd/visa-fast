@@ -23,6 +23,32 @@ export async function getGroup(id) {
   return res.json();
 }
 
+export async function updateGroupStatus(groupId, status) {
+  const res = await fetch(`${API}/api/groups/${groupId}/status`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to update status');
+  }
+  return res.json();
+}
+
+export async function updateGroupNotes(groupId, notes) {
+  const res = await fetch(`${API}/api/groups/${groupId}/notes`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ notes }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to update notes');
+  }
+  return res.json();
+}
+
 export async function deleteGroup(id) {
   const res = await fetch(`${API}/api/groups/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Failed to delete group');

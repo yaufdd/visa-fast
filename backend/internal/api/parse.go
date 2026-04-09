@@ -250,12 +250,6 @@ func ParseGroup(db *pgxpool.Pool, apiKey string, sheets ...SheetsSearcher) http.
 		// Optional manager notes passed as query param.
 		notes := r.URL.Query().Get("notes")
 
-		// Update group status to processing.
-		if _, err := db.Exec(r.Context(),
-			`UPDATE groups SET status = 'processing', updated_at = now() WHERE id = $1`, groupID); err != nil {
-			slog.Error("update group status", "err", err)
-		}
-
 		result, err := ai.ParseDocuments(r.Context(), apiKey, inputs, notes)
 		if err != nil {
 			slog.Error("ai pass1", "err", err)

@@ -93,6 +93,8 @@ func main() {
 		r.Post("/groups", api.CreateGroup(pool))
 		r.Get("/groups/{id}", api.GetGroup(pool))
 		r.Delete("/groups/{id}", api.DeleteGroup(pool))
+		r.Put("/groups/{id}/status", api.UpdateGroupStatus(pool))
+		r.Put("/groups/{id}/notes", api.UpdateGroupNotes(pool))
 
 		// Uploads
 		r.Get("/groups/{id}/uploads", api.ListUploads(pool))

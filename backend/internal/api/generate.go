@@ -205,11 +205,6 @@ func GenerateDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string
 			return
 		}
 
-		if _, err := db.Exec(r.Context(),
-			`UPDATE groups SET status = 'completed', updated_at = now() WHERE id = $1`, groupID); err != nil {
-			slog.Error("update group completed", "err", err)
-		}
-
 		writeJSON(w, http.StatusOK, map[string]any{
 			"document_id":  docID,
 			"zip_path":     zipPath,
