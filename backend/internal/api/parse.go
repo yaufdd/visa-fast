@@ -46,6 +46,21 @@ func loadUploadsAsFileInputs(ctx context.Context, db *pgxpool.Pool, apiKey strin
 	return inputs, nil
 }
 
+// normalizeForMatch lowercases, strips punctuation/whitespace, and returns a
+// compact key suitable for equality or Levenshtein comparison. Works for both
+// Cyrillic and Latin names.
+func normalizeForMatch(s string) string {
+	var out []rune
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= 'а' && r <= 'я') || r == 'ё' {
+			out = append(out, r)
+		} else if r == ' ' && len(out) > 0 && out[len(out)-1] != ' ' {
+			out = append(out, ' ')
+		}
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // escapeLikePattern escapes LIKE metacharacters (%, _) in user input so that
 // a voucher hotel name like "A_1" isn't treated as a wildcard match.
 func escapeLikePattern(s string) string {
@@ -453,31 +468,53 @@ func ParseSubgroup(db *pgxpool.Pool, apiKey string, sheets ...SheetsSearcher) ht
 			return
 		}
 
-		// Load existing tourists in this subgroup.
-		existingRows, _ := db.Query(r.Context(),
+		// Load existing tourists in this subgroup with ALL name candidates we can
+		// derive from sheet row + raw_json. We'll match the parsed tourist against
+		// any of them, allowing for small typos via Levenshtein distance.
+		type existingEntry struct {
+			id    string
+			names []string
+		}
+		var existing []existingEntry
+		existingExact := map[string]string{} // normalized → tourist_id (fast path)
+
+		eRows, eErr := db.Query(r.Context(),
 			`SELECT id,
-			        COALESCE(
-			            NULLIF(matched_sheet_row->>'ФИО латиницей', ''),
-			            NULLIF(matched_sheet_row->>'ФИО (латиницей, как в загранпаспорте)', ''),
-			            NULLIF(matched_sheet_row->>'ФИО (латиницей)', ''),
-			            NULLIF(raw_json->>'name_lat', ''),
-			            ''
-			        )
+			        COALESCE(NULLIF(matched_sheet_row->>'ФИО латиницей', ''), ''),
+			        COALESCE(NULLIF(matched_sheet_row->>'ФИО (латиницей, как в загранпаспорте)', ''), ''),
+			        COALESCE(NULLIF(matched_sheet_row->>'ФИО (латиницей)', ''), ''),
+			        COALESCE(NULLIF(matched_sheet_row->>'ФИО (кириллицей)', ''), ''),
+			        COALESCE(NULLIF(matched_sheet_row->>'ФИО', ''), ''),
+			        COALESCE(NULLIF(raw_json->>'name_lat', ''), ''),
+			        COALESCE(NULLIF(raw_json->>'name_cyr', ''), '')
 			   FROM tourists WHERE subgroup_id = $1`, subgroupID)
-		existingByName := map[string]string{}
-		if existingRows != nil {
-			for existingRows.Next() {
-				var tid, name string
-				if err := existingRows.Scan(&tid, &name); err == nil && name != "" {
-					upper := strings.ToUpper(strings.TrimSpace(name))
-					existingByName[upper] = tid
-					parts := strings.Fields(upper)
-					if len(parts) == 2 {
-						existingByName[parts[1]+" "+parts[0]] = tid
+		if eErr == nil {
+			for eRows.Next() {
+				var tid, s1, s2, s3, s4, s5, rl, rc string
+				if err := eRows.Scan(&tid, &s1, &s2, &s3, &s4, &s5, &rl, &rc); err != nil {
+					continue
+				}
+				var names []string
+				for _, n := range []string{s1, s2, s3, s4, s5, rl, rc} {
+					if n == "" {
+						continue
+					}
+					names = append(names, n)
+					key := normalizeForMatch(n)
+					if key != "" {
+						existingExact[key] = tid
+						// Also index the reversed word order (FIRSTNAME LASTNAME ↔ LASTNAME FIRSTNAME).
+						parts := strings.Fields(key)
+						if len(parts) == 2 {
+							existingExact[parts[1]+" "+parts[0]] = tid
+						}
 					}
 				}
+				if len(names) > 0 {
+					existing = append(existing, existingEntry{id: tid, names: names})
+				}
 			}
-			existingRows.Close()
+			eRows.Close()
 		}
 
 		type touristOut struct {
@@ -494,7 +531,37 @@ func ParseSubgroup(db *pgxpool.Pool, apiKey string, sheets ...SheetsSearcher) ht
 				return
 			}
 
-			existingID := existingByName[strings.ToUpper(strings.TrimSpace(t.NameLat))]
+			// Try to match parsed tourist against an existing one by any Latin or
+			// Cyrillic name candidate, exact first then fuzzy (Levenshtein ≤ 2).
+			// This catches sheet typos like "Щербаоков" vs "Щербаков".
+			existingID := ""
+			parsedKeys := []string{}
+			for _, candidate := range []string{t.NameLat, t.NameCyr} {
+				if candidate != "" {
+					k := normalizeForMatch(candidate)
+					parsedKeys = append(parsedKeys, k)
+					if id, ok := existingExact[k]; ok && existingID == "" {
+						existingID = id
+					}
+				}
+			}
+			if existingID == "" {
+			fuzzy:
+				for _, e := range existing {
+					for _, name := range e.names {
+						ek := normalizeForMatch(name)
+						if ek == "" {
+							continue
+						}
+						for _, pk := range parsedKeys {
+							if editDistance(ek, pk) <= 2 {
+								existingID = e.id
+								break fuzzy
+							}
+						}
+					}
+				}
+			}
 
 			var touristID string
 			if existingID != "" {
