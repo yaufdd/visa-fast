@@ -85,7 +85,6 @@ export default function HotelsPage() {
             <thead>
               <tr>
                 <th>Название (EN)</th>
-                <th>Название (RU)</th>
                 <th>Город</th>
                 <th>Адрес</th>
                 <th>Телефон</th>
@@ -95,7 +94,6 @@ export default function HotelsPage() {
               {hotels.map(h => (
                 <tr key={h.id}>
                   <td style={{ fontWeight: 500 }}>{h.name_en}</td>
-                  <td style={{ color: 'var(--white-dim)' }}>{h.name_ru || '—'}</td>
                   <td>
                     <span style={{
                       padding: '2px 8px',

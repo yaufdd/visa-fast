@@ -10,7 +10,7 @@ import {
   getSheetRows,
   getSubgroups, createSubgroup, updateSubgroup, deleteSubgroup,
   assignTouristSubgroup, parseSubgroup, parseGroup,
-  updateGroupStatus,
+  updateGroupStatus, deleteGroup,
 } from '../api/client';
 import StatusSection from '../components/StatusSection';
 
@@ -224,7 +224,25 @@ function TouristRow({ tourist, onDelete, subgroups, onAssign }) {
         }}>
           {isParsed ? 'Распознан ✓' : 'Ожидает'}
         </span>
-        <button className="btn btn-danger btn-sm" onClick={onDelete} title="Удалить">✕</button>
+        <button
+          type="button"
+          onClick={onDelete}
+          title="Удалить"
+          aria-label="Удалить"
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            color: 'var(--white-dim)',
+            fontSize: 14,
+            lineHeight: 1,
+            padding: '4px 6px',
+            borderRadius: 4,
+            transition: 'color 0.15s, background 0.15s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
+        >✕</button>
       </div>
     </div>
   );
@@ -249,6 +267,7 @@ function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, on
   const [parseError, setParseError] = useState(null);
   const [notes, setNotes] = useState('');
   const [hotelsReloadKey, setHotelsReloadKey] = useState(0);
+  const [hotelsExpanded, setHotelsExpanded] = useState(false);
 
   const tourists = allTourists.filter(t => t.subgroup_id === group.id);
   const uploads = allUploads.filter(u => u.subgroup_id === group.id);
@@ -358,9 +377,23 @@ function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, on
               title="Переименовать"
             >✎</button>
             <button
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 14, padding: '2px 6px' }}
+              type="button"
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--white-dim)',
+                fontSize: 14,
+                lineHeight: 1,
+                padding: '4px 6px',
+                borderRadius: 4,
+                transition: 'color 0.15s, background 0.15s',
+              }}
               onClick={e => { e.stopPropagation(); handleDelete(); }}
+              onMouseEnter={e => { e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+              onMouseLeave={e => { e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
               title="Удалить группу"
+              aria-label="Удалить группу"
             >✕</button>
           </>
         )}
@@ -477,12 +510,39 @@ function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, on
             </div>
           </div>
 
-          {/* Hotels for this subgroup */}
+          {/* Hotels for this subgroup — collapsible, collapsed by default */}
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-            <div style={{ fontSize: 12, color: 'var(--white-dim)', fontWeight: 500, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Отели группы
+            <div
+              onClick={() => setHotelsExpanded(e => !e)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                cursor: 'pointer',
+                userSelect: 'none',
+                marginBottom: hotelsExpanded ? 10 : 0,
+              }}
+            >
+              <span style={{
+                fontSize: 10,
+                color: 'var(--white-dim)',
+                transition: 'transform 0.2s',
+                display: 'inline-block',
+                transform: hotelsExpanded ? 'rotate(90deg)' : 'none',
+              }}>▶</span>
+              <span style={{
+                fontSize: 12,
+                color: 'var(--white-dim)',
+                fontWeight: 500,
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}>
+                Отели группы
+              </span>
             </div>
-            <SubgroupHotelsSection subgroupId={group.id} reloadKey={hotelsReloadKey} />
+            {hotelsExpanded && (
+              <SubgroupHotelsSection subgroupId={group.id} reloadKey={hotelsReloadKey} />
+            )}
           </div>
         </div>
       )}
@@ -768,7 +828,25 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
                   {h.phone && <span>{h.phone}</span>}
                 </div>
               </div>
-              <button className="btn btn-danger btn-sm" onClick={() => handleRemove(idx)}>Удалить</button>
+              <button
+                type="button"
+                onClick={() => handleRemove(idx)}
+                title="Удалить"
+                aria-label="Удалить"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: 'var(--white-dim)',
+                  fontSize: 14,
+                  lineHeight: 1,
+                  padding: '4px 6px',
+                  borderRadius: 4,
+                  transition: 'color 0.15s, background 0.15s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+                onMouseLeave={e => { e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
+              >✕</button>
             </div>
           ))}
         </div>
@@ -1073,10 +1151,92 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
+// ── SettingsTab ───────────────────────────────────────────────────────────────
+
+function SettingsTab({ group, onDeleted }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteGroup(group.id);
+      setConfirmOpen(false);
+      onDeleted();
+    } catch (e) {
+      setError(e.message);
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => { setConfirmOpen(true); setError(null); }}
+        style={{
+          background: 'none',
+          border: '1px solid rgba(239, 68, 68, 0.4)',
+          color: '#ef4444',
+          fontSize: 13,
+          fontWeight: 600,
+          padding: '8px 16px',
+          borderRadius: 6,
+          cursor: 'pointer',
+          transition: 'background 0.15s, border-color 0.15s',
+        }}
+        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)'; e.currentTarget.style.borderColor = '#ef4444'; }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.4)'; }}
+      >
+        Удалить подачу
+      </button>
+
+      <Modal open={confirmOpen} onClose={() => !deleting && setConfirmOpen(false)} title="Удалить подачу?" width={440}>
+        <div style={{ fontSize: 13, color: 'var(--white)', marginBottom: 16, lineHeight: 1.5 }}>
+          Вы собираетесь удалить подачу <strong>«{group?.name}»</strong>. Это действие необратимо.
+        </div>
+        {error && <div className="error-message" style={{ marginBottom: 12 }}>{error}</div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setConfirmOpen(false)}
+            disabled={deleting}
+          >
+            Отмена
+          </button>
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={deleting}
+            style={{
+              background: '#ef4444',
+              border: 'none',
+              color: '#fff',
+              fontSize: 12,
+              fontWeight: 600,
+              padding: '7px 14px',
+              borderRadius: 5,
+              cursor: deleting ? 'default' : 'pointer',
+              opacity: deleting ? 0.6 : 1,
+              transition: 'opacity 0.15s',
+            }}
+          >
+            {deleting ? <><span className="spinner" /> Удаление...</> : 'Удалить'}
+          </button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
 const TABS = [
   { id: 'groups', label: 'Группы' },
   { id: 'documents', label: 'Документы' },
   { id: 'status', label: 'Статус' },
+  { id: 'settings', label: 'Настройки' },
 ];
 
 export default function GroupDetailPage() {
@@ -1149,6 +1309,9 @@ export default function GroupDetailPage() {
       {activeTab === 'groups' && <GroupsTab groupId={id} />}
       {activeTab === 'documents' && (
         <DocumentsTab groupId={id} group={group} onGroupUpdated={setGroup} />
+      )}
+      {activeTab === 'settings' && (
+        <SettingsTab group={group} onDeleted={() => navigate('/')} />
       )}
     </div>
   );

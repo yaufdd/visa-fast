@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getGroups, createGroup, deleteGroup } from '../api/client';
+import { getGroups, createGroup } from '../api/client';
 import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
 
@@ -35,17 +35,6 @@ export default function GroupsPage() {
   };
 
   useEffect(() => { load(); }, []);
-
-  const handleDelete = async (e, id) => {
-    e.stopPropagation();
-    if (!window.confirm('Удалить подачу? Все данные будут удалены безвозвратно.')) return;
-    try {
-      await deleteGroup(id);
-      await load();
-    } catch (e) {
-      alert(e.message);
-    }
-  };
 
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -107,7 +96,6 @@ export default function GroupsPage() {
                 <th>Название</th>
                 <th>Статус</th>
                 <th>Создана</th>
-                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -127,14 +115,6 @@ export default function GroupsPage() {
                     <span style={{ color: 'var(--white-dim)', fontSize: 12 }}>
                       {formatDate(g.created_at)}
                     </span>
-                  </td>
-                  <td onClick={e => e.stopPropagation()}>
-                    <button
-                      className="btn btn-danger btn-sm"
-                      onClick={e => handleDelete(e, g.id)}
-                    >
-                      Удалить
-                    </button>
                   </td>
                 </tr>
               ))}
