@@ -28,11 +28,12 @@ export async function deleteGroup(id) {
   if (!res.ok) throw new Error('Failed to delete group');
 }
 
-// Uploads (legacy — group-level)
-export async function uploadFile(groupId, file, fileType) {
+// Uploads
+export async function uploadFile(groupId, file, fileType, subgroupId = '') {
   const formData = new FormData();
   formData.append('file', file);
-  formData.append('file_type', fileType);
+  formData.append('file_type', fileType || 'document');
+  if (subgroupId) formData.append('subgroup_id', subgroupId);
   const res = await fetch(`${API}/api/groups/${groupId}/uploads`, {
     method: 'POST',
     body: formData,
@@ -100,11 +101,11 @@ export async function getSheetRows(q = '') {
 }
 
 // Tourists — new workflow
-export async function addTouristFromSheet(groupId, sheetRow) {
+export async function addTouristFromSheet(groupId, sheetRow, subgroupId = null) {
   const res = await fetch(`${API}/api/groups/${groupId}/tourists`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sheet_row: sheetRow }),
+    body: JSON.stringify({ sheet_row: sheetRow, subgroup_id: subgroupId || undefined }),
   });
   if (!res.ok) throw new Error('Failed to add tourist');
   return res.json();
@@ -171,6 +172,59 @@ export async function saveGroupHotels(groupId, hotels) {
     body: JSON.stringify(hotels),
   });
   if (!res.ok) throw new Error('Failed to save group hotels');
+  return res.json();
+}
+
+// Subgroups
+export async function getSubgroups(groupId) {
+  const res = await fetch(`${API}/api/groups/${groupId}/subgroups`);
+  if (!res.ok) throw new Error('Failed to fetch subgroups');
+  return res.json();
+}
+
+export async function createSubgroup(groupId, name) {
+  const res = await fetch(`${API}/api/groups/${groupId}/subgroups`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error('Failed to create subgroup');
+  return res.json();
+}
+
+export async function updateSubgroup(subgroupId, name) {
+  const res = await fetch(`${API}/api/subgroups/${subgroupId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error('Failed to update subgroup');
+  return res.json();
+}
+
+export async function deleteSubgroup(subgroupId) {
+  const res = await fetch(`${API}/api/subgroups/${subgroupId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to delete subgroup');
+}
+
+export async function assignTouristSubgroup(touristId, subgroupId) {
+  const res = await fetch(`${API}/api/tourists/${touristId}/subgroup`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subgroup_id: subgroupId || null }),
+  });
+  if (!res.ok) throw new Error('Failed to assign subgroup');
+  return res.json();
+}
+
+export async function parseSubgroup(subgroupId, notes = '') {
+  const url = new URL(`${API}/api/subgroups/${subgroupId}/parse`);
+  if (notes.trim()) url.searchParams.set('notes', notes.trim());
+  const res = await fetch(url.toString(), { method: 'POST' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to parse subgroup');
+  }
   return res.json();
 }
 

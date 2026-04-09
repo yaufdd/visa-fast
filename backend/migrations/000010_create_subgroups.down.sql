@@ -1,0 +1,3 @@
+ALTER TABLE uploads DROP COLUMN IF EXISTS subgroup_id;
+ALTER TABLE tourists DROP COLUMN IF EXISTS subgroup_id;
+DROP TABLE IF EXISTS subgroups;

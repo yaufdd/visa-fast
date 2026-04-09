@@ -192,7 +192,7 @@ former_nationality (three-step logic — follow in order):
   STEP 3: Is former_nationality NOT stated AND place_of_birth does NOT mention USSR? → "NO"
 
 issued_by:
-- Take from the FOREIGN passport. Translate to English/Latin. "МВД 77533" → "MVD 77533", "МВД 77810, Москва" → "MVD 77810, Moscow".
+- Take from the FOREIGN passport. Translate to English/Latin keeping only the MVD code. "МВД 77533" → "MVD 77533", "МВД 540-001" → "MVD 540001". Strip extra text, keep just "MVD XXXXXX".
 
 internal_series / internal_number / internal_issued / internal_issued_by / reg_address:
 - Take from the Russian INTERNAL (domestic) passport (серия, номер, кем выдан, дата выдачи, адрес регистрации).

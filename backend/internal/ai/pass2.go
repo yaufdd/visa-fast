@@ -131,7 +131,8 @@ former_nationality logic (apply in order):
   1. If matched_sheet_row["Прежнее гражданство"] explicitly contains "СССР" or "Soviet" → "USSR"
   2. Else if raw_json.former_nationality == "USSR" → "USSR"
   3. Else if place_of_birth contains "СССР" or "USSR" or "Soviet" → "USSR"
-  4. Otherwise → "NO"
+  4. Else if birth_date (DD.MM.YYYY) — parse the year and day/month: if the person was born on or before 25.12.1991 → "USSR" (they were born while the USSR existed)
+  5. Otherwise → "NO"
 
 nationality output: always full English name in ALL CAPS ("RUSSIA", not "RUS").
 
@@ -154,7 +155,7 @@ Only the following may stay in Russian Cyrillic: name_cyr, doverenost fields, in
 These map directly to PDF form fields. They must be filled accurately.
 
 anketa.nationality_iso: THREE-LETTER ISO code for the T50 dropdown. Examples: "RUS" for Russia, "KAZ" for Kazakhstan. This is different from the nationality field above which uses full name.
-anketa.former_nationality_text: for T34 dropdown. If former_nationality is "USSR" — USSR is not in the dropdown, so output "" (empty string). Otherwise output the full country name.
+anketa.former_nationality_text: always output "USSR" if former_nationality is "USSR", or "NO" if former_nationality is "NO". Never leave empty.
 anketa.gender_rb: radio button value. "0" = Male, "1" = Female.
 anketa.marital_status_rb: "0"=Single, "1"=Married, "2"=Widowed, "3"=Divorced.
 anketa.passport_type_rb: "0"=Diplomatic, "1"=Official, "2"=Ordinary, "3"=Other.
@@ -171,17 +172,42 @@ anketa.first_hotel_phone: phone of the first hotel.
 
 === SECTION 4: DOVERENOST (POWER OF ATTORNEY) ===
 
-One per tourist. Uses data from the INTERNAL (domestic) Russian passport.
+One entry per tourist. Uses data from the INTERNAL (domestic) Russian passport.
 The fixed courier block is always identical — do not include it in the output (the Python template handles it).
 
-doverenost fields per tourist:
+MINOR DETECTION:
+  A tourist is a minor if their age on the departure date is less than 18 years old.
+  Calculate age as: (departure_year - birth_year), adjusted if birthday hasn't occurred yet by departure date.
+
+FOR ADULT tourists — standard doverenost:
   name_ru: "Фамилия Имя" from raw_json.name_cyr (NO patronymic)
   dob: birth_date in DD.MM.YYYY
   passport_series: raw_json.internal_series
   passport_number: raw_json.internal_number
-  issued_date: raw_json.internal_issued in DD.MM.YYYY, formatted as «DD» Month YYYY (e.g. «17» марта 2021)
+  issued_date: raw_json.internal_issued formatted as «DD» Month YYYY (e.g. «17» марта 2021)
   issued_by: raw_json.internal_issued_by
   reg_address: raw_json.reg_address
+  is_minor: false
+
+FOR MINOR tourists — parent's doverenost:
+  Find the parent among the other tourists in the group: a tourist with the same surname (first word of name_cyr) who is 18 or older.
+  Use the PARENT's internal passport data for all fields.
+  name_ru: parent's name_cyr
+  dob: parent's birth_date
+  passport_series: parent's raw_json.internal_series
+  passport_number: parent's raw_json.internal_number
+  issued_date: parent's raw_json.internal_issued formatted as «DD» Month YYYY
+  issued_by: parent's raw_json.internal_issued_by
+  reg_address: parent's raw_json.reg_address
+  is_minor: true
+  child_name_ru: minor's full name in Russian GENITIVE case (родительный падеж — отвечает на вопрос "кого?").
+    Rules:
+    - Male: surname consonant-ending → add "а" (Кузнецов → Кузнецова); first name consonant-ending → add "а" (Александр → Александра); ending in "й" → replace with "я" (Андрей → Андрея).
+    - Female: surname ending "а" → replace with "ой" (Кузнецова → Кузнецовой); first name ending "а" after hard consonant → replace with "ы" (Анна → Анны); after soft consonant/ж/ш/щ/ч or ending "я" → replace with "и" (Мария → Марии, Даша → Даши).
+    Examples: male "Кузнецов Александр" → "Кузнецова Александра"; female "Кузнецова Арина" → "Кузнецовой Арины".
+  child_gender: "сына" if minor's gender is Male, "дочери" if Female
+
+  If no parent is found in the group, still set is_minor: true and child_name_ru/child_gender, but use the minor's own data for the other fields.
 
 === SECTION 5: VC_REQUEST (VISA CENTER APPLICATION) ===
 
@@ -244,7 +270,7 @@ email:
   ],
   "anketa": {
     "nationality_iso": "RUS",
-    "former_nationality_text": "",
+    "former_nationality_text": "NO",
     "gender_rb": "0",
     "marital_status_rb": "0",
     "passport_type_rb": "2",
@@ -267,7 +293,22 @@ email:
       "passport_number": "120035",
       "issued_date": "«17» марта 2021",
       "issued_by": "...",
-      "reg_address": "..."
+      "reg_address": "...",
+      "is_minor": false,
+      "child_name_ru": "",
+      "child_gender": ""
+    },
+    {
+      "name_ru": "Кузнецов Сергей",
+      "dob": "26.02.1981",
+      "passport_series": "...",
+      "passport_number": "...",
+      "issued_date": "«01» января 2020",
+      "issued_by": "...",
+      "reg_address": "...",
+      "is_minor": true,
+      "child_name_ru": "Кузнецова Александра",
+      "child_gender": "сына"
     }
   ],
   "vc_request": {

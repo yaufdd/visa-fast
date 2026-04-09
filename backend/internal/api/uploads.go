@@ -28,7 +28,7 @@ func ListUploads(db *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		rows, err := db.Query(r.Context(),
-			`SELECT id, group_id, COALESCE(tourist_id::text,''), file_type, file_path, created_at
+			`SELECT id, group_id, COALESCE(tourist_id::text,''), COALESCE(subgroup_id::text,''), file_type, file_path, created_at
 			   FROM uploads WHERE group_id = $1 ORDER BY created_at`,
 			groupID,
 		)
@@ -40,17 +40,18 @@ func ListUploads(db *pgxpool.Pool) http.HandlerFunc {
 		defer rows.Close()
 
 		type uploadRow struct {
-			ID        string    `json:"id"`
-			GroupID   string    `json:"group_id"`
-			TouristID string    `json:"tourist_id,omitempty"`
-			FileType  string    `json:"file_type"`
-			FilePath  string    `json:"file_path"`
-			CreatedAt time.Time `json:"created_at"`
+			ID         string    `json:"id"`
+			GroupID    string    `json:"group_id"`
+			TouristID  string    `json:"tourist_id,omitempty"`
+			SubgroupID string    `json:"subgroup_id,omitempty"`
+			FileType   string    `json:"file_type"`
+			FilePath   string    `json:"file_path"`
+			CreatedAt  time.Time `json:"created_at"`
 		}
 		var uploads []uploadRow
 		for rows.Next() {
 			var u uploadRow
-			if err := rows.Scan(&u.ID, &u.GroupID, &u.TouristID, &u.FileType, &u.FilePath, &u.CreatedAt); err != nil {
+			if err := rows.Scan(&u.ID, &u.GroupID, &u.TouristID, &u.SubgroupID, &u.FileType, &u.FilePath, &u.CreatedAt); err != nil {
 				slog.Error("scan upload", "err", err)
 				writeError(w, http.StatusInternalServerError, "scan error")
 				return
@@ -193,6 +194,7 @@ func UploadFile(db *pgxpool.Pool, uploadsDir, apiKey string) http.HandlerFunc {
 		if fileType == "" {
 			fileType = "document"
 		}
+		subgroupID := r.FormValue("subgroup_id") // optional
 
 		file, header, err := r.FormFile("file")
 		if err != nil {
@@ -225,9 +227,9 @@ func UploadFile(db *pgxpool.Pool, uploadsDir, apiKey string) http.HandlerFunc {
 		var uploadID string
 		var createdAt time.Time
 		err = db.QueryRow(r.Context(),
-			`INSERT INTO uploads (group_id, file_type, file_path, anthropic_file_id)
-			 VALUES ($1, $2, $3, NULLIF($4,'')) RETURNING id, created_at`,
-			groupID, fileType, savedPath, anthropicFileID,
+			`INSERT INTO uploads (group_id, subgroup_id, file_type, file_path, anthropic_file_id)
+			 VALUES ($1, NULLIF($2,'')::uuid, $3, $4, NULLIF($5,'')) RETURNING id, created_at`,
+			groupID, subgroupID, fileType, savedPath, anthropicFileID,
 		).Scan(&uploadID, &createdAt)
 		if err != nil {
 			slog.Error("insert upload record", "err", err)
@@ -236,11 +238,12 @@ func UploadFile(db *pgxpool.Pool, uploadsDir, apiKey string) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusCreated, map[string]any{
-			"id":         uploadID,
-			"group_id":   groupID,
-			"file_type":  fileType,
-			"file_path":  savedPath,
-			"created_at": createdAt,
+			"id":          uploadID,
+			"group_id":    groupID,
+			"subgroup_id": subgroupID,
+			"file_type":   fileType,
+			"file_path":   savedPath,
+			"created_at":  createdAt,
 		})
 	}
 }

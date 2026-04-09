@@ -105,6 +105,14 @@ func main() {
 			r.Post("/groups/{id}/parse", api.ParseGroup(pool, anthropicKey))
 		}
 
+		// Subgroups
+		r.Get("/groups/{id}/subgroups", api.ListSubgroups(pool))
+		r.Post("/groups/{id}/subgroups", api.CreateSubgroup(pool))
+		r.Put("/subgroups/{id}", api.UpdateSubgroup(pool))
+		r.Delete("/subgroups/{id}", api.DeleteSubgroup(pool))
+		r.Put("/tourists/{id}/subgroup", api.AssignTouristSubgroup(pool))
+		r.Post("/subgroups/{id}/parse", api.ParseSubgroup(pool, anthropicKey))
+
 		// Tourists
 		r.Get("/groups/{id}/tourists", api.ListTourists(pool))
 		r.Post("/groups/{id}/tourists", api.AddTouristFromSheet(pool))
