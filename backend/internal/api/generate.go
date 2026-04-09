@@ -230,6 +230,12 @@ func GenerateSubgroupDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScrip
 			writeError(w, http.StatusNotFound, "subgroup not found")
 			return
 		}
+		// Reject path separators / traversal in subgroup name to keep os.RemoveAll
+		// and the Python docgen confined to the intended subfolder.
+		if strings.ContainsAny(subgroupName, "/\\") || strings.Contains(subgroupName, "..") {
+			writeError(w, http.StatusBadRequest, "invalid subgroup name — remove / \\ ..")
+			return
+		}
 
 		tourists, err := loadTouristsForSubgroup(db, r, groupID, subgroupID)
 		if err != nil {
@@ -320,8 +326,15 @@ func DownloadSubgroupZIP(db *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, "no documents generated for this subgroup")
 			return
 		}
+		// Strip characters that would break Content-Disposition header (quotes, newlines).
+		safeName := strings.Map(func(r rune) rune {
+			if r == '"' || r == '\r' || r == '\n' {
+				return -1
+			}
+			return r
+		}, subgroupName)
 		w.Header().Set("Content-Type", "application/zip")
-		w.Header().Set("Content-Disposition", `attachment; filename="`+subgroupName+`.zip"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="`+safeName+`.zip"`)
 		http.ServeFile(w, r, zipPath)
 	}
 }

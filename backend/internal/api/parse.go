@@ -46,6 +46,15 @@ func loadUploadsAsFileInputs(ctx context.Context, db *pgxpool.Pool, apiKey strin
 	return inputs, nil
 }
 
+// escapeLikePattern escapes LIKE metacharacters (%, _) in user input so that
+// a voucher hotel name like "A_1" isn't treated as a wildcard match.
+func escapeLikePattern(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "%", `\%`)
+	s = strings.ReplaceAll(s, "_", `\_`)
+	return s
+}
+
 // convertDate converts DD.MM.YYYY → YYYY-MM-DD for PostgreSQL date fields.
 func convertDate(s string) string {
 	if len(s) == 10 && s[2] == '.' && s[5] == '.' {
@@ -541,9 +550,10 @@ func ParseSubgroup(db *pgxpool.Pool, apiKey string, sheets ...SheetsSearcher) ht
 			}
 			for i, vh := range vouchers {
 				var hotelID string
+				escapedLower := escapeLikePattern(strings.ToLower(vh.Name))
 				err := db.QueryRow(r.Context(),
-					`SELECT id FROM hotels WHERE lower(name_en) ILIKE $1 LIMIT 1`,
-					"%"+strings.ToLower(vh.Name)+"%").Scan(&hotelID)
+					`SELECT id FROM hotels WHERE lower(name_en) ILIKE $1 ESCAPE '\' LIMIT 1`,
+					"%"+escapedLower+"%").Scan(&hotelID)
 				if err != nil {
 					_ = db.QueryRow(r.Context(),
 						`SELECT id FROM hotels WHERE $1 ILIKE '%' || lower(name_en) || '%' LIMIT 1`,

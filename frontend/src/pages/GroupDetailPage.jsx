@@ -84,16 +84,28 @@ function AddFromSheetModal({ groupId, subgroupId, onAdded, onClose }) {
     if (selected.size === 0) return;
     setAdding(true);
     setError(null);
+    let added = 0;
+    let failErr = null;
     try {
       for (const k of selected) {
         const row = JSON.parse(k);
-        await addTouristFromSheet(groupId, row, subgroupId);
+        try {
+          await addTouristFromSheet(groupId, row, subgroupId);
+          added += 1;
+        } catch (e) {
+          failErr = e;
+          break;
+        }
       }
-      onAdded();
-      onClose();
-    } catch (e) {
-      setError(e.message);
-      setAdding(false);
+    } finally {
+      // Always refresh so partial progress is visible even on mid-loop error.
+      if (added > 0) onAdded();
+      if (failErr) {
+        setError(`${failErr.message} (добавлено: ${added} из ${selected.size})`);
+        setAdding(false);
+      } else {
+        onClose();
+      }
     }
   };
 
@@ -639,12 +651,14 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
   const [saveMsg, setSaveMsg] = useState(null);
   const [form, setForm] = useState({ hotel_id: '', check_in: '', check_out: '' });
   const [showAddCard, setShowAddCard] = useState(false);
+  const [dirty, setDirty] = useState(false);
 
   const loadAll = useCallback(async () => {
     try {
       const [hotels, current] = await Promise.all([getHotels(), getSubgroupHotels(subgroupId)]);
       setAllHotels(Array.isArray(hotels) ? hotels : []);
       setGroupHotels(Array.isArray(current) ? current : []);
+      setDirty(false);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -653,6 +667,14 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
   }, [subgroupId]);
 
   useEffect(() => { loadAll(); }, [loadAll, reloadKey]);
+
+  // Warn on accidental tab close while there are unsaved local changes.
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty]);
 
   const selectedHotel = allHotels.find(h => String(h.id) === String(form.hotel_id));
 
@@ -667,10 +689,13 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
     }]);
     setForm({ hotel_id: '', check_in: '', check_out: '' });
     setShowAddCard(false);
+    setDirty(true);
   };
 
-  const handleRemove = (idx) =>
+  const handleRemove = (idx) => {
     setGroupHotels(prev => prev.filter((_, i) => i !== idx).map((h, i) => ({ ...h, sort_order: i })));
+    setDirty(true);
+  };
 
   const handleMoveUp = (idx) => {
     if (idx === 0) return;
@@ -679,6 +704,7 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
       [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]];
       return arr.map((h, i) => ({ ...h, sort_order: i }));
     });
+    setDirty(true);
   };
 
   const handleMoveDown = (idx) => {
@@ -688,6 +714,7 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
       [arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]];
       return arr.map((h, i) => ({ ...h, sort_order: i }));
     });
+    setDirty(true);
   };
 
   const handleSave = async () => {
@@ -696,6 +723,8 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
     setError(null);
     try {
       await saveSubgroupHotels(subgroupId, groupHotels);
+      // Re-sync from server so the UI reflects any normalization the backend did.
+      await loadAll();
       setSaveMsg('Отели сохранены');
       setTimeout(() => setSaveMsg(null), 3000);
     } catch (e) {
@@ -794,8 +823,11 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
         </div>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button className="btn btn-primary btn-sm" onClick={handleSave} disabled={saving}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
+        {dirty && !saving && (
+          <span style={{ fontSize: 11, color: 'var(--warning, #e0a82e)' }}>● Есть несохранённые изменения</span>
+        )}
+        <button className="btn btn-primary btn-sm" onClick={handleSave} disabled={saving || !dirty}>
           {saving ? <><span className="spinner" /> Сохранение...</> : 'Сохранить отели'}
         </button>
       </div>
