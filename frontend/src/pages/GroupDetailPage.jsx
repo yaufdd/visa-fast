@@ -1046,46 +1046,6 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
 
   return (
     <div>
-      <div
-        className="card"
-        style={{
-          marginBottom: 20,
-          padding: '14px 18px',
-          background: 'var(--graphite)',
-          border: '1px solid var(--border)',
-          borderRadius: 8,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 14,
-          flexWrap: 'wrap',
-        }}
-      >
-        <button
-          className="btn btn-primary"
-          onClick={handleMarkReady}
-          disabled={alreadyReady || markingReady}
-          style={alreadyReady ? { opacity: 0.6, cursor: 'default' } : undefined}
-        >
-          {markingReady
-            ? <><span className="spinner" /> Сохранение...</>
-            : 'Все правильно сгенерировано ✓'}
-        </button>
-        {alreadyReady && (
-          <span style={{
-            fontSize: 12,
-            color: '#22c55e',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-          }}>
-            Документы отмечены как готовые
-          </span>
-        )}
-        {markReadyError && (
-          <span style={{ fontSize: 12, color: 'var(--danger, #ef4444)' }}>{markReadyError}</span>
-        )}
-      </div>
-
       <div className="section-header">
         <div className="section-title">Документы по группам</div>
       </div>
@@ -1145,6 +1105,82 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
           )}
         </div>
       </div>
+
+      {/* Final confirmation — compact toggle */}
+      {(() => {
+        const isReady = group?.status === 'docs_ready'
+          || group?.status === 'submitted'
+          || group?.status === 'visa_issued';
+        const toggle = async (nextStatus) => {
+          if (markingReady) return;
+          if ((nextStatus === 'docs_ready' && isReady) ||
+              (nextStatus === 'in_progress' && group?.status === 'in_progress')) return;
+          setMarkingReady(true);
+          setMarkReadyError(null);
+          try {
+            const updated = await updateGroupStatus(groupId, nextStatus);
+            onGroupUpdated?.(updated);
+          } catch (e) {
+            setMarkReadyError(e.message);
+          } finally {
+            setMarkingReady(false);
+          }
+        };
+        const iconBtn = (active, activeColor, onClick, children, title) => (
+          <button
+            type="button"
+            onClick={onClick}
+            disabled={markingReady}
+            title={title}
+            aria-label={title}
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: '50%',
+              border: `1px solid ${active ? activeColor : 'var(--border)'}`,
+              background: active ? `${activeColor}1f` : 'transparent',
+              color: active ? activeColor : 'var(--white-dim)',
+              cursor: markingReady ? 'default' : 'pointer',
+              fontSize: 15,
+              fontWeight: 700,
+              lineHeight: 1,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: active ? 1 : 0.5,
+              transition: 'opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s',
+              padding: 0,
+            }}
+            onMouseEnter={e => { if (!markingReady) e.currentTarget.style.opacity = '1'; }}
+            onMouseLeave={e => { if (!markingReady) e.currentTarget.style.opacity = active ? '1' : '0.5'; }}
+          >{children}</button>
+        );
+        return (
+          <div style={{
+            marginTop: 20,
+            padding: '12px 16px',
+            background: 'var(--graphite)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 14,
+            flexWrap: 'wrap',
+          }}>
+            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--white)' }}>
+              Все сгенерировано правильно?
+            </span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {iconBtn(isReady, '#3b82f6', () => toggle('docs_ready'), '✓', 'Документы готовы')}
+              {iconBtn(group?.status === 'in_progress', '#f59e0b', () => toggle('in_progress'), '✕', 'В процессе')}
+            </div>
+          </div>
+        );
+      })()}
+      {markReadyError && (
+        <div className="error-message" style={{ marginTop: 8 }}>{markReadyError}</div>
+      )}
     </div>
   );
 }

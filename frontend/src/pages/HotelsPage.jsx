@@ -17,6 +17,7 @@ export default function HotelsPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
 
   const load = async () => {
     try {
@@ -36,6 +37,18 @@ export default function HotelsPage() {
     setForm(f => ({ ...f, [field]: value }));
   };
 
+  const closeForm = () => {
+    setFormOpen(false);
+    setForm(EMPTY_FORM);
+    setSaveError(null);
+  };
+
+  const openForm = () => {
+    setFormOpen(true);
+    setSaveError(null);
+    setSaveSuccess(false);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.name_en.trim()) return;
@@ -45,6 +58,7 @@ export default function HotelsPage() {
     try {
       await createHotel(form);
       setForm(EMPTY_FORM);
+      setFormOpen(false);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
       await load();
@@ -62,9 +76,128 @@ export default function HotelsPage() {
           <div className="page-title">Отели</div>
           <div className="page-subtitle">База отелей для программы поездок</div>
         </div>
+        {!formOpen && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={openForm}
+          >
+            + Добавить отель
+          </button>
+        )}
       </div>
 
       {error && <div className="error-message">{error}</div>}
+      {saveSuccess && <div className="success-message">Отель добавлен успешно</div>}
+
+      {/* Add hotel form (collapsible, above table) */}
+      {formOpen && (
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 20,
+          }}>
+            <div className="section-title">Добавить отель</div>
+            <button
+              type="button"
+              onClick={closeForm}
+              title="Закрыть"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--white-dim)',
+                fontSize: 18,
+                cursor: 'pointer',
+                lineHeight: 1,
+                padding: 4,
+              }}
+            >
+              ✕
+            </button>
+          </div>
+
+          {saveError && <div className="error-message">{saveError}</div>}
+
+          <form onSubmit={handleSubmit}>
+            <div className="grid-2">
+              <div className="form-group">
+                <label className="form-label">Название (English) *</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="Hotel name in English"
+                  value={form.name_en}
+                  onChange={e => handleChange('name_en', e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Название (Русский)</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="Название на русском"
+                  value={form.name_ru}
+                  onChange={e => handleChange('name_ru', e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="grid-3">
+              <div className="form-group">
+                <label className="form-label">Город</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="Tokyo"
+                  value={form.city}
+                  onChange={e => handleChange('city', e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Телефон</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="+81-3-XXXX-XXXX"
+                  value={form.phone}
+                  onChange={e => handleChange('phone', e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Адрес</label>
+              <input
+                className="form-input"
+                type="text"
+                placeholder="Full address"
+                value={form.address}
+                onChange={e => handleChange('address', e.target.value)}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={closeForm}
+                disabled={saving}
+              >
+                Отмена
+              </button>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={saving || !form.name_en.trim()}
+              >
+                {saving ? <><span className="spinner" /> Сохранение...</> : '+ Добавить отель'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {loading ? (
         <div className="loading-center">
@@ -76,7 +209,7 @@ export default function HotelsPage() {
           <div className="empty-state">
             <div className="empty-state-icon">🏨</div>
             <div className="empty-state-title">Нет отелей</div>
-            <div className="empty-state-text">Добавьте первый отель ниже</div>
+            <div className="empty-state-text">Нажмите «+ Добавить отель» выше, чтобы создать первый</div>
           </div>
         </div>
       ) : (
@@ -118,83 +251,6 @@ export default function HotelsPage() {
           </table>
         </div>
       )}
-
-      {/* Add hotel form */}
-      <div className="card">
-        <div className="section-title" style={{ marginBottom: 20 }}>Добавить отель</div>
-
-        {saveError && <div className="error-message">{saveError}</div>}
-        {saveSuccess && <div className="success-message">Отель добавлен успешно</div>}
-
-        <form onSubmit={handleSubmit}>
-          <div className="grid-2">
-            <div className="form-group">
-              <label className="form-label">Название (English) *</label>
-              <input
-                className="form-input"
-                type="text"
-                placeholder="Hotel name in English"
-                value={form.name_en}
-                onChange={e => handleChange('name_en', e.target.value)}
-              />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Название (Русский)</label>
-              <input
-                className="form-input"
-                type="text"
-                placeholder="Название на русском"
-                value={form.name_ru}
-                onChange={e => handleChange('name_ru', e.target.value)}
-              />
-            </div>
-          </div>
-
-          <div className="grid-3">
-            <div className="form-group">
-              <label className="form-label">Город</label>
-              <input
-                className="form-input"
-                type="text"
-                placeholder="Tokyo"
-                value={form.city}
-                onChange={e => handleChange('city', e.target.value)}
-              />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Телефон</label>
-              <input
-                className="form-input"
-                type="text"
-                placeholder="+81-3-XXXX-XXXX"
-                value={form.phone}
-                onChange={e => handleChange('phone', e.target.value)}
-              />
-            </div>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Адрес</label>
-            <input
-              className="form-input"
-              type="text"
-              placeholder="Full address"
-              value={form.address}
-              onChange={e => handleChange('address', e.target.value)}
-            />
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={saving || !form.name_en.trim()}
-            >
-              {saving ? <><span className="spinner" /> Сохранение...</> : '+ Добавить отель'}
-            </button>
-          </div>
-        </form>
-      </div>
     </div>
   );
 }
