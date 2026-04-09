@@ -621,12 +621,25 @@ func ParseSubgroup(db *pgxpool.Pool, apiKey string, sheets ...SheetsSearcher) ht
 						strings.ToLower(vh.Name)).Scan(&hotelID)
 				}
 				if hotelID == "" {
+					// Create hotel with full details from AI output.
 					err = db.QueryRow(r.Context(),
-						`INSERT INTO hotels (name_en, city) VALUES ($1, '') RETURNING id`,
-						vh.Name).Scan(&hotelID)
+						`INSERT INTO hotels (name_en, city, address, phone) VALUES ($1, $2, $3, $4) RETURNING id`,
+						vh.Name, vh.City, vh.Address, vh.Phone).Scan(&hotelID)
 					if err != nil {
 						slog.Warn("auto-create hotel failed", "name", vh.Name, "err", err)
 						continue
+					}
+				} else {
+					// Hotel exists — fill in any empty address/phone/city if AI provided one.
+					if _, err := db.Exec(r.Context(),
+						`UPDATE hotels SET
+						   city    = CASE WHEN COALESCE(NULLIF(city,''), '') = '' THEN $2 ELSE city END,
+						   address = CASE WHEN COALESCE(NULLIF(address,''), '') = '' THEN $3 ELSE address END,
+						   phone   = CASE WHEN COALESCE(NULLIF(phone,''), '') = '' THEN $4 ELSE phone END,
+						   updated_at = now()
+						 WHERE id = $1`,
+						hotelID, vh.City, vh.Address, vh.Phone); err != nil {
+						slog.Warn("enrich existing hotel failed", "id", hotelID, "err", err)
 					}
 				}
 				checkIn := convertDate(vh.CheckIn)

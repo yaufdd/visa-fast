@@ -60,9 +60,12 @@ type Pass1Result struct {
 
 // VoucherHotel is a hotel extracted from a voucher document.
 type VoucherHotel struct {
-	Name    string `json:"name"`
-	CheckIn string `json:"checkin"`  // DD.MM.YYYY
+	Name     string `json:"name"`
+	CheckIn  string `json:"checkin"`  // DD.MM.YYYY
 	CheckOut string `json:"checkout"` // DD.MM.YYYY
+	Address  string `json:"address"`
+	Phone    string `json:"phone"`
+	City     string `json:"city"`
 }
 
 type anthropicRequest struct {
@@ -212,13 +215,25 @@ departure_time / departure_airport / departure_date:
 
 hotels_from_vouchers:
 - Array of objects, one per hotel found in any voucher document.
-- Each object: { "name": "Hotel Name", "checkin": "DD.MM.YYYY", "checkout": "DD.MM.YYYY" }
+- Each object: { "name": "Hotel Name", "checkin": "DD.MM.YYYY", "checkout": "DD.MM.YYYY", "address": "...", "phone": "...", "city": "..." }
 - If no vouchers provided: [].
+- name: official hotel name in English (as printed on the voucher).
+- city: Japanese city where the hotel is located, English CAPS, e.g. "TOKYO", "KYOTO", "OSAKA", "KANAZAWA".
+- address: full street address of the hotel in English.
+  - FIRST look for it on the voucher itself (Booking.com / Agoda / Expedia / direct-booking vouchers usually print it).
+  - If the voucher does NOT contain the address, fill it from your general knowledge of well-known hotels in Japan. Use the widely-known official address of that hotel (e.g. "Dusit Thani Kyoto" → "Ichi 29-1, Nishinotoin-dori Hachijo-sagaru, Nishikujo, Minami Ward, Kyoto, 601-8417, Japan").
+  - If you genuinely do not know the address and the voucher does not list it, use "".
+- phone: main reception phone in international format (+81 ...).
+  - FIRST look on the voucher.
+  - If not on the voucher, fill from your general knowledge of the hotel. If unknown, use "".
+- Only fill address/phone from general knowledge for HOTELS. Do not apply this to any other field.
 
 === MISSING DATA ===
 - If a field cannot be found in any of the provided documents, use "" (empty string).
 - Never invent data. Never guess. Never fill from general knowledge.
-- Exception: former_nationality must always be "USSR" or "NO" (never "").` + extraNote
+- Exceptions:
+  - former_nationality must always be "USSR" or "NO" (never "").
+  - hotels_from_vouchers[].address / .phone / .city may be filled from your knowledge of well-known Japanese hotels (see rule above).` + extraNote
 
 	var contents []anthropicContent
 
