@@ -483,7 +483,7 @@ function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, on
             <textarea
               className="form-input"
               rows={2}
-              placeholder="Уточнения для ИИ (необязательно)..."
+              placeholder="Уточнение (необязательно)..."
               value={notes}
               onChange={e => setNotes(e.target.value)}
               style={{ resize: 'vertical', fontFamily: 'inherit', fontSize: 12, marginBottom: 8 }}
@@ -504,8 +504,20 @@ function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, on
                 onClick={handleParse}
                 disabled={parsing || uploads.length === 0}
                 title={uploads.length === 0 ? 'Сначала загрузите файлы' : ''}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
               >
-                {parsing ? <><span className="spinner" /> Распознавание...</> : 'Распарсить группу'}
+                {parsing
+                  ? <><span className="spinner" /> Распознавание...</>
+                  : <>
+                  Распознать
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+                        <path d="M8 1.5l1.1 3.4 3.4 1.1-3.4 1.1L8 10.5 6.9 7.1 3.5 6l3.4-1.1L8 1.5z" fill="currentColor"/>
+                        <path d="M12.5 10l0.5 1.5L14.5 12l-1.5 0.5L12.5 14l-0.5-1.5L10.5 12l1.5-0.5L12.5 10z" fill="currentColor"/>
+                        <path d="M3 11.5l0.3 1 1 0.3-1 0.3L3 14.1l-0.3-1-1-0.3 1-0.3L3 11.5z" fill="currentColor"/>
+                      </svg>
+                      
+                    </>
+                }
               </button>
             </div>
           </div>
@@ -987,9 +999,14 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [finalHasZip, setFinalHasZip] = useState(false);
-  const [finalGeneratedAt, setFinalGeneratedAt] = useState(null);
   const [finalizing, setFinalizing] = useState(false);
   const [finalError, setFinalError] = useState(null);
+  // Default submission date = tomorrow (YYYY-MM-DD for <input type="date">).
+  const [submissionDate, setSubmissionDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().slice(0, 10);
+  });
   const [markingReady, setMarkingReady] = useState(false);
   const [markReadyError, setMarkReadyError] = useState(null);
 
@@ -1019,7 +1036,6 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
         ]);
         setSubgroups(Array.isArray(sgs) ? sgs : []);
         setFinalHasZip(!!fstat.has_zip);
-        setFinalGeneratedAt(fstat.generated_at || null);
       } catch (e) {
         setError(e.message);
       } finally {
@@ -1032,9 +1048,8 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
     setFinalizing(true);
     setFinalError(null);
     try {
-      const res = await finalizeGroup(groupId);
+      await finalizeGroup(groupId, submissionDate);
       setFinalHasZip(true);
-      setFinalGeneratedAt(res.generated_at || new Date().toISOString());
     } catch (e) {
       setFinalError(e.message);
     } finally {
@@ -1074,35 +1089,47 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
         <div className="section-title">Финальные документы</div>
       </div>
       <div style={{ fontSize: 12, color: 'var(--white-dim)', marginBottom: 16 }}>
-        Для Инны в ВЦ, заявка ВЦ — формируются после оформления всей подачи.
+        Приложение на оплату и списки.
       </div>
 
       {finalError && <div className="error-message">{finalError}</div>}
 
-      <div className="card">
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button className="btn btn-primary" onClick={handleFinalize} disabled={finalizing}>
-            {finalizing
-              ? <><span className="spinner" /> Генерация...</>
-              : finalHasZip ? 'Перегенерировать' : 'Сформировать финальные документы'}
-          </button>
-          {finalHasZip && (
-            <a
-              href={getFinalDownloadUrl(groupId)}
-              className="btn btn-secondary"
-              target="_blank"
-              rel="noreferrer"
-              download
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+      <div className="card" style={{ marginBottom: 12, padding: '14px 18px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontSize: 13, color: 'var(--white)', fontWeight: 500 }}>
+            Дата подачи:
+            <input
+              type="date"
+              className="form-input"
+              value={submissionDate}
+              onChange={e => setSubmissionDate(e.target.value)}
+              aria-label="Дата подачи"
+              style={{ fontSize: 13, padding: '6px 10px', height: 32 }}
+            />
+          </label>
+          <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={handleFinalize}
+              disabled={finalizing}
             >
-              <FolderIcon /> Скачать final.zip
-            </a>
-          )}
-          {finalHasZip && finalGeneratedAt && (
-            <span style={{ fontSize: 12, color: 'var(--white-dim)' }}>
-              Сгенерировано: {formatDate(finalGeneratedAt)}
-            </span>
-          )}
+              {finalizing
+                ? <><span className="spinner" /> Генерация...</>
+                : finalHasZip ? 'Перегенерировать' : 'Сгенерировать'}
+            </button>
+            {finalHasZip && (
+              <a
+                href={getFinalDownloadUrl(groupId)}
+                className="btn btn-secondary btn-sm"
+                target="_blank"
+                rel="noreferrer"
+                download
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              >
+                <FolderIcon /> Скачать ZIP
+              </a>
+            )}
+          </div>
         </div>
       </div>
 

@@ -583,7 +583,19 @@ func FinalizeGroup(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) ht
 			return
 		}
 
-		// Patch the template JSON: override inna_doc.applicants_ru and vc_request.
+		// Resolve submission date: ?submission_date=YYYY-MM-DD from query, else tomorrow.
+		// Used as the "дата подачи" that appears in final docs (для Инны + заявка ВЦ filename).
+		submissionDateDDMMYYYY := ""
+		if raw := r.URL.Query().Get("submission_date"); raw != "" {
+			if t, err := time.Parse("2006-01-02", raw); err == nil {
+				submissionDateDDMMYYYY = t.Format("02.01.2006")
+			}
+		}
+		if submissionDateDDMMYYYY == "" {
+			submissionDateDDMMYYYY = time.Now().AddDate(0, 0, 1).Format("02.01.2006")
+		}
+
+		// Patch the template JSON: override inna_doc.applicants_ru, vc_request, and submission date.
 		var doc map[string]any
 		if err := json.Unmarshal(templateJSON, &doc); err != nil {
 			slog.Error("unmarshal template pass2", "err", err)
@@ -592,9 +604,21 @@ func FinalizeGroup(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) ht
 		}
 		if inna, ok := doc["inna_doc"].(map[string]any); ok {
 			inna["applicants_ru"] = applicantsRu
+			inna["submission_date"] = submissionDateDDMMYYYY
 			doc["inna_doc"] = inna
 		} else {
-			doc["inna_doc"] = map[string]any{"applicants_ru": applicantsRu}
+			doc["inna_doc"] = map[string]any{
+				"applicants_ru":   applicantsRu,
+				"submission_date": submissionDateDDMMYYYY,
+			}
+		}
+		// Override arrival.date so the заявка ВЦ filename reflects the submission date
+		// ("на DD месяц N.docx" is built from arrival.date in the Python script).
+		if arr, ok := doc["arrival"].(map[string]any); ok {
+			arr["date"] = submissionDateDDMMYYYY
+			doc["arrival"] = arr
+		} else {
+			doc["arrival"] = map[string]any{"date": submissionDateDDMMYYYY}
 		}
 		if vc, ok := doc["vc_request"].(map[string]any); ok {
 			vc["applicants"] = applicantsRu

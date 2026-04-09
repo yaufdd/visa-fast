@@ -296,11 +296,14 @@ export function getDownloadUrl(groupId) {
   return `${API}/api/groups/${groupId}/download`;
 }
 
-export async function finalizeGroup(groupId) {
-  const res = await fetch(`${API}/api/groups/${groupId}/finalize`, {
-    method: 'POST',
-  });
-  if (!res.ok) throw new Error('Failed to finalize group');
+export async function finalizeGroup(groupId, submissionDate = '') {
+  const url = new URL(`${API}/api/groups/${groupId}/finalize`);
+  if (submissionDate) url.searchParams.set('submission_date', submissionDate);
+  const res = await fetch(url.toString(), { method: 'POST' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to finalize group');
+  }
   return res.json();
 }
 
