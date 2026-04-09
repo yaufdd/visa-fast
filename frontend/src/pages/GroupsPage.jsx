@@ -130,11 +130,24 @@ export default function GroupsPage() {
                   </td>
                   <td onClick={e => e.stopPropagation()}>
                     <button
-                      className="btn btn-danger btn-sm"
+                      type="button"
                       onClick={e => handleDelete(e, g.id)}
-                    >
-                      Удалить
-                    </button>
+                      title="Удалить"
+                      aria-label="Удалить"
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: 'var(--white-dim)',
+                        fontSize: 14,
+                        lineHeight: 1,
+                        padding: '4px 6px',
+                        borderRadius: 4,
+                        transition: 'color 0.15s, background 0.15s',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
+                    >✕</button>
                   </td>
                 </tr>
               ))}

@@ -224,7 +224,25 @@ function TouristRow({ tourist, onDelete, subgroups, onAssign }) {
         }}>
           {isParsed ? 'Распознан ✓' : 'Ожидает'}
         </span>
-        <button className="btn btn-danger btn-sm" onClick={onDelete} title="Удалить">✕</button>
+        <button
+          type="button"
+          onClick={onDelete}
+          title="Удалить"
+          aria-label="Удалить"
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            color: 'var(--white-dim)',
+            fontSize: 14,
+            lineHeight: 1,
+            padding: '4px 6px',
+            borderRadius: 4,
+            transition: 'color 0.15s, background 0.15s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
+        >✕</button>
       </div>
     </div>
   );
@@ -358,9 +376,23 @@ function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, on
               title="Переименовать"
             >✎</button>
             <button
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 14, padding: '2px 6px' }}
+              type="button"
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--white-dim)',
+                fontSize: 14,
+                lineHeight: 1,
+                padding: '4px 6px',
+                borderRadius: 4,
+                transition: 'color 0.15s, background 0.15s',
+              }}
               onClick={e => { e.stopPropagation(); handleDelete(); }}
+              onMouseEnter={e => { e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+              onMouseLeave={e => { e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
               title="Удалить группу"
+              aria-label="Удалить группу"
             >✕</button>
           </>
         )}
@@ -768,7 +800,25 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
                   {h.phone && <span>{h.phone}</span>}
                 </div>
               </div>
-              <button className="btn btn-danger btn-sm" onClick={() => handleRemove(idx)}>Удалить</button>
+              <button
+                type="button"
+                onClick={() => handleRemove(idx)}
+                title="Удалить"
+                aria-label="Удалить"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: 'var(--white-dim)',
+                  fontSize: 14,
+                  lineHeight: 1,
+                  padding: '4px 6px',
+                  borderRadius: 4,
+                  transition: 'color 0.15s, background 0.15s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+                onMouseLeave={e => { e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
+              >✕</button>
             </div>
           ))}
         </div>
