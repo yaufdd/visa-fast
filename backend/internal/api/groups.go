@@ -149,7 +149,7 @@ func GetGroup(db *pgxpool.Pool) http.HandlerFunc {
 		// Hotels.
 		hRows, err := db.Query(r.Context(),
 			`SELECT gh.id, gh.hotel_id, h.name_en, COALESCE(h.name_ru,''), h.city, COALESCE(h.address,''), COALESCE(h.phone,''),
-			        gh.check_in, gh.check_out, COALESCE(gh.room_type,''), gh.sort_order
+			        gh.check_in::text, gh.check_out::text, COALESCE(gh.room_type,''), gh.sort_order
 			   FROM group_hotels gh
 			   JOIN hotels h ON h.id = gh.hotel_id
 			  WHERE gh.group_id = $1

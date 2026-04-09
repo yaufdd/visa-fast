@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 
 const navItems = [
-  { to: '/', label: 'Группы', icon: '◫', end: true },
+  { to: '/', label: 'Подачи', icon: '◫', end: true },
   { to: '/hotels', label: 'Отели', icon: '⊞', end: true },
 ];
 

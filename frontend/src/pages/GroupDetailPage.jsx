@@ -2,12 +2,22 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   getGroup,
-  getHotels, getGroupHotels, saveGroupHotels,
-  generateDocuments, getDownloadUrl, finalizeGroup, getFinalDownloadUrl,
+  getHotels, getSubgroupHotels, saveSubgroupHotels,
+  finalizeGroup, getFinalDownloadUrl, getFinalStatus,
+  generateSubgroupDocuments, getSubgroupDownloadUrl,
   getTourists, addTouristFromSheet, deleteTourist,
-  getTouristUploads, uploadTouristFile, parseTourist,
+  uploadFile, getUploads,
   getSheetRows,
+  getSubgroups, createSubgroup, updateSubgroup, deleteSubgroup,
+  assignTouristSubgroup, parseSubgroup, parseGroup,
 } from '../api/client';
+
+// Folder-download icon.
+const FolderIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+    <path d="M1.5 3.5a1 1 0 0 1 1-1h3.586a1 1 0 0 1 .707.293l1.414 1.414a1 1 0 0 0 .707.293H13.5a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V3.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+  </svg>
+);
 import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
 
@@ -24,105 +34,80 @@ function basename(filePath) {
 }
 
 function getTouristName(tourist) {
-  const row = tourist.matched_sheet_row || tourist.sheet_data || {};
+  const row = tourist.matched_sheet_row || {};
   return (
     row['ФИО (латиницей, как в загранпаспорте)'] ||
     row['ФИО (латиницей)'] ||
     row['ФИО латиницей'] ||
+    tourist.raw_json?.name_lat ||
     Object.values(row)[0] ||
     '—'
   );
 }
 
-function getTouristStatus(tourist, uploads) {
-  const hasRawJson = tourist.raw_json && Object.keys(tourist.raw_json).length > 0;
-  if (hasRawJson) return 'parsed';
-  if (uploads && uploads.length > 0) return 'ready';
-  return 'waiting';
-}
-
-const STATUS_CONFIG = {
-  waiting: { label: 'Ожидает файлов', color: 'var(--white-dim)', bg: 'var(--gray)' },
-  ready: { label: 'Готов к распознаванию', color: 'var(--warning)', bg: 'rgba(245,158,11,0.12)' },
-  parsed: { label: 'Распознан', color: 'var(--success)', bg: 'rgba(34,197,94,0.12)' },
-};
-
 // ── AddFromSheetModal ─────────────────────────────────────────────────────────
 
-function AddFromSheetModal({ groupId, onAdded, onClose }) {
+function AddFromSheetModal({ groupId, subgroupId, onAdded, onClose }) {
   const [query, setQuery] = useState('');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [adding, setAdding] = useState(null); // touristId being added
+  const [selected, setSelected] = useState(new Set());
+  const [adding, setAdding] = useState(false);
   const debounceRef = useRef(null);
 
-  // Load all rows on mount
-  useEffect(() => {
-    (async () => {
-      try {
-        const data = await getSheetRows('');
-        setRows(Array.isArray(data) ? data : []);
-      } catch (e) {
-        setError(e.message);
-      } finally {
-        setLoading(false);
-      }
-    })();
+  const loadRows = useCallback((q) => {
+    setLoading(true);
+    setError(null);
+    getSheetRows(q)
+      .then(data => setRows(Array.isArray(data) ? data.map(i => i.row ?? i) : []))
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
   }, []);
 
-  // Debounced search
-  useEffect(() => {
-    if (!query.trim()) {
-      // Reload all rows when query cleared
-      setLoading(true);
-      getSheetRows('').then(data => {
-        setRows(Array.isArray(data) ? data : []);
-        setLoading(false);
-      }).catch(e => {
-        setError(e.message);
-        setLoading(false);
-      });
-      return;
-    }
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const data = await getSheetRows(query);
-        // Search endpoint returns [{score, row: {...}}] or plain [{...}]
-        const normalized = Array.isArray(data)
-          ? data.map(item => (item.row ? item.row : item))
-          : [];
-        setRows(normalized);
-      } catch (e) {
-        setError(e.message);
-      } finally {
-        setLoading(false);
-      }
-    }, 350);
-    return () => clearTimeout(debounceRef.current);
-  }, [query]);
+  useEffect(() => { loadRows(''); }, [loadRows]);
 
-  const handleAdd = async (row) => {
-    const key = JSON.stringify(row);
-    setAdding(key);
+  useEffect(() => {
+    if (!query.trim()) { loadRows(''); return; }
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => loadRows(query), 350);
+    return () => clearTimeout(debounceRef.current);
+  }, [query, loadRows]);
+
+  const toggleRow = (key) => setSelected(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
+
+  const handleAdd = async () => {
+    if (selected.size === 0) return;
+    setAdding(true);
     setError(null);
+    let added = 0;
+    let failErr = null;
     try {
-      await addTouristFromSheet(groupId, row);
-      onAdded();
-      onClose();
-    } catch (e) {
-      setError(e.message);
-      setAdding(null);
+      for (const k of selected) {
+        const row = JSON.parse(k);
+        try {
+          await addTouristFromSheet(groupId, row, subgroupId);
+          added += 1;
+        } catch (e) {
+          failErr = e;
+          break;
+        }
+      }
+    } finally {
+      // Always refresh so partial progress is visible even on mid-loop error.
+      if (added > 0) onAdded();
+      if (failErr) {
+        setError(`${failErr.message} (добавлено: ${added} из ${selected.size})`);
+        setAdding(false);
+      } else {
+        onClose();
+      }
     }
   };
-
-  // Rows from search result may be wrapped — unwrap
-  const displayRows = Array.isArray(rows)
-    ? rows.map(r => (r && r.row ? r.row : r))
-    : [];
 
   return (
     <div>
@@ -136,61 +121,31 @@ function AddFromSheetModal({ groupId, onAdded, onClose }) {
           autoFocus
         />
       </div>
-
-      {error && <div className="error-message">{error}</div>}
-
+      {error && <div className="error-message" style={{ marginBottom: 12 }}>{error}</div>}
       {loading ? (
         <div className="loading-center" style={{ padding: 32 }}>
-          <div className="spinner" />
-          <span style={{ color: 'var(--white-dim)', fontSize: 13 }}>Загрузка...</span>
+          <div className="spinner" /><span style={{ color: 'var(--white-dim)', fontSize: 13 }}>Загрузка...</span>
         </div>
-      ) : displayRows.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--white-dim)', fontSize: 13 }}>
-          Ничего не найдено
-        </div>
+      ) : rows.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--white-dim)', fontSize: 13 }}>Ничего не найдено</div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 420, overflowY: 'auto' }}>
-          {displayRows.map((row, i) => {
-            const name =
-              row['ФИО (латиницей, как в загранпаспорте)'] ||
-              row['ФИО (латиницей)'] ||
-              row['ФИО латиницей'] ||
-              Object.values(row)[0] ||
-              '—';
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 380, overflowY: 'auto', marginBottom: 16 }}>
+          {rows.map((row, i) => {
+            const name = row['ФИО (латиницей, как в загранпаспорте)'] || row['ФИО (латиницей)'] || row['ФИО латиницей'] || Object.values(row)[0] || '—';
             const dob = row['Дата рождения'] || '';
             const passport = row['З/паспорт'] || '';
             const key = JSON.stringify(row);
+            const checked = selected.has(key);
             return (
-              <button
-                key={i}
-                onClick={() => handleAdd(row)}
-                disabled={adding !== null}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '10px 14px',
-                  background: 'var(--graphite)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 7,
-                  cursor: adding !== null ? 'not-allowed' : 'pointer',
-                  color: 'var(--white)',
-                  textAlign: 'left',
-                  transition: 'all 0.15s',
-                  opacity: adding !== null && adding !== key ? 0.5 : 1,
-                }}
-                onMouseEnter={e => {
-                  if (adding === null) {
-                    e.currentTarget.style.borderColor = 'var(--accent)';
-                    e.currentTarget.style.background = 'var(--accent-dim)';
-                  }
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.borderColor = 'var(--border)';
-                  e.currentTarget.style.background = 'var(--graphite)';
-                }}
-              >
-                <div>
+              <label key={i} style={{
+                display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
+                background: checked ? 'var(--accent-dim)' : 'var(--graphite)',
+                border: `1px solid ${checked ? 'var(--accent)' : 'var(--border)'}`,
+                borderRadius: 7, cursor: 'pointer', color: 'var(--white)', transition: 'all 0.15s',
+              }}>
+                <input type="checkbox" checked={checked} onChange={() => toggleRow(key)}
+                  style={{ width: 16, height: 16, accentColor: 'var(--accent)', flexShrink: 0, cursor: 'pointer' }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 500 }}>{name}</div>
                   {(dob || passport) && (
                     <div style={{ fontSize: 11, color: 'var(--white-dim)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
@@ -198,319 +153,343 @@ function AddFromSheetModal({ groupId, onAdded, onClose }) {
                     </div>
                   )}
                 </div>
-                {adding === key && <div className="spinner" style={{ flexShrink: 0 }} />}
-              </button>
+              </label>
             );
           })}
         </div>
       )}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <span style={{ fontSize: 12, color: 'var(--white-dim)' }}>
+          {selected.size > 0 ? `Выбрано: ${selected.size}` : 'Выберите туристов'}
+        </span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-secondary btn-sm" onClick={onClose} disabled={adding}>Отмена</button>
+          <button className="btn btn-primary btn-sm" onClick={handleAdd} disabled={selected.size === 0 || adding}>
+            {adding ? <><span className="spinner" /> Добавляем...</> : `Добавить (${selected.size})`}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
-// ── TouristCard ───────────────────────────────────────────────────────────────
+// ── TouristRow ────────────────────────────────────────────────────────────────
 
-function TouristCard({ tourist, groupId, onDeleted }) {
-  const [uploads, setUploads] = useState([]);
-  const [uploadsLoaded, setUploadsLoaded] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [parsing, setParsing] = useState(false);
-  const [parseDone, setParseDone] = useState(
-    !!(tourist.raw_json && Object.keys(tourist.raw_json).length > 0)
+function TouristRow({ tourist, onDelete, subgroups, onAssign }) {
+  const name = getTouristName(tourist);
+  const isParsed = !!(tourist.raw_json && Object.keys(tourist.raw_json).length > 0);
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      padding: '8px 12px', background: 'var(--gray-dark)',
+      border: '1px solid var(--border)', borderRadius: 7, gap: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+        <div style={{
+          width: 26, height: 26, borderRadius: '50%', background: 'var(--gray)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 10, fontWeight: 700, color: 'var(--white-dim)', flexShrink: 0,
+        }}>
+          {name.charAt(0) || '?'}
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+          {tourist.matched_sheet_row?.['Дата рождения'] && (
+            <div style={{ fontSize: 11, color: 'var(--white-dim)', fontFamily: 'var(--font-mono)' }}>
+              {tourist.matched_sheet_row['Дата рождения']}
+            </div>
+          )}
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+        {subgroups && subgroups.length > 0 && onAssign && (
+          <select
+            value=""
+            onChange={e => e.target.value && onAssign(tourist.id, e.target.value)}
+            style={{
+              background: 'var(--gray)', border: '1px solid var(--border)', borderRadius: 5,
+              color: 'var(--white-dim)', fontSize: 11, padding: '3px 6px', cursor: 'pointer',
+            }}
+          >
+            <option value="">→ в группу</option>
+            {subgroups.map(sg => <option key={sg.id} value={sg.id}>{sg.name}</option>)}
+          </select>
+        )}
+        <span style={{
+          padding: '2px 8px', borderRadius: 100, fontSize: 11, fontWeight: 500, whiteSpace: 'nowrap',
+          background: isParsed ? 'rgba(34,197,94,0.12)' : 'var(--gray)',
+          color: isParsed ? 'var(--success)' : 'var(--white-dim)',
+        }}>
+          {isParsed ? 'Распознан ✓' : 'Ожидает'}
+        </span>
+        <button className="btn btn-danger btn-sm" onClick={onDelete} title="Удалить">✕</button>
+      </div>
+    </div>
   );
-  const [error, setError] = useState(null);
+}
+
+// ── GroupCard ─────────────────────────────────────────────────────────────────
+
+function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, onTouristDeleted, onRenamed, onDeleted }) {
+  const [expanded, setExpanded] = useState(true);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(group.name);
+
+  // Upload state
+  const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
 
-  const loadUploads = useCallback(async () => {
-    try {
-      const data = await getTouristUploads(tourist.id);
-      setUploads(Array.isArray(data) ? data : []);
-    } catch {
-      // silently ignore — may not be critical
-    } finally {
-      setUploadsLoaded(true);
-    }
-  }, [tourist.id]);
+  // Parse state
+  const [parsing, setParsing] = useState(false);
+  const [parseResult, setParseResult] = useState(null);
+  const [parseError, setParseError] = useState(null);
+  const [notes, setNotes] = useState('');
+  const [hotelsReloadKey, setHotelsReloadKey] = useState(0);
 
-  useEffect(() => { loadUploads(); }, [loadUploads]);
+  const tourists = allTourists.filter(t => t.subgroup_id === group.id);
+  const uploads = allUploads.filter(u => u.subgroup_id === group.id);
 
   const handleFiles = async (files) => {
     if (!files || files.length === 0) return;
     setUploading(true);
-    setError(null);
     try {
       for (const file of Array.from(files)) {
-        const result = await uploadTouristFile(tourist.id, file);
-        // Optimistically append
-        setUploads(prev => [...prev, result]);
+        await uploadFile(groupId, file, 'document', group.id);
       }
+      onTouristAdded(); // reload uploads
     } catch (e) {
-      setError(e.message);
-      await loadUploads(); // re-sync on error
+      setParseError(e.message);
     } finally {
       setUploading(false);
     }
   };
 
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setDragOver(false);
-    handleFiles(e.dataTransfer.files);
-  };
-
   const handleParse = async () => {
     setParsing(true);
-    setError(null);
+    setParseResult(null);
+    setParseError(null);
     try {
-      await parseTourist(tourist.id);
-      setParseDone(true);
+      const result = await parseSubgroup(group.id, notes);
+      // Collect detected hotels from all tourists in the result
+      const detectedHotels = [];
+      const seen = new Set();
+      for (const t of result.tourists || []) {
+        for (const h of t.result?.hotels_from_vouchers || []) {
+          const key = `${h.name}|${h.checkin}|${h.checkout}`;
+          if (!seen.has(key)) { seen.add(key); detectedHotels.push(h); }
+        }
+      }
+      setParseResult({ ...result, detectedHotels });
+      onTouristAdded(); // reload tourists
+      if (detectedHotels.length > 0) setHotelsReloadKey(k => k + 1);
     } catch (e) {
-      setError(e.message);
+      setParseError(e.message);
     } finally {
       setParsing(false);
     }
   };
 
-  const name = getTouristName(tourist);
-  const status = parseDone ? 'parsed' : getTouristStatus(tourist, uploads);
-  const statusCfg = STATUS_CONFIG[status];
-
-  return (
-    <div style={{
-      background: 'var(--gray-dark)',
-      border: '1px solid var(--border)',
-      borderRadius: 10,
-      overflow: 'hidden',
-    }}>
-      {/* Card header */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '14px 18px',
-        borderBottom: '1px solid var(--border)',
-        background: 'var(--graphite)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{
-            width: 32,
-            height: 32,
-            borderRadius: '50%',
-            background: 'var(--gray)',
-            border: '1px solid var(--border)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 12,
-            fontWeight: 600,
-            color: 'var(--white-dim)',
-            fontFamily: 'var(--font-mono)',
-            flexShrink: 0,
-          }}>
-            {name.charAt(0) || '?'}
-          </div>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>{name}</div>
-            {tourist.matched_sheet_row?.['Дата рождения'] && (
-              <div style={{ fontSize: 11, color: 'var(--white-dim)', fontFamily: 'var(--font-mono)', marginTop: 1 }}>
-                {tourist.matched_sheet_row['Дата рождения']}
-                {tourist.matched_sheet_row['З/паспорт'] && ` · ${tourist.matched_sheet_row['З/паспорт']}`}
-              </div>
-            )}
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{
-            padding: '3px 10px',
-            borderRadius: 100,
-            background: statusCfg.bg,
-            color: statusCfg.color,
-            fontSize: 11,
-            fontWeight: 500,
-          }}>
-            {status === 'parsed' ? 'Распознан \u2713' : statusCfg.label}
-          </span>
-          <button
-            className="btn btn-danger btn-sm"
-            onClick={onDeleted}
-            title="Удалить туриста"
-          >
-            \u2715
-          </button>
-        </div>
-      </div>
-
-      {/* Card body */}
-      <div style={{ padding: '14px 18px' }}>
-        {error && <div className="error-message" style={{ marginBottom: 12 }}>{error}</div>}
-
-        {/* File list */}
-        {uploadsLoaded && uploads.length > 0 && (
-          <div style={{ marginBottom: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {uploads.map((u, i) => (
-              <span key={u.id || i} style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                padding: '3px 10px',
-                background: 'var(--graphite)',
-                border: '1px solid var(--border)',
-                borderRadius: 5,
-                fontSize: 11,
-                color: 'var(--white-dim)',
-                fontFamily: 'var(--font-mono)',
-              }}>
-                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
-                  <path d="M9 1H3a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6L9 1z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-                  <path d="M9 1v5h5" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-                </svg>
-                {basename(u.file_path) || u.original_name || u.filename || `файл ${i + 1}`}
-              </span>
-            ))}
-          </div>
-        )}
-
-        {/* Drag-drop zone */}
-        <div
-          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-          style={{
-            border: `1px dashed ${dragOver ? 'var(--accent)' : 'var(--border)'}`,
-            borderRadius: 6,
-            padding: '10px 14px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            cursor: 'pointer',
-            background: dragOver ? 'var(--accent-dim)' : 'transparent',
-            transition: 'all 0.15s',
-            marginBottom: uploadsLoaded && uploads.length === 0 ? 0 : 0,
-          }}
-        >
-          {uploading ? (
-            <>
-              <div className="spinner" style={{ flexShrink: 0 }} />
-              <span style={{ fontSize: 12, color: 'var(--white-dim)' }}>Загрузка...</span>
-            </>
-          ) : (
-            <>
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, color: 'var(--white-dim)' }}>
-                <path d="M8 11V3M8 3L5 6M8 3l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M2 13h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
-              <span style={{ fontSize: 12, color: 'var(--white-dim)' }}>
-                {uploads.length === 0 ? 'Перетащите файлы или нажмите для выбора' : '+ Добавить файл'}
-              </span>
-            </>
-          )}
-        </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept=".pdf,.jpg,.jpeg,.png"
-          style={{ display: 'none' }}
-          onChange={e => { handleFiles(e.target.files); e.target.value = ''; }}
-        />
-
-        {/* Parse button */}
-        {uploads.length > 0 && !parseDone && (
-          <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={handleParse}
-              disabled={parsing}
-            >
-              {parsing ? <><span className="spinner" /> Распознавание...</> : 'Распознать'}
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── TouristsSection ───────────────────────────────────────────────────────────
-
-function TouristsSection({ groupId }) {
-  const [tourists, setTourists] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [showAddModal, setShowAddModal] = useState(false);
-
-  const loadTourists = useCallback(async () => {
+  const handleRename = async () => {
+    if (!editName.trim() || editName === group.name) { setEditing(false); return; }
     try {
-      const data = await getTourists(groupId);
-      setTourists(Array.isArray(data) ? data : []);
+      await updateSubgroup(group.id, editName.trim());
+      onRenamed(group.id, editName.trim());
+      setEditing(false);
     } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
+      setParseError(e.message);
     }
-  }, [groupId]);
+  };
 
-  useEffect(() => { loadTourists(); }, [loadTourists]);
-
-  const handleDelete = async (touristId) => {
+  const handleDelete = async () => {
+    if (!confirm(`Удалить группу "${group.name}"? Туристы останутся в подаче без группы.`)) return;
     try {
-      await deleteTourist(touristId);
-      setTourists(prev => prev.filter(t => t.id !== touristId));
+      await deleteSubgroup(group.id);
+      onDeleted(group.id);
     } catch (e) {
-      setError(e.message);
+      setParseError(e.message);
     }
   };
 
   return (
-    <div>
-      <div className="section-header">
-        <div className="section-title">Туристы</div>
-        <button className="btn btn-primary btn-sm" onClick={() => setShowAddModal(true)}>
-          + Добавить из таблицы
-        </button>
+    <div style={{
+      border: '1px solid var(--border)', borderRadius: 10,
+      background: 'var(--graphite)', marginBottom: 16, overflow: 'hidden',
+    }}>
+      {/* Header */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px',
+        cursor: 'pointer', userSelect: 'none',
+        borderBottom: expanded ? '1px solid var(--border)' : 'none',
+      }} onClick={() => !editing && setExpanded(e => !e)}>
+        <span style={{ fontSize: 13, color: 'var(--white-dim)', transition: 'transform 0.2s', display: 'inline-block', transform: expanded ? 'rotate(90deg)' : 'none' }}>▶</span>
+
+        {editing ? (
+          <input
+            className="form-input"
+            style={{ flex: 1, fontSize: 14, padding: '4px 8px' }}
+            value={editName}
+            onChange={e => setEditName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleRename(); if (e.key === 'Escape') setEditing(false); }}
+            onClick={e => e.stopPropagation()}
+            autoFocus
+          />
+        ) : (
+          <span style={{ flex: 1, fontSize: 14, fontWeight: 600, color: 'var(--white)' }}>{group.name}</span>
+        )}
+
+        <span style={{ fontSize: 12, color: 'var(--white-dim)', background: 'var(--gray)', padding: '2px 8px', borderRadius: 100 }}>
+          {tourists.length} туристов
+        </span>
+
+        {editing ? (
+          <>
+            <button className="btn btn-primary btn-sm" onClick={e => { e.stopPropagation(); handleRename(); }}>OK</button>
+            <button className="btn btn-secondary btn-sm" onClick={e => { e.stopPropagation(); setEditing(false); setEditName(group.name); }}>Отмена</button>
+          </>
+        ) : (
+          <>
+            <button
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--white-dim)', fontSize: 14, padding: '2px 6px' }}
+              onClick={e => { e.stopPropagation(); setEditing(true); setEditName(group.name); }}
+              title="Переименовать"
+            >✎</button>
+            <button
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 14, padding: '2px 6px' }}
+              onClick={e => { e.stopPropagation(); handleDelete(); }}
+              title="Удалить группу"
+            >✕</button>
+          </>
+        )}
       </div>
 
-      {error && <div className="error-message">{error}</div>}
+      {/* Body */}
+      {expanded && (
+        <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {parseError && <div className="error-message">{parseError}</div>}
 
-      {loading ? (
-        <div className="loading-center"><div className="spinner spinner-lg" /></div>
-      ) : tourists.length === 0 ? (
-        <div className="card">
-          <div className="empty-state">
-            <div className="empty-state-icon" style={{ fontSize: 32, opacity: 0.3, marginBottom: 10 }}>
-              <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
-                <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.5"/>
-                <path d="M4 20c0-4 3.58-7 8-7s8 3 8 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
+          {/* Tourist list */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <span style={{ fontSize: 12, color: 'var(--white-dim)', fontWeight: 500 }}>Туристы</span>
+              <button className="btn btn-secondary btn-sm" style={{ fontSize: 11 }} onClick={() => setShowAddModal(true)}>
+                + Добавить из таблицы
+              </button>
             </div>
-            <div className="empty-state-title">Нет туристов</div>
-            <div className="empty-state-text">Добавьте туристов из таблицы Google Sheets</div>
+            {tourists.length === 0 ? (
+              <div style={{ padding: '10px 14px', border: '1px dashed var(--border)', borderRadius: 7, fontSize: 12, color: 'var(--white-dim)', textAlign: 'center' }}>
+                Нет туристов — добавьте из таблицы
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {tourists.map(t => (
+                  <TouristRow
+                    key={t.id}
+                    tourist={t}
+                    onDelete={async () => {
+                      try { await deleteTourist(t.id); onTouristDeleted(t.id); }
+                      catch (e) { setParseError(e.message); }
+                    }}
+                  />
+                ))}
+              </div>
+            )}
           </div>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {tourists.map(t => (
-            <TouristCard
-              key={t.id}
-              tourist={t}
-              groupId={groupId}
-              onDeleted={() => handleDelete(t.id)}
+
+          {/* File upload */}
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--white-dim)', fontWeight: 500, marginBottom: 8 }}>Файлы</div>
+            {uploads.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 8 }}>
+                {uploads.map((u, i) => (
+                  <span key={u.id || i} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px',
+                    background: 'var(--gray)', border: '1px solid var(--border)', borderRadius: 5,
+                    fontSize: 11, color: 'var(--white-dim)', fontFamily: 'var(--font-mono)',
+                  }}>
+                    <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+                      <path d="M9 1H3a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6L9 1z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+                      <path d="M9 1v5h5" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+                    </svg>
+                    {basename(u.file_path) || `файл ${i + 1}`}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div
+              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={e => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                border: `1px dashed ${dragOver ? 'var(--accent)' : 'var(--border)'}`, borderRadius: 6,
+                padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+                background: dragOver ? 'var(--accent-dim)' : 'transparent', transition: 'all 0.15s',
+              }}
+            >
+              {uploading
+                ? <><div className="spinner" style={{ flexShrink: 0 }} /><span style={{ fontSize: 12, color: 'var(--white-dim)' }}>Загрузка...</span></>
+                : <><svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, color: 'var(--white-dim)' }}>
+                    <path d="M8 11V3M8 3L5 6M8 3l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M2 13h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  </svg>
+                  <span style={{ fontSize: 12, color: 'var(--white-dim)' }}>
+                    {uploads.length === 0 ? 'Перетащите файлы или нажмите' : '+ Добавить ещё'}
+                  </span></>
+              }
+            </div>
+            <input ref={fileInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png"
+              style={{ display: 'none' }} onChange={e => { handleFiles(e.target.files); e.target.value = ''; }} />
+          </div>
+
+          {/* Notes + parse */}
+          <div>
+            <textarea
+              className="form-input"
+              rows={2}
+              placeholder="Уточнения для ИИ (необязательно)..."
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              style={{ resize: 'vertical', fontFamily: 'inherit', fontSize: 12, marginBottom: 8 }}
             />
-          ))}
+            {parseResult && (
+              <div className="success-message" style={{ marginBottom: 8 }}>
+                <div>Распознано: {parseResult.count ?? parseResult.tourists?.length ?? '?'} туристов</div>
+                {parseResult.detectedHotels?.length > 0 && (
+                  <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
+                    Обнаружено отелей из ваучеров: {parseResult.detectedHotels.length} ↓
+                  </div>
+                )}
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={handleParse}
+                disabled={parsing || uploads.length === 0}
+                title={uploads.length === 0 ? 'Сначала загрузите файлы' : ''}
+              >
+                {parsing ? <><span className="spinner" /> Распознавание...</> : 'Распарсить группу'}
+              </button>
+            </div>
+          </div>
+
+          {/* Hotels for this subgroup */}
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+            <div style={{ fontSize: 12, color: 'var(--white-dim)', fontWeight: 500, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Отели группы
+            </div>
+            <SubgroupHotelsSection subgroupId={group.id} reloadKey={hotelsReloadKey} />
+          </div>
         </div>
       )}
 
-      <Modal
-        open={showAddModal}
-        onClose={() => setShowAddModal(false)}
-        title="Добавить туриста из таблицы"
-        width={540}
-      >
+      <Modal open={showAddModal} onClose={() => setShowAddModal(false)} title={`Добавить в "${group.name}"`} width={560}>
         <AddFromSheetModal
           groupId={groupId}
-          onAdded={loadTourists}
+          subgroupId={group.id}
+          onAdded={onTouristAdded}
           onClose={() => setShowAddModal(false)}
         />
       </Modal>
@@ -518,23 +497,28 @@ function TouristsSection({ groupId }) {
   );
 }
 
-// ── HotelsSection ─────────────────────────────────────────────────────────────
+// ── GroupsTab ─────────────────────────────────────────────────────────────────
 
-function HotelsSection({ groupId }) {
-  const [groupHotels, setGroupHotels] = useState([]);
-  const [allHotels, setAllHotels] = useState([]);
+function GroupsTab({ groupId }) {
+  const [subgroups, setSubgroups] = useState([]);
+  const [tourists, setTourists] = useState([]);
+  const [uploads, setUploads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState(null);
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [creating, setCreating] = useState(false);
 
-  const [form, setForm] = useState({ hotel_id: '', check_in: '', check_out: '' });
-
-  const loadAll = useCallback(async () => {
+  const load = useCallback(async () => {
     try {
-      const [hotels, current] = await Promise.all([getHotels(), getGroupHotels(groupId)]);
-      setAllHotels(Array.isArray(hotels) ? hotels : []);
-      setGroupHotels(Array.isArray(current) ? current : []);
+      const [sgs, ts, ups] = await Promise.all([
+        getSubgroups(groupId),
+        getTourists(groupId),
+        getUploads(groupId),
+      ]);
+      setSubgroups(Array.isArray(sgs) ? sgs : []);
+      setTourists(Array.isArray(ts) ? ts : []);
+      setUploads(Array.isArray(ups) ? ups : []);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -542,7 +526,155 @@ function HotelsSection({ groupId }) {
     }
   }, [groupId]);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { load(); }, [load]);
+
+  const handleCreate = async () => {
+    if (!newName.trim()) return;
+    setCreating(true);
+    try {
+      const sg = await createSubgroup(groupId, newName.trim());
+      setSubgroups(prev => [...prev, sg]);
+      setNewName('');
+      setShowNewForm(false);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleRenamed = (sgId, name) => setSubgroups(prev => prev.map(sg => sg.id === sgId ? { ...sg, name } : sg));
+  const handleDeleted = (sgId) => setSubgroups(prev => prev.filter(sg => sg.id !== sgId));
+  const handleTouristDeleted = (tid) => setTourists(prev => prev.filter(t => t.id !== tid));
+
+  // Unassigned tourists
+  const unassigned = tourists.filter(t => !t.subgroup_id);
+
+  if (loading) return <div className="loading-center"><div className="spinner spinner-lg" /></div>;
+
+  return (
+    <div>
+      {error && <div className="error-message" style={{ marginBottom: 14 }}>{error}</div>}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+        <button className="btn btn-primary btn-sm" onClick={() => setShowNewForm(true)}>
+          + Добавить группу
+        </button>
+      </div>
+
+      {/* New group form */}
+      {showNewForm && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' }}>
+          <input
+            className="form-input"
+            style={{ flex: 1, fontSize: 13 }}
+            placeholder="Название группы (напр. Кузнецовы)"
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleCreate()}
+            autoFocus
+          />
+          <button className="btn btn-primary btn-sm" onClick={handleCreate} disabled={creating || !newName.trim()}>
+            {creating ? <span className="spinner" /> : 'Создать'}
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => { setShowNewForm(false); setNewName(''); }}>
+            Отмена
+          </button>
+        </div>
+      )}
+
+      {subgroups.length === 0 && !showNewForm ? (
+        <div className="card">
+          <div className="empty-state">
+            <div className="empty-state-title">Нет групп</div>
+            <div className="empty-state-text">Добавьте первую группу кнопкой выше</div>
+          </div>
+        </div>
+      ) : (
+        <>
+          {subgroups.map(sg => (
+            <GroupCard
+              key={sg.id}
+              group={sg}
+              groupId={groupId}
+              allTourists={tourists}
+              allUploads={uploads}
+              onTouristAdded={load}
+              onTouristDeleted={handleTouristDeleted}
+              onRenamed={handleRenamed}
+              onDeleted={handleDeleted}
+            />
+          ))}
+
+          {/* Unassigned tourists */}
+          {unassigned.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 12, color: 'var(--white-dim)', fontWeight: 500, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Без группы ({unassigned.length})
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {unassigned.map(t => (
+                  <TouristRow
+                    key={t.id}
+                    tourist={t}
+                    subgroups={subgroups}
+                    onAssign={async (touristId, sgId) => {
+                      try {
+                        await assignTouristSubgroup(touristId, sgId);
+                        setTourists(prev => prev.map(x => x.id === touristId ? { ...x, subgroup_id: sgId } : x));
+                      } catch (e) { setError(e.message); }
+                    }}
+                    onDelete={async () => {
+                      try { await deleteTourist(t.id); handleTouristDeleted(t.id); }
+                      catch (e) { setError(e.message); }
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+    </div>
+  );
+}
+
+// ── SubgroupHotelsSection ─────────────────────────────────────────────────────
+
+function SubgroupHotelsSection({ subgroupId, reloadKey }) {
+  const [groupHotels, setGroupHotels] = useState([]);
+  const [allHotels, setAllHotels] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState(null);
+  const [form, setForm] = useState({ hotel_id: '', check_in: '', check_out: '' });
+  const [showAddCard, setShowAddCard] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [hotels, current] = await Promise.all([getHotels(), getSubgroupHotels(subgroupId)]);
+      setAllHotels(Array.isArray(hotels) ? hotels : []);
+      setGroupHotels(Array.isArray(current) ? current : []);
+      setDirty(false);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [subgroupId]);
+
+  useEffect(() => { loadAll(); }, [loadAll, reloadKey]);
+
+  // Warn on accidental tab close while there are unsaved local changes.
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty]);
 
   const selectedHotel = allHotels.find(h => String(h.id) === String(form.hotel_id));
 
@@ -550,25 +682,19 @@ function HotelsSection({ groupId }) {
     if (!form.hotel_id || !form.check_in || !form.check_out) return;
     const hotel = allHotels.find(h => String(h.id) === String(form.hotel_id));
     if (!hotel) return;
-    setGroupHotels(prev => [
-      ...prev,
-      {
-        hotel_id: hotel.id,
-        hotel_name: hotel.name_en,
-        hotel_name_ru: hotel.name_ru,
-        city: hotel.city,
-        address: hotel.address,
-        phone: hotel.phone,
-        check_in: form.check_in,
-        check_out: form.check_out,
-        sort_order: prev.length,
-      },
-    ]);
+    setGroupHotels(prev => [...prev, {
+      hotel_id: hotel.id, hotel_name: hotel.name_en, hotel_name_ru: hotel.name_ru,
+      city: hotel.city, address: hotel.address, phone: hotel.phone,
+      check_in: form.check_in, check_out: form.check_out, sort_order: prev.length,
+    }]);
     setForm({ hotel_id: '', check_in: '', check_out: '' });
+    setShowAddCard(false);
+    setDirty(true);
   };
 
   const handleRemove = (idx) => {
     setGroupHotels(prev => prev.filter((_, i) => i !== idx).map((h, i) => ({ ...h, sort_order: i })));
+    setDirty(true);
   };
 
   const handleMoveUp = (idx) => {
@@ -578,6 +704,7 @@ function HotelsSection({ groupId }) {
       [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]];
       return arr.map((h, i) => ({ ...h, sort_order: i }));
     });
+    setDirty(true);
   };
 
   const handleMoveDown = (idx) => {
@@ -587,6 +714,7 @@ function HotelsSection({ groupId }) {
       [arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]];
       return arr.map((h, i) => ({ ...h, sort_order: i }));
     });
+    setDirty(true);
   };
 
   const handleSave = async () => {
@@ -594,7 +722,9 @@ function HotelsSection({ groupId }) {
     setSaveMsg(null);
     setError(null);
     try {
-      await saveGroupHotels(groupId, groupHotels);
+      await saveSubgroupHotels(subgroupId, groupHotels);
+      // Re-sync from server so the UI reflects any normalization the backend did.
+      await loadAll();
       setSaveMsg('Отели сохранены');
       setTimeout(() => setSaveMsg(null), 3000);
     } catch (e) {
@@ -608,149 +738,96 @@ function HotelsSection({ groupId }) {
 
   return (
     <div>
-      {/* Section divider */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 16,
-        margin: '40px 0 24px',
-      }}>
-        <div style={{ height: 1, flex: 1, background: 'var(--border)' }} />
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--white-dim)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-          Отели группы
-        </span>
-        <div style={{ height: 1, flex: 1, background: 'var(--border)' }} />
-      </div>
-
       {error && <div className="error-message">{error}</div>}
       {saveMsg && <div className="success-message">{saveMsg}</div>}
 
-      {/* Add hotel form */}
-      <div className="card" style={{ marginBottom: 20 }}>
-        <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 14, color: 'var(--white-dim)' }}>
-          Добавить отель
-        </div>
-        <div className="form-group" style={{ marginBottom: 12 }}>
-          <label className="form-label">Отель</label>
-          <select
-            className="form-input"
-            value={form.hotel_id}
-            onChange={e => setForm(f => ({ ...f, hotel_id: e.target.value }))}
-          >
-            <option value="">— выберите отель —</option>
-            {allHotels.map(h => (
-              <option key={h.id} value={h.id}>{h.name_en} ({h.city})</option>
-            ))}
-          </select>
-        </div>
-
-        {selectedHotel && (
-          <div style={{
-            padding: '9px 12px',
-            background: 'var(--graphite)',
-            borderRadius: 6,
-            marginBottom: 12,
-            fontSize: 12,
-            color: 'var(--white-dim)',
-            display: 'flex',
-            gap: 20,
-            flexWrap: 'wrap',
-          }}>
-            <span>{selectedHotel.address || '—'}</span>
-            <span>{selectedHotel.phone || '—'}</span>
-          </div>
-        )}
-
-        <div className="grid-2">
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Check-in</label>
-            <input
-              className="form-input"
-              type="date"
-              value={form.check_in}
-              onChange={e => setForm(f => ({ ...f, check_in: e.target.value }))}
-            />
-          </div>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Check-out</label>
-            <input
-              className="form-input"
-              type="date"
-              value={form.check_out}
-              onChange={e => setForm(f => ({ ...f, check_out: e.target.value }))}
-            />
-          </div>
-        </div>
-
-        <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end' }}>
-          <button
-            className="btn btn-secondary"
-            onClick={handleAdd}
-            disabled={!form.hotel_id || !form.check_in || !form.check_out}
-          >
-            + Добавить
-          </button>
-        </div>
-      </div>
-
-      {/* Hotels list */}
+      {/* Hotel list (from AI / manually added) */}
       {groupHotels.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--white-dim)', fontSize: 13 }}>
-          Нет отелей — добавьте через форму выше
+        <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--white-dim)', fontSize: 12 }}>
+          Нет отелей — добавьте кнопкой ниже
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
           {groupHotels.map((h, idx) => (
-            <div key={idx} style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
-              padding: '12px 16px',
-              background: 'var(--gray-dark)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-            }}>
+            <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'var(--gray-dark)', border: '1px solid var(--border)', borderRadius: 8 }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 24 }}>
-                <button
-                  style={{ background: 'none', border: 'none', color: idx === 0 ? 'var(--border)' : 'var(--white-dim)', cursor: idx === 0 ? 'default' : 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }}
-                  onClick={() => handleMoveUp(idx)}
-                  disabled={idx === 0}
-                >▲</button>
-                <button
-                  style={{ background: 'none', border: 'none', color: idx === groupHotels.length - 1 ? 'var(--border)' : 'var(--white-dim)', cursor: idx === groupHotels.length - 1 ? 'default' : 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }}
-                  onClick={() => handleMoveDown(idx)}
-                  disabled={idx === groupHotels.length - 1}
-                >▼</button>
+                <button style={{ background: 'none', border: 'none', color: idx === 0 ? 'var(--border)' : 'var(--white-dim)', cursor: idx === 0 ? 'default' : 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }} onClick={() => handleMoveUp(idx)} disabled={idx === 0}>▲</button>
+                <button style={{ background: 'none', border: 'none', color: idx === groupHotels.length - 1 ? 'var(--border)' : 'var(--white-dim)', cursor: idx === groupHotels.length - 1 ? 'default' : 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }} onClick={() => handleMoveDown(idx)} disabled={idx === groupHotels.length - 1}>▼</button>
               </div>
-
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 500, marginBottom: 3, fontSize: 13 }}>
                   {h.hotel_name}
-                  {h.hotel_name_ru && (
-                    <span style={{ color: 'var(--white-dim)', marginLeft: 8, fontSize: 12 }}>/ {h.hotel_name_ru}</span>
-                  )}
-                  {h.city && (
-                    <span style={{ color: 'var(--accent)', marginLeft: 8, fontSize: 11, fontWeight: 500 }}>{h.city}</span>
-                  )}
+                  {h.hotel_name_ru && <span style={{ color: 'var(--white-dim)', marginLeft: 8, fontSize: 12 }}>/ {h.hotel_name_ru}</span>}
+                  {h.city && <span style={{ color: 'var(--accent)', marginLeft: 8, fontSize: 11, fontWeight: 500 }}>{h.city}</span>}
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--white-dim)', display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-                  <span style={{ fontFamily: 'var(--font-mono)' }}>{h.check_in} \u2192 {h.check_out}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{h.check_in} → {h.check_out}</span>
                   {h.address && <span>{h.address}</span>}
                   {h.phone && <span>{h.phone}</span>}
                 </div>
               </div>
-
-              <button className="btn btn-danger btn-sm" onClick={() => handleRemove(idx)}>
-                Удалить
-              </button>
+              <button className="btn btn-danger btn-sm" onClick={() => handleRemove(idx)}>Удалить</button>
             </div>
           ))}
         </div>
       )}
 
-      {/* Save button */}
-      <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
-        <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+      {/* Add hotel — collapsible */}
+      {!showAddCard ? (
+        <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 14 }}>
+          <button className="btn btn-secondary btn-sm" onClick={() => setShowAddCard(true)}>
+            + Добавить отель
+          </button>
+        </div>
+      ) : (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--white-dim)' }}>Добавить отель</div>
+            <button
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--white-dim)', fontSize: 14, padding: '2px 6px' }}
+              onClick={() => { setShowAddCard(false); setForm({ hotel_id: '', check_in: '', check_out: '' }); }}
+              title="Закрыть"
+            >✕</button>
+          </div>
+          <div className="form-group" style={{ marginBottom: 12 }}>
+            <label className="form-label">Отель</label>
+            <select className="form-input" value={form.hotel_id} onChange={e => setForm(f => ({ ...f, hotel_id: e.target.value }))}>
+              <option value="">— выберите отель —</option>
+              {allHotels.map(h => <option key={h.id} value={h.id}>{h.name_en} ({h.city})</option>)}
+            </select>
+          </div>
+
+          {selectedHotel && (
+            <div style={{ padding: '9px 12px', background: 'var(--graphite)', borderRadius: 6, marginBottom: 12, fontSize: 12, color: 'var(--white-dim)', display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+              <span>{selectedHotel.address || '—'}</span>
+              <span>{selectedHotel.phone || '—'}</span>
+            </div>
+          )}
+
+          <div className="grid-2">
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">Check-in</label>
+              <input className="form-input" type="date" value={form.check_in} onChange={e => setForm(f => ({ ...f, check_in: e.target.value }))} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">Check-out</label>
+              <input className="form-input" type="date" value={form.check_out} onChange={e => setForm(f => ({ ...f, check_out: e.target.value }))} />
+            </div>
+          </div>
+
+          <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end' }}>
+            <button className="btn btn-secondary" onClick={handleAdd} disabled={!form.hotel_id || !form.check_in || !form.check_out}>
+              + Добавить
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
+        {dirty && !saving && (
+          <span style={{ fontSize: 11, color: 'var(--warning, #e0a82e)' }}>● Есть несохранённые изменения</span>
+        )}
+        <button className="btn btn-primary btn-sm" onClick={handleSave} disabled={saving || !dirty}>
           {saving ? <><span className="spinner" /> Сохранение...</> : 'Сохранить отели'}
         </button>
       </div>
@@ -760,173 +837,62 @@ function HotelsSection({ groupId }) {
 
 // ── DocumentsTab ──────────────────────────────────────────────────────────────
 
-const GENERATE_STEPS = ['idle', 'parsing', 'formatting', 'generating', 'done'];
-const STEP_LABELS = {
-  idle: 'Готов к генерации',
-  parsing: 'Разбор данных...',
-  formatting: 'Форматирование...',
-  generating: 'Генерация документов...',
-  done: 'Готово!',
-};
-const STEP_SHORT = { parsing: 'Разбор', formatting: 'Формат', generating: 'Генерация', done: 'Готово' };
-
-function DocumentsTab({ groupId, group }) {
-  const [step, setStep] = useState('idle');
+function SubgroupDocsRow({ subgroup }) {
+  // Start with server-persisted state: if a ZIP exists on disk, show it.
+  const [hasZip, setHasZip] = useState(!!subgroup.has_zip);
+  const [generatedAt, setGeneratedAt] = useState(subgroup.generated_at || null);
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState(null);
-  const [genResult, setGenResult] = useState(null);
-  const [finalStep, setFinalStep] = useState('idle'); // idle | loading | done
-  const [finalError, setFinalError] = useState(null);
 
   const handleGenerate = async () => {
-    setStep('parsing');
+    setGenerating(true);
     setError(null);
-    setGenResult(null);
     try {
-      setStep('formatting');
-      await new Promise(r => setTimeout(r, 400));
-      setStep('generating');
-      const result = await generateDocuments(groupId);
-      setStep('done');
-      setGenResult(result);
+      const res = await generateSubgroupDocuments(subgroup.id);
+      setGeneratedAt(res.generated_at);
+      setHasZip(true);
     } catch (e) {
       setError(e.message);
-      setStep('idle');
+    } finally {
+      setGenerating(false);
     }
   };
-
-  const handleFinalize = async () => {
-    setFinalStep('loading');
-    setFinalError(null);
-    try {
-      await finalizeGroup(groupId);
-      setFinalStep('done');
-    } catch (e) {
-      setFinalError(e.message);
-      setFinalStep('idle');
-    }
-  };
-
-  const stepIdx = GENERATE_STEPS.indexOf(step);
 
   return (
-    <div>
-      {/* ── Per-tourist documents ── */}
-      <div className="section-header">
-        <div className="section-title">Документы туристов</div>
-      </div>
-      <div style={{ fontSize: 12, color: 'var(--white-dim)', marginBottom: 16 }}>
-        Программа, доверенность, анкета — по одному пакету на каждого туриста.
-      </div>
-
-      {error && <div className="error-message">{error}</div>}
-
-      <div className="card" style={{ marginBottom: 32 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 28 }}>
-          {GENERATE_STEPS.filter(s => s !== 'idle').map((s, i) => {
-            const done = stepIdx > i + 1;
-            const active = stepIdx === i + 1;
-            return (
-              <div key={s} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, flex: 1 }}>
-                <div style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: '50%',
-                  border: `2px solid ${done ? 'var(--success)' : active ? 'var(--accent)' : 'var(--border)'}`,
-                  background: done ? 'var(--success)' : active ? 'var(--accent)' : 'transparent',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: done || active ? '#fff' : 'var(--white-dim)',
-                  transition: 'all 0.3s',
-                }}>
-                  {done ? '\u2713' : i + 1}
-                </div>
-                <span style={{ fontSize: 11, color: active ? 'var(--white)' : 'var(--white-dim)', textAlign: 'center' }}>
-                  {STEP_SHORT[s]}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-
-        <div style={{ textAlign: 'center', padding: '16px 0 24px' }}>
-          {step !== 'idle' && step !== 'done' && (
-            <div className="spinner spinner-lg" style={{ margin: '0 auto 14px' }} />
-          )}
-          {step === 'done' && (
-            <div style={{ fontSize: 32, marginBottom: 12 }}>&#10003;</div>
-          )}
-          <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 6 }}>{STEP_LABELS[step]}</div>
-          {genResult?.generated_at && (
-            <div style={{ fontSize: 12, color: 'var(--white-dim)' }}>
-              Сгенерировано: {formatDate(genResult.generated_at)}
+    <div className="card" style={{ marginBottom: 12, padding: '14px 18px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--white)' }}>{subgroup.name}</div>
+          {hasZip && generatedAt && (
+            <div style={{ fontSize: 11, color: 'var(--white-dim)', marginTop: 3 }}>
+              Сгенерировано: {formatDate(generatedAt)}
             </div>
           )}
+          {error && (
+            <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 3 }}>{error}</div>
+          )}
         </div>
-
-        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
           <button
-            className="btn btn-primary"
+            className="btn btn-primary btn-sm"
             onClick={handleGenerate}
-            disabled={step !== 'idle' && step !== 'done'}
+            disabled={generating}
           >
-            {step !== 'idle' && step !== 'done'
+            {generating
               ? <><span className="spinner" /> Генерация...</>
-              : 'Сгенерировать'}
+              : hasZip ? 'Перегенерировать' : 'Сгенерировать'}
           </button>
-
-          {step === 'done' && (
+          {hasZip && (
             <a
-              href={getDownloadUrl(groupId)}
-              className="btn btn-secondary"
+              href={getSubgroupDownloadUrl(subgroup.id)}
+              className="btn btn-secondary btn-sm"
               target="_blank"
               rel="noreferrer"
               download
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
             >
-              Скачать ZIP
+              <FolderIcon /> Скачать ZIP
             </a>
-          )}
-        </div>
-      </div>
-
-      {/* ── Final group documents ── */}
-      <div className="section-header">
-        <div className="section-title">Финальные документы</div>
-      </div>
-      <div style={{ fontSize: 12, color: 'var(--white-dim)', marginBottom: 16 }}>
-        Для Инны в ВЦ, заявка ВЦ — формируются после оформления всей группы.
-      </div>
-
-      {finalError && <div className="error-message">{finalError}</div>}
-
-      <div className="card">
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button
-            className="btn btn-primary"
-            onClick={handleFinalize}
-            disabled={finalStep === 'loading'}
-          >
-            {finalStep === 'loading'
-              ? <><span className="spinner" /> Генерация...</>
-              : 'Сформировать финальные документы'}
-          </button>
-
-          {finalStep === 'done' && (
-            <a
-              href={getFinalDownloadUrl(groupId)}
-              className="btn btn-secondary"
-              target="_blank"
-              rel="noreferrer"
-              download
-            >
-              Скачать final.zip
-            </a>
-          )}
-
-          {finalStep === 'done' && (
-            <span style={{ fontSize: 13, color: 'var(--success)' }}>&#10003; Готово</span>
           )}
         </div>
       </div>
@@ -934,10 +900,118 @@ function DocumentsTab({ groupId, group }) {
   );
 }
 
-// ── Main Component ─────────────────────────────────────────────────────────────
+function DocumentsTab({ groupId }) {
+  const [subgroups, setSubgroups] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [finalHasZip, setFinalHasZip] = useState(false);
+  const [finalGeneratedAt, setFinalGeneratedAt] = useState(null);
+  const [finalizing, setFinalizing] = useState(false);
+  const [finalError, setFinalError] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [sgs, fstat] = await Promise.all([
+          getSubgroups(groupId),
+          getFinalStatus(groupId).catch(() => ({ has_zip: false })),
+        ]);
+        setSubgroups(Array.isArray(sgs) ? sgs : []);
+        setFinalHasZip(!!fstat.has_zip);
+        setFinalGeneratedAt(fstat.generated_at || null);
+      } catch (e) {
+        setError(e.message);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [groupId]);
+
+  const handleFinalize = async () => {
+    setFinalizing(true);
+    setFinalError(null);
+    try {
+      const res = await finalizeGroup(groupId);
+      setFinalHasZip(true);
+      setFinalGeneratedAt(res.generated_at || new Date().toISOString());
+    } catch (e) {
+      setFinalError(e.message);
+    } finally {
+      setFinalizing(false);
+    }
+  };
+
+  if (loading) return <div className="loading-center"><div className="spinner spinner-lg" /></div>;
+
+  return (
+    <div>
+      <div className="section-header">
+        <div className="section-title">Документы по группам</div>
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--white-dim)', marginBottom: 16 }}>
+        Программа, доверенность, анкета — отдельный ZIP для каждой группы.
+      </div>
+
+      {error && <div className="error-message">{error}</div>}
+
+      {subgroups.length === 0 ? (
+        <div className="card">
+          <div className="empty-state">
+            <div className="empty-state-title">Нет групп</div>
+            <div className="empty-state-text">Создайте группу во вкладке «Группы»</div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ marginBottom: 32 }}>
+          {subgroups.map(sg => (
+            <SubgroupDocsRow key={sg.id} subgroup={sg} />
+          ))}
+        </div>
+      )}
+
+      <div className="section-header">
+        <div className="section-title">Финальные документы</div>
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--white-dim)', marginBottom: 16 }}>
+        Для Инны в ВЦ, заявка ВЦ — формируются после оформления всей подачи.
+      </div>
+
+      {finalError && <div className="error-message">{finalError}</div>}
+
+      <div className="card">
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn btn-primary" onClick={handleFinalize} disabled={finalizing}>
+            {finalizing
+              ? <><span className="spinner" /> Генерация...</>
+              : finalHasZip ? 'Перегенерировать' : 'Сформировать финальные документы'}
+          </button>
+          {finalHasZip && (
+            <a
+              href={getFinalDownloadUrl(groupId)}
+              className="btn btn-secondary"
+              target="_blank"
+              rel="noreferrer"
+              download
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <FolderIcon /> Скачать final.zip
+            </a>
+          )}
+          {finalHasZip && finalGeneratedAt && (
+            <span style={{ fontSize: 12, color: 'var(--white-dim)' }}>
+              Сгенерировано: {formatDate(finalGeneratedAt)}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
 
 const TABS = [
-  { id: 'tourists', label: 'Туристы' },
+  { id: 'groups', label: 'Группы' },
   { id: 'documents', label: 'Документы' },
 ];
 
@@ -947,7 +1021,7 @@ export default function GroupDetailPage() {
   const [group, setGroup] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState('tourists');
+  const [activeTab, setActiveTab] = useState('groups');
 
   useEffect(() => {
     (async () => {
@@ -982,19 +1056,9 @@ export default function GroupDetailPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
             <button
               onClick={() => navigate('/')}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--white-dim)',
-                fontSize: 13,
-                cursor: 'pointer',
-                padding: 0,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-              }}
+              style={{ background: 'none', border: 'none', color: 'var(--white-dim)', fontSize: 13, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: 4 }}
             >
-              \u2190 Группы
+              ← Подачи
             </button>
             <span style={{ color: 'var(--border)' }}>/</span>
             <span style={{ color: 'var(--white-dim)', fontSize: 13 }}>{group?.name}</span>
@@ -1002,32 +1066,21 @@ export default function GroupDetailPage() {
           <div className="page-title">{group?.name}</div>
           <div className="page-subtitle" style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6 }}>
             <StatusBadge status={group?.status || 'draft'} />
-            <span style={{ color: 'var(--white-dim)', fontSize: 12 }}>
-              Создана: {formatDate(group?.created_at)}
-            </span>
+            <span style={{ color: 'var(--white-dim)', fontSize: 12 }}>Создана: {formatDate(group?.created_at)}</span>
           </div>
         </div>
       </div>
 
       <div className="tabs">
         {TABS.map(t => (
-          <button
-            key={t.id}
-            className={`tab-btn${activeTab === t.id ? ' active' : ''}`}
-            onClick={() => setActiveTab(t.id)}
-          >
+          <button key={t.id} className={`tab-btn${activeTab === t.id ? ' active' : ''}`} onClick={() => setActiveTab(t.id)}>
             {t.label}
           </button>
         ))}
       </div>
 
-      {activeTab === 'tourists' && (
-        <div>
-          <TouristsSection groupId={id} />
-          <HotelsSection groupId={id} />
-        </div>
-      )}
-      {activeTab === 'documents' && <DocumentsTab groupId={id} group={group} />}
+      {activeTab === 'groups' && <GroupsTab groupId={id} />}
+      {activeTab === 'documents' && <DocumentsTab groupId={id} />}
     </div>
   );
 }

@@ -10,6 +10,7 @@ two group-level documents, then zips everything to zip_path.
 import sys
 import os
 import json
+import re
 import copy
 import shutil
 import zipfile
@@ -18,6 +19,56 @@ from docx import Document
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from fillpdf import fillpdfs
+
+# ── MVD region code → English city name ──────────────────────────────────────
+_MVD_REGION_CITY = {
+    "01": "Maikop",           "02": "Ufa",               "03": "Ulan-Ude",
+    "04": "Gorno-Altaysk",    "05": "Makhachkala",        "06": "Magas",
+    "07": "Nalchik",          "08": "Elista",             "09": "Cherkessk",
+    "10": "Petrozavodsk",     "11": "Syktyvkar",          "12": "Yoshkar-Ola",
+    "13": "Saransk",          "14": "Yakutsk",            "15": "Vladikavkaz",
+    "16": "Kazan",            "17": "Kyzyl",              "18": "Izhevsk",
+    "19": "Abakan",           "20": "Grozny",             "21": "Cheboksary",
+    "22": "Barnaul",          "23": "Krasnodar",          "24": "Krasnoyarsk",
+    "25": "Vladivostok",      "26": "Stavropol",          "27": "Khabarovsk",
+    "28": "Blagoveshchensk",  "29": "Arkhangelsk",        "30": "Astrakhan",
+    "31": "Belgorod",         "32": "Bryansk",            "33": "Vladimir",
+    "34": "Volgograd",        "35": "Vologda",            "36": "Voronezh",
+    "37": "Ivanovo",          "38": "Irkutsk",            "39": "Kaliningrad",
+    "40": "Kaluga",           "41": "Petropavlovsk-Kamchatsky", "42": "Kemerovo",
+    "43": "Kirov",            "44": "Kostroma",           "45": "Kurgan",
+    "46": "Kursk",            "47": "Saint Petersburg",   "48": "Lipetsk",
+    "49": "Magadan",          "50": "Moscow",             "51": "Murmansk",
+    "52": "Nizhny Novgorod",  "53": "Veliky Novgorod",    "54": "Novosibirsk",
+    "55": "Omsk",             "56": "Orenburg",           "57": "Oryol",
+    "58": "Penza",            "59": "Perm",               "60": "Pskov",
+    "61": "Rostov-on-Don",    "62": "Ryazan",             "63": "Samara",
+    "64": "Saratov",          "65": "Yuzhno-Sakhalinsk",  "66": "Yekaterinburg",
+    "67": "Smolensk",         "68": "Tambov",             "69": "Tver",
+    "70": "Tomsk",            "71": "Tula",               "72": "Tyumen",
+    "73": "Ulyanovsk",        "74": "Chelyabinsk",        "75": "Chita",
+    "76": "Yaroslavl",        "77": "Moscow",             "78": "Saint Petersburg",
+    "79": "Birobidzhan",      "82": "Simferopol",         "83": "Naryan-Mar",
+    "86": "Khanty-Mansiysk",  "87": "Anadyr",             "89": "Salekhard",
+    "91": "Sevastopol",
+}
+
+def _mvd_to_place_of_issue(issued_by: str) -> str:
+    """Convert 'MVD 54001' → 'Russia, Novosibirsk'.
+    If already contains 'Russia' or city info, return as-is.
+    Fallback: 'Russia'."""
+    if not issued_by:
+        return "Russia"
+    # Already formatted nicely
+    if "Russia" in issued_by or "RUSSIA" in issued_by:
+        return issued_by
+    # Extract first 2 digits from MVD code: "MVD 54001", "MVD54001", "54001"
+    m = re.search(r'(?:MVD\s*)?(\d{2})\d+', issued_by, re.IGNORECASE)
+    if m:
+        city = _MVD_REGION_CITY.get(m.group(1))
+        if city:
+            return f"Russia, {city}"
+    return "Russia"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 TEMPLATES_DIR = "/Users/yaufdd/Desktop/FUJIT TRAVEL/Шаблоны"
@@ -97,29 +148,33 @@ def replace_paragraph_text(doc, placeholder, replacement):
 
 # ── Programme .docx ───────────────────────────────────────────────────────────
 
-def generate_programme(data, tourist, out_path):
+def generate_programme(data, out_path, contact_phone=""):
     doc = Document(TMPL_PROGRAMME)
 
-    # Header paragraphs
     replace_paragraph_text(doc, "(ДАТА СОСТАВЛЕНИЯ ДД.ММ.ГГГГ)", data["document_date"])
 
-    # Build names string for all tourists
     all_names = ", ".join(t["name_lat"] for t in data["tourists"])
     replace_paragraph_text(doc, "(ИМЯ ФАМИЛИЯ ЛАТИНИЦЕЙ)", all_names)
 
-    # Rebuild the programme table
     table = doc.tables[0]
-
-    # Remove all data rows (keep only header row 0)
     for _ in range(len(table.rows) - 1):
         row = table.rows[-1]
         row._tr.getparent().remove(row._tr)
 
+    first_contact_set = False
     for row in data["programme"]:
+        contact = row.get("contact", "")
+        # Override the first real contact (not "Same as above") with oldest male's phone
+        if contact_phone and not first_contact_set and contact.lower() not in ("same as above", ""):
+            contact = contact_phone
+            first_contact_set = True
+        elif contact_phone and not first_contact_set:
+            contact = contact_phone
+            first_contact_set = True
         add_table_row(table, [
             row.get("date", ""),
             row.get("activity", ""),
-            row.get("contact", ""),
+            contact,
             row.get("accommodation", ""),
         ])
 
@@ -129,13 +184,9 @@ def generate_programme(data, tourist, out_path):
 # ── Doverenost .docx ──────────────────────────────────────────────────────────
 
 def generate_doverenost(data, dov, out_path):
-    doc = Document(TMPL_DOVERENOST)
+    import re
 
-    text = (
-        f"{dov['name_ru']} {dov['dob']} г.р. паспорт {dov['passport_series']} "
-        f"{dov['passport_number']}, выдан {dov['issued_date']} года "
-        f"{dov['issued_by']}, проживающему по адресу: {dov['reg_address']},"
-    )
+    doc = Document(TMPL_DOVERENOST)
 
     # The template has one big paragraph with placeholders
     target = doc.paragraphs[2]  # index 2 is the main body paragraph
@@ -149,14 +200,23 @@ def generate_doverenost(data, dov, out_path):
         "(ОРГАН ВЫДАЧИ)":  dov["issued_by"],
         "(АДРЕС РЕГИСТРАЦИИ)": dov["reg_address"],
     }
-    # Also handle «ДД» МЕСЯЦ ГГГГ format in issued_date
     full_new = full
     for ph, val in replacements.items():
         full_new = full_new.replace(ph, val)
 
     # Replace «ДД» МЕСЯЦ ГГГГ with the issued_date value
-    import re
     full_new = re.sub(r"«ДД» МЕСЯЦ ГГГГ", dov["issued_date"], full_new)
+
+    # For minors: insert "своего/своей сына/дочери, [имя ребёнка]," after "документов"
+    if dov.get("is_minor") and dov.get("child_name_ru"):
+        child_gender = dov.get("child_gender", "сына")  # "сына" or "дочери"
+        child_name   = dov["child_name_ru"]
+        possessive   = "своей" if child_gender == "дочери" else "своего"
+        insert_text  = f" {possessive} {child_gender}, {child_name},"
+        # Remove "своих" from template's "своих документов" (POA is only for the child)
+        full_new = full_new.replace("своих документов", "документов", 1)
+        # Insert after "документов"
+        full_new = full_new.replace("документов", "документов" + insert_text, 1)
 
     for run in target.runs:
         run.text = ""
@@ -242,11 +302,14 @@ def generate_vc_request(data, out_path):
 
     # Table 1 — applicants
     t1 = doc.tables[1]
+    template_tr = copy.deepcopy(t1.rows[2]._tr)  # snapshot BEFORE mutating text
     set_cell_text(t1.rows[2].cells[0], vc["applicants"][0])
-    for name in vc["applicants"][1:]:
-        new_row = copy.deepcopy(t1.rows[2]._tr)
-        t1.rows[2]._tr.addnext(new_row)
-        set_cell_text(t1.rows[3].cells[0], name)
+    # Insert each additional applicant AFTER the previously inserted row to
+    # preserve the list order (not reversed).
+    for i, name in enumerate(vc["applicants"][1:], start=1):
+        new_row = copy.deepcopy(template_tr)
+        t1.rows[2 + i - 1]._tr.addnext(new_row)
+        set_cell_text(t1.rows[2 + i].cells[0], name)
 
     # Update count row (last row of table 1)
     count_row = t1.rows[-1]
@@ -294,8 +357,10 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
     last_name  = parts[0] if parts else ""
     first_name = " ".join(parts[1:]) if len(parts) > 1 else ""
 
-    # maiden_name: use "NO" if empty (form expects explicit No when no other name)
+    # "Other names" (T16[1]) — maiden name from sheet; "NO" if empty.
+    # Pass 2 transliterates the surname to Latin if present.
     maiden_name_val = tourist.get("maiden_name", "") or "NO"
+    previous_visits_val = tourist.get("previous_visits", "") or "NO"
 
     # Compute intended stay days from actual dates (AI often gets this wrong).
     # Stay = departure_date - arrival_date + 1 (both endpoints inclusive).
@@ -317,8 +382,8 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
         "topmostSubform[0].Page1[0].T7[0]":  first_name,
         "topmostSubform[0].Page1[0].T49[0]": tourist.get("passport_number", ""),
         "topmostSubform[0].Page1[0].T50[0]": anketa.get("nationality_iso", "RUS"),
-        "topmostSubform[0].Page1[0].T34[0]": anketa.get("former_nationality_text", "  "),
-        "topmostSubform[0].Page1[0].T37[0]": maiden_name_val,
+        "topmostSubform[0].Page1[0].T34[0]": "  ",  # Former nationalities — dropdown only accepts country names; blank
+        "topmostSubform[0].Page1[0].T37[0]": "NO",  # ID No. issued by government — always NO for Russians
         "topmostSubform[0].Page1[0].#area[4].T14[0]": tourist.get("birth_date", ""),
         "topmostSubform[0].Page1[0].#area[4].T16[0]": tourist.get("place_of_birth", ""),
         "topmostSubform[0].Page1[0].#area[5].#area[6].#area[7].RB1[0]": anketa.get("gender_rb", "0"),
@@ -326,13 +391,15 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
         "topmostSubform[0].Page1[0].#area[1].#area[2].RB3[0]": anketa.get("passport_type_rb", "2"),
         "topmostSubform[0].Page1[0].#area[9].T53[0]": tourist.get("issue_date", ""),
         "topmostSubform[0].Page1[0].#area[0].T59[0]": tourist.get("expiry_date", ""),  # fixed: was T59[0]
-        "topmostSubform[0].Page1[0].#area[0].T57[0]": tourist.get("issued_by", ""),   # fixed: was T57[0]
+        "topmostSubform[0].Page1[0].#area[0].T57[0]": tourist.get("issued_by", ""),       # Issuing Authority = raw MVD code
+        "topmostSubform[0].Page1[0].#area[9].T57[1]": _mvd_to_place_of_issue(tourist.get("issued_by", "")),  # Place of Issue = Russia, City
         "topmostSubform[0].Page1[0].T5[0]":  tourist.get("occupation", ""),
         "topmostSubform[0].Page1[0].#area[3].emp_name[0]": tourist.get("employer", ""),
         "topmostSubform[0].Page1[0].emp_adr[0]":           tourist.get("employer_address", ""),
         "topmostSubform[0].Page1[0].T0[1]":  tourist.get("home_address", ""),
         "topmostSubform[0].Page1[0].#area[11].T3[0]": tourist.get("phone", ""),  # applicant phone
-        "topmostSubform[0].Page1[0].T64[0]": "no",   # Certificate of Eligibility — always No
+        "topmostSubform[0].Page1[0].T62[0]": "NO",                      # Certificate of Eligibility No. — always NO
+        "topmostSubform[0].Page1[0].T64[0]": previous_visits_val,       # Dates/duration of previous stays in Japan
         "topmostSubform[0].Page1[0].T66[0]": anketa.get("arrival_date_japan", ""),
         "topmostSubform[0].Page1[0].#area[10].T68[0]": anketa.get("port_of_entry", ""),
         "topmostSubform[0].Page1[0].#area[10].T68[1]": anketa.get("airline_flight", ""),
@@ -342,9 +409,7 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
         "topmostSubform[0].Page1[0].#area[12].emp_name[1]": anketa.get("first_hotel_name", ""),
         "topmostSubform[0].Page1[0].#area[12].emp_tel[1]":  anketa.get("first_hotel_phone", ""),
         "topmostSubform[0].Page1[0].T3[1]": anketa.get("email", "tour@fujitravel.ru"),
-        "topmostSubform[0].Page1[0].T16[1]": tourist.get("been_to_japan", "No"),
-        "topmostSubform[0].Page1[0].T62[0]": tourist.get("previous_visits", ""),
-        "topmostSubform[0].Page1[0].#area[11].T97[0]": tourist.get("criminal_record", "No"),
+        "topmostSubform[0].Page1[0].T16[1]": maiden_name_val,  # Other names — maiden_name or NO
         # Page 2
         "topmostSubform[0].Page2[0].T150[0]": anketa.get("date_of_application", ""),
         "topmostSubform[0].Page2[0].#area[4].RB5[0]":         anketa.get("criminal_rb", "1"),
@@ -385,16 +450,18 @@ MONTH_NAMES = {
 
 
 def main():
-    # Usage: generate.py <group_id> <pass2_json_path> <zip_path> [mode]
+    # Usage: generate.py <group_id> <pass2_json_path> <zip_path> [mode] [subgroup_name]
     # mode: "tourists" (default) | "final"
+    # subgroup_name: when set, files go into docs/{subgroup_name}/ and no ZIP is created
     if len(sys.argv) < 4:
-        print(f"Usage: {sys.argv[0]} <group_id> <pass2_json_path> <zip_path> [tourists|final]")
+        print(f"Usage: {sys.argv[0]} <group_id> <pass2_json_path> <zip_path> [tourists|final] [subgroup_name]")
         sys.exit(1)
 
-    group_id  = sys.argv[1]
-    json_path = sys.argv[2]
-    zip_path  = sys.argv[3]
-    mode      = sys.argv[4] if len(sys.argv) > 4 else "tourists"
+    group_id       = sys.argv[1]
+    json_path      = sys.argv[2]
+    zip_path       = sys.argv[3]
+    mode           = sys.argv[4] if len(sys.argv) > 4 else "tourists"
+    subgroup_name  = sys.argv[5] if len(sys.argv) > 5 else ""
 
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -403,37 +470,68 @@ def main():
     doverenost = data.get("doverenost", [])
     anketa     = data.get("anketa", {})
 
-    out_dir = os.path.join(os.path.dirname(json_path), "docs")
+    base_docs_dir = os.path.join(os.path.dirname(json_path), "docs")
+    # If subgroup_name is given, put files in docs/{subgroup_name}/
+    if subgroup_name:
+        out_dir = os.path.join(base_docs_dir, subgroup_name)
+    else:
+        out_dir = base_docs_dir
     os.makedirs(out_dir, exist_ok=True)
 
     generated_files = []
 
     if mode == "tourists":
-        # Per-tourist: программа, доверенность, анкета
-        for i, tourist in enumerate(tourists):
-            name_lat = tourist.get("name_lat", f"tourist_{i}")
-            name_ru  = tourist.get("name_cyr", name_lat)
-            surname_lat = name_lat.split()[0].capitalize() if name_lat else f"tourist_{i}"
-            surname_ru  = name_ru.split()[0] if name_ru else surname_lat
-            first_lat   = " ".join(name_lat.split()[1:]).capitalize() if len(name_lat.split()) > 1 else ""
-            first_ru    = " ".join(name_ru.split()[1:]) if len(name_ru.split()) > 1 else ""
-            file_base_lat = f"{surname_lat} {first_lat}".strip()
-            file_base_ru  = f"{surname_ru} {first_ru}".strip()
+        group_label = subgroup_name or "Группа"
 
-            prog_path = os.path.join(out_dir, f"{file_base_lat} программа.docx")
-            generate_programme(data, tourist, prog_path)
-            generated_files.append(prog_path)
+        # ── Find contact phone: oldest male, else oldest female ──────────────
+        def _birth_key(t):
+            bd = t.get("birth_date", "")
+            try:
+                d, m, y = bd.split(".")
+                return (int(y), int(m), int(d))   # sort ascending = oldest first
+            except Exception:
+                return (9999, 12, 31)
+
+        males   = [t for t in tourists if t.get("gender", "").upper() == "M"]
+        females = [t for t in tourists if t.get("gender", "").upper() == "F"]
+        if males:
+            contact_phone = min(males, key=_birth_key).get("phone", "")
+        elif females:
+            contact_phone = min(females, key=_birth_key).get("phone", "")
+        else:
+            contact_phone = tourists[0].get("phone", "") if tourists else ""
+
+        # ── Create output subfolders ─────────────────────────────────────────
+        prog_dir = os.path.join(out_dir, "Программы")
+        dov_dir  = os.path.join(out_dir, "Доверенности")
+        ank_dir  = os.path.join(out_dir, "Анкеты")
+        for d in [prog_dir, dov_dir, ank_dir]:
+            os.makedirs(d, exist_ok=True)
+
+        # ── ONE programme for the whole group ────────────────────────────────
+        prog_path = os.path.join(prog_dir, f"{group_label} прг.docx")
+        generate_programme(data, prog_path, contact_phone)
+        generated_files.append(prog_path)
+
+        # ── Per-tourist: доверенность + анкета ──────────────────────────────
+        for i, tourist in enumerate(tourists):
+            name_ru = tourist.get("name_cyr", "")
+            parts_ru = name_ru.split()
+            surname_ru = parts_ru[0] if parts_ru else f"tourist_{i}"
+            first_ru   = " ".join(parts_ru[1:]) if len(parts_ru) > 1 else ""
+            file_base_ru = f"{surname_ru} {first_ru}".strip()
 
             dov_data = doverenost[i] if i < len(doverenost) else {}
             if dov_data:
-                dov_path = os.path.join(out_dir, f"{file_base_ru} доверенность.docx")
+                # Always name by the tourist's own nominative name (child or adult)
+                dov_path = os.path.join(dov_dir, f"{file_base_ru} двр.docx")
                 generate_doverenost(data, dov_data, dov_path)
                 generated_files.append(dov_path)
 
-            anketa_path = os.path.join(out_dir, f"{file_base_lat} анкета.pdf")
+            ank_path = os.path.join(ank_dir, f"{file_base_ru} анк.pdf")
             dep_date_str = data.get("departure", {}).get("date", "")
-            generate_anketa(tourist, anketa, dov_data, anketa_path, dep_date_str)
-            generated_files.append(anketa_path)
+            generate_anketa(tourist, anketa, dov_data, ank_path, dep_date_str)
+            generated_files.append(ank_path)
 
     elif mode == "final":
         # Group-level docs: для Инны в ВЦ + заявка ВЦ
@@ -453,7 +551,12 @@ def main():
         generate_vc_request(data, vc_path)
         generated_files.append(vc_path)
 
-    # Zip everything
+    # When subgroup_name is set, skip ZIP — Go will collect all subgroups and zip them.
+    if subgroup_name:
+        print(f"Generated {len(generated_files)} files for subgroup '{subgroup_name}' (no zip)")
+        return
+
+    # Zip everything (no subgroups — single folder mode).
     os.makedirs(os.path.dirname(zip_path) or ".", exist_ok=True)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for fp in generated_files:

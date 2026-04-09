@@ -17,20 +17,9 @@ export default function GroupsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
-  const [newName, setNewName] = useState('');
+  const [podachaName, setPodachaName] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState(null);
-
-  const handleDelete = async (e, id) => {
-    e.stopPropagation();
-    if (!window.confirm('Удалить группу? Все данные будут удалены безвозвратно.')) return;
-    try {
-      await deleteGroup(id);
-      await load();
-    } catch (e) {
-      alert(e.message);
-    }
-  };
 
   const load = async () => {
     try {
@@ -47,15 +36,26 @@ export default function GroupsPage() {
 
   useEffect(() => { load(); }, []);
 
+  const handleDelete = async (e, id) => {
+    e.stopPropagation();
+    if (!window.confirm('Удалить подачу? Все данные будут удалены безвозвратно.')) return;
+    try {
+      await deleteGroup(id);
+      await load();
+    } catch (e) {
+      alert(e.message);
+    }
+  };
+
   const handleCreate = async (e) => {
     e.preventDefault();
-    if (!newName.trim()) return;
+    if (!podachaName.trim()) return;
     try {
       setCreating(true);
       setCreateError(null);
-      const group = await createGroup(newName.trim());
+      const group = await createGroup(podachaName.trim());
       setModalOpen(false);
-      setNewName('');
+      setPodachaName('');
       navigate(`/groups/${group.id}`);
     } catch (e) {
       setCreateError(e.message);
@@ -66,7 +66,7 @@ export default function GroupsPage() {
 
   const handleModalClose = () => {
     setModalOpen(false);
-    setNewName('');
+    setPodachaName('');
     setCreateError(null);
   };
 
@@ -74,11 +74,11 @@ export default function GroupsPage() {
     <div className="page-container">
       <div className="page-header">
         <div>
-          <div className="page-title">Группы</div>
-          <div className="page-subtitle">Управление туристическими группами</div>
+          <div className="page-title">Подачи</div>
+          <div className="page-subtitle">Управление туристическими подачами</div>
         </div>
         <button className="btn btn-primary" onClick={() => setModalOpen(true)}>
-          <span>+</span> Новая группа
+          <span>+</span> Новая подача
         </button>
       </div>
 
@@ -87,15 +87,15 @@ export default function GroupsPage() {
       {loading ? (
         <div className="loading-center">
           <div className="spinner spinner-lg" />
-          <span>Загрузка групп...</span>
+          <span>Загрузка...</span>
         </div>
       ) : groups.length === 0 ? (
         <div className="card">
           <div className="empty-state">
             <div className="empty-state-icon">◫</div>
-            <div className="empty-state-title">Нет групп</div>
+            <div className="empty-state-title">Нет подач</div>
             <div className="empty-state-text">
-              Создайте первую группу, нажав кнопку "Новая группа"
+              Создайте первую подачу, нажав кнопку "Новая подача"
             </div>
           </div>
         </div>
@@ -106,7 +106,6 @@ export default function GroupsPage() {
               <tr>
                 <th>Название</th>
                 <th>Статус</th>
-                <th>Туристов</th>
                 <th>Создана</th>
                 <th></th>
               </tr>
@@ -123,11 +122,6 @@ export default function GroupsPage() {
                   </td>
                   <td>
                     <StatusBadge status={g.status || 'draft'} />
-                  </td>
-                  <td>
-                    <span style={{ color: 'var(--white-dim)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-                      {g.tourist_count ?? '—'}
-                    </span>
                   </td>
                   <td>
                     <span style={{ color: 'var(--white-dim)', fontSize: 12 }}>
@@ -149,17 +143,17 @@ export default function GroupsPage() {
         </div>
       )}
 
-      <Modal open={modalOpen} onClose={handleModalClose} title="Создать группу" width={440}>
+      <Modal open={modalOpen} onClose={handleModalClose} title="Создать подачу" width={440}>
         <form onSubmit={handleCreate}>
-          {createError && <div className="error-message">{createError}</div>}
+          {createError && <div className="error-message" style={{ marginBottom: 14 }}>{createError}</div>}
           <div className="form-group">
-            <label className="form-label">Название группы</label>
+            <label className="form-label">Название подачи</label>
             <input
               className="form-input"
               type="text"
-              placeholder="напр. Японский тур — Апрель 2026"
-              value={newName}
-              onChange={e => setNewName(e.target.value)}
+              placeholder="напр. Япония — Май 2026"
+              value={podachaName}
+              onChange={e => setPodachaName(e.target.value)}
               autoFocus
             />
           </div>
@@ -170,7 +164,7 @@ export default function GroupsPage() {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={creating || !newName.trim()}
+              disabled={creating || !podachaName.trim()}
             >
               {creating ? <><span className="spinner" /> Создание...</> : 'Создать'}
             </button>

@@ -86,8 +86,9 @@ type anthropicContent struct {
 
 type contentSource struct {
 	Type      string `json:"type"`
-	MediaType string `json:"media_type"`
-	Data      string `json:"data"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	FileID    string `json:"file_id,omitempty"` // Anthropic Files API reference
 }
 
 type anthropicResponse struct {
@@ -100,13 +101,27 @@ type anthropicResponse struct {
 	} `json:"error,omitempty"`
 }
 
+// FileInput represents a single file to send to Claude.
+// If AnthropicFileID is set, it is used directly (Files API reference).
+// Otherwise, Name + Data are base64-encoded inline.
+type FileInput struct {
+	AnthropicFileID string // preferred: Anthropic Files API file_id
+	Name            string // filename (used to determine MIME type for inline)
+	Data            []byte // raw bytes (used when AnthropicFileID is empty)
+}
+
 // ParseDocuments sends the provided files to Claude Pass 1 and returns
 // extracted tourist data as structured JSON. Returns one result per tourist
 // found in the documents.
 //
-// files is a map of filename → raw file bytes. Supported extensions: .pdf, .jpg,
-// .jpeg, .png. Text files are sent as plain text content blocks.
-func ParseDocuments(ctx context.Context, apiKey string, files map[string][]byte) ([]Pass1Result, error) {
+// Each FileInput can either carry an Anthropic file_id (no size limit) or
+// raw bytes (inline base64). Mixed inputs are supported.
+func ParseDocuments(ctx context.Context, apiKey string, inputs []FileInput, notes ...string) ([]Pass1Result, error) {
+	extraNote := ""
+	if len(notes) > 0 && notes[0] != "" {
+		extraNote = "\n\n=== MANAGER NOTES ===\n" + notes[0] + "\nUse these notes to resolve ambiguities in the documents."
+	}
+
 	system := `You are a travel document parser for a Japanese visa agency. Documents for one or more tourists may be provided together. Extract structured data for EVERY tourist found. Return ONLY a valid JSON array — one object per tourist. No markdown fences, no explanation, nothing outside the JSON array.
 
 === OUTPUT SCHEMA ===
@@ -177,7 +192,7 @@ former_nationality (three-step logic — follow in order):
   STEP 3: Is former_nationality NOT stated AND place_of_birth does NOT mention USSR? → "NO"
 
 issued_by:
-- Take from the FOREIGN passport. Translate to English/Latin. "МВД 77533" → "MVD 77533", "МВД 77810, Москва" → "MVD 77810, Moscow".
+- Take from the FOREIGN passport. Translate to English/Latin keeping only the MVD code. "МВД 77533" → "MVD 77533", "МВД 540-001" → "MVD 540001". Strip extra text, keep just "MVD XXXXXX".
 
 internal_series / internal_number / internal_issued / internal_issued_by / reg_address:
 - Take from the Russian INTERNAL (domestic) passport (серия, номер, кем выдан, дата выдачи, адрес регистрации).
@@ -203,12 +218,30 @@ hotels_from_vouchers:
 === MISSING DATA ===
 - If a field cannot be found in any of the provided documents, use "" (empty string).
 - Never invent data. Never guess. Never fill from general knowledge.
-- Exception: former_nationality must always be "USSR" or "NO" (never "").`
+- Exception: former_nationality must always be "USSR" or "NO" (never "").` + extraNote
 
 	var contents []anthropicContent
 
-	for name, data := range files {
-		ext := strings.ToLower(filepath.Ext(name))
+	for _, inp := range inputs {
+		if inp.AnthropicFileID != "" {
+			// Use Anthropic Files API reference — no size limit.
+			ext := strings.ToLower(filepath.Ext(inp.Name))
+			blockType := "document"
+			if ext == ".jpg" || ext == ".jpeg" || ext == ".png" {
+				blockType = "image"
+			}
+			contents = append(contents, anthropicContent{
+				Type: blockType,
+				Source: &contentSource{
+					Type:   "file",
+					FileID: inp.AnthropicFileID,
+				},
+			})
+			continue
+		}
+
+		// Fallback: inline base64.
+		ext := strings.ToLower(filepath.Ext(inp.Name))
 		switch ext {
 		case ".jpg", ".jpeg":
 			contents = append(contents, anthropicContent{
@@ -216,7 +249,7 @@ hotels_from_vouchers:
 				Source: &contentSource{
 					Type:      "base64",
 					MediaType: "image/jpeg",
-					Data:      base64.StdEncoding.EncodeToString(data),
+					Data:      base64.StdEncoding.EncodeToString(inp.Data),
 				},
 			})
 		case ".png":
@@ -225,24 +258,22 @@ hotels_from_vouchers:
 				Source: &contentSource{
 					Type:      "base64",
 					MediaType: "image/png",
-					Data:      base64.StdEncoding.EncodeToString(data),
+					Data:      base64.StdEncoding.EncodeToString(inp.Data),
 				},
 			})
 		case ".pdf":
-			// Send PDF as base64 document block.
 			contents = append(contents, anthropicContent{
 				Type: "document",
 				Source: &contentSource{
 					Type:      "base64",
 					MediaType: "application/pdf",
-					Data:      base64.StdEncoding.EncodeToString(data),
+					Data:      base64.StdEncoding.EncodeToString(inp.Data),
 				},
 			})
 		default:
-			// Treat as plain text.
 			contents = append(contents, anthropicContent{
 				Type: "text",
-				Text: fmt.Sprintf("File: %s\n\n%s", name, string(data)),
+				Text: fmt.Sprintf("File: %s\n\n%s", inp.Name, string(inp.Data)),
 			})
 		}
 	}
@@ -254,7 +285,7 @@ hotels_from_vouchers:
 
 	reqBody := anthropicRequest{
 		Model:       claudeModel,
-		MaxTokens:   2048,
+		MaxTokens:   8192,
 		Temperature: 0, // deterministic extraction
 		System:      system,
 		Messages: []anthropicMessage{
@@ -314,6 +345,7 @@ func callClaude(ctx context.Context, apiKey string, reqBody anthropicRequest) (s
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("anthropic-beta", "files-api-2025-04-14")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

@@ -32,6 +32,20 @@ func SaveFile(uploadsDir, groupID, fileType, filename string, file multipart.Fil
 	return destPath, nil
 }
 
+// SaveFileBytes saves raw bytes to UPLOADS_DIR/{groupID}/{fileType}_{filename}.
+func SaveFileBytes(uploadsDir, groupID, fileType, filename string, data []byte) (string, error) {
+	dir := filepath.Join(uploadsDir, groupID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("create upload dir: %w", err)
+	}
+	destName := fmt.Sprintf("%s_%s", fileType, filepath.Base(filename))
+	destPath := filepath.Join(dir, destName)
+	if err := os.WriteFile(destPath, data, 0644); err != nil {
+		return "", fmt.Errorf("write file: %w", err)
+	}
+	return destPath, nil
+}
+
 // ReadFile reads the contents of a file at the given path.
 func ReadFile(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)

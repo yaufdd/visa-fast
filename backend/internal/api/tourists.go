@@ -13,6 +13,7 @@ import (
 type Tourist struct {
 	ID              string          `json:"id"`
 	GroupID         string          `json:"group_id"`
+	SubgroupID      *string         `json:"subgroup_id"`
 	RawJSON         json.RawMessage `json:"raw_json"`
 	MatchedSheetRow json.RawMessage `json:"matched_sheet_row"`
 	MatchConfirmed  bool            `json:"match_confirmed"`
@@ -26,7 +27,7 @@ func ListTourists(db *pgxpool.Pool) http.HandlerFunc {
 		groupID := chi.URLParam(r, "id")
 
 		rows, err := db.Query(r.Context(),
-			`SELECT id, group_id, raw_json, matched_sheet_row, match_confirmed, created_at, updated_at
+			`SELECT id, group_id, subgroup_id, raw_json, matched_sheet_row, match_confirmed, created_at, updated_at
 			   FROM tourists WHERE group_id = $1 ORDER BY created_at`, groupID)
 		if err != nil {
 			slog.Error("list tourists", "err", err)
@@ -39,7 +40,7 @@ func ListTourists(db *pgxpool.Pool) http.HandlerFunc {
 		for rows.Next() {
 			var t Tourist
 			var rawJSON, matchedRow []byte
-			if err := rows.Scan(&t.ID, &t.GroupID, &rawJSON, &matchedRow,
+			if err := rows.Scan(&t.ID, &t.GroupID, &t.SubgroupID, &rawJSON, &matchedRow,
 				&t.MatchConfirmed, &t.CreatedAt, &t.UpdatedAt); err != nil {
 				slog.Error("scan tourist", "err", err)
 				writeError(w, http.StatusInternalServerError, "scan error")
@@ -67,7 +68,8 @@ func AddTouristFromSheet(db *pgxpool.Pool) http.HandlerFunc {
 		groupID := chi.URLParam(r, "id")
 
 		var body struct {
-			SheetRow json.RawMessage `json:"sheet_row"`
+			SheetRow   json.RawMessage `json:"sheet_row"`
+			SubgroupID *string         `json:"subgroup_id"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.SheetRow) == 0 {
 			writeError(w, http.StatusBadRequest, "field 'sheet_row' is required")
@@ -76,9 +78,9 @@ func AddTouristFromSheet(db *pgxpool.Pool) http.HandlerFunc {
 
 		var touristID string
 		err := db.QueryRow(r.Context(),
-			`INSERT INTO tourists (group_id, matched_sheet_row, match_confirmed)
-			 VALUES ($1, $2, true) RETURNING id`,
-			groupID, []byte(body.SheetRow),
+			`INSERT INTO tourists (group_id, subgroup_id, matched_sheet_row, match_confirmed)
+			 VALUES ($1, $2, $3, true) RETURNING id`,
+			groupID, body.SubgroupID, []byte(body.SheetRow),
 		).Scan(&touristID)
 		if err != nil {
 			slog.Error("insert tourist from sheet", "err", err)
@@ -89,9 +91,9 @@ func AddTouristFromSheet(db *pgxpool.Pool) http.HandlerFunc {
 		var t Tourist
 		var rawJSON, matchedRow []byte
 		err = db.QueryRow(r.Context(),
-			`SELECT id, group_id, raw_json, matched_sheet_row, match_confirmed, created_at, updated_at
+			`SELECT id, group_id, subgroup_id, raw_json, matched_sheet_row, match_confirmed, created_at, updated_at
 			   FROM tourists WHERE id = $1`, touristID).
-			Scan(&t.ID, &t.GroupID, &rawJSON, &matchedRow, &t.MatchConfirmed, &t.CreatedAt, &t.UpdatedAt)
+			Scan(&t.ID, &t.GroupID, &t.SubgroupID, &rawJSON, &matchedRow, &t.MatchConfirmed, &t.CreatedAt, &t.UpdatedAt)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -162,9 +164,9 @@ func ConfirmMatch(db *pgxpool.Pool) http.HandlerFunc {
 		var t Tourist
 		var rawJSON, matchedRow []byte
 		err = db.QueryRow(r.Context(),
-			`SELECT id, group_id, raw_json, matched_sheet_row, match_confirmed, created_at, updated_at
+			`SELECT id, group_id, subgroup_id, raw_json, matched_sheet_row, match_confirmed, created_at, updated_at
 			   FROM tourists WHERE id = $1`, touristID).
-			Scan(&t.ID, &t.GroupID, &rawJSON, &matchedRow, &t.MatchConfirmed, &t.CreatedAt, &t.UpdatedAt)
+			Scan(&t.ID, &t.GroupID, &t.SubgroupID, &rawJSON, &matchedRow, &t.MatchConfirmed, &t.CreatedAt, &t.UpdatedAt)
 		if err != nil {
 			slog.Error("fetch tourist after match", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")

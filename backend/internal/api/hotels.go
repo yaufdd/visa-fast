@@ -140,6 +140,121 @@ func ListGroupHotels(db *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
+// ListSubgroupHotels handles GET /api/subgroups/:id/hotels
+func ListSubgroupHotels(db *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		subgroupID := chi.URLParam(r, "id")
+		rows, err := db.Query(r.Context(),
+			`SELECT gh.id, gh.hotel_id, h.name_en, COALESCE(h.name_ru,''), h.city,
+			        COALESCE(h.address,''), COALESCE(h.phone,''),
+			        gh.check_in::text, gh.check_out::text, COALESCE(gh.room_type,''), gh.sort_order
+			   FROM group_hotels gh
+			   JOIN hotels h ON h.id = gh.hotel_id
+			  WHERE gh.subgroup_id = $1
+			  ORDER BY gh.sort_order`,
+			subgroupID,
+		)
+		if err != nil {
+			slog.Error("list subgroup hotels", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		defer rows.Close()
+
+		type row struct {
+			ID          string `json:"id"`
+			HotelID     string `json:"hotel_id"`
+			HotelName   string `json:"hotel_name"`
+			HotelNameRu string `json:"hotel_name_ru"`
+			City        string `json:"city"`
+			Address     string `json:"address"`
+			Phone       string `json:"phone"`
+			CheckIn     string `json:"check_in"`
+			CheckOut    string `json:"check_out"`
+			RoomType    string `json:"room_type"`
+			SortOrder   int    `json:"sort_order"`
+		}
+		var result []row
+		for rows.Next() {
+			var gh row
+			if err := rows.Scan(
+				&gh.ID, &gh.HotelID, &gh.HotelName, &gh.HotelNameRu, &gh.City,
+				&gh.Address, &gh.Phone, &gh.CheckIn, &gh.CheckOut, &gh.RoomType, &gh.SortOrder,
+			); err != nil {
+				slog.Error("scan subgroup hotel", "err", err)
+				writeError(w, http.StatusInternalServerError, "scan error")
+				return
+			}
+			result = append(result, gh)
+		}
+		if result == nil {
+			result = []row{}
+		}
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+// UpsertSubgroupHotels handles POST /api/subgroups/:id/hotels
+func UpsertSubgroupHotels(db *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		subgroupID := chi.URLParam(r, "id")
+
+		var groupID string
+		if err := db.QueryRow(r.Context(),
+			`SELECT group_id FROM subgroups WHERE id = $1`, subgroupID).Scan(&groupID); err != nil {
+			writeError(w, http.StatusNotFound, "subgroup not found")
+			return
+		}
+
+		var entries []struct {
+			HotelID   string `json:"hotel_id"`
+			CheckIn   string `json:"check_in"`
+			CheckOut  string `json:"check_out"`
+			RoomType  string `json:"room_type"`
+			SortOrder int    `json:"sort_order"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&entries); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON array body")
+			return
+		}
+
+		tx, err := db.Begin(r.Context())
+		if err != nil {
+			slog.Error("begin tx", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		defer tx.Rollback(r.Context())
+
+		// Replace all existing entries for this subgroup.
+		if _, err := tx.Exec(r.Context(), `DELETE FROM group_hotels WHERE subgroup_id = $1`, subgroupID); err != nil {
+			slog.Error("delete subgroup hotels", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+
+		for _, e := range entries {
+			if _, err := tx.Exec(r.Context(),
+				`INSERT INTO group_hotels (group_id, subgroup_id, hotel_id, check_in, check_out, room_type, sort_order)
+				 VALUES ($1, $2, $3, $4::date, $5::date, $6, $7)`,
+				groupID, subgroupID, e.HotelID, e.CheckIn, e.CheckOut, e.RoomType, e.SortOrder,
+			); err != nil {
+				slog.Error("insert subgroup hotel", "err", err)
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
+		}
+
+		if err := tx.Commit(r.Context()); err != nil {
+			slog.Error("commit subgroup hotels", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"inserted": len(entries)})
+	}
+}
+
 // UpsertGroupHotels handles POST /api/groups/:id/hotels
 // Body: [{hotel_id, check_in, check_out, room_type, sort_order}]
 func UpsertGroupHotels(db *pgxpool.Pool) http.HandlerFunc {

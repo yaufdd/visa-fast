@@ -96,7 +96,7 @@ func main() {
 
 		// Uploads
 		r.Get("/groups/{id}/uploads", api.ListUploads(pool))
-		r.Post("/groups/{id}/uploads", api.UploadFile(pool, uploadsDir))
+		r.Post("/groups/{id}/uploads", api.UploadFile(pool, uploadsDir, anthropicKey))
 
 		// Parse (AI Pass 1 + auto-match)
 		if sheetsClient != nil {
@@ -104,6 +104,18 @@ func main() {
 		} else {
 			r.Post("/groups/{id}/parse", api.ParseGroup(pool, anthropicKey))
 		}
+
+		// Subgroups
+		r.Get("/groups/{id}/subgroups", api.ListSubgroups(pool, uploadsDir))
+		r.Post("/groups/{id}/subgroups", api.CreateSubgroup(pool))
+		r.Put("/subgroups/{id}", api.UpdateSubgroup(pool))
+		r.Delete("/subgroups/{id}", api.DeleteSubgroup(pool))
+		r.Put("/tourists/{id}/subgroup", api.AssignTouristSubgroup(pool))
+		r.Post("/subgroups/{id}/parse", api.ParseSubgroup(pool, anthropicKey))
+		r.Get("/subgroups/{id}/hotels", api.ListSubgroupHotels(pool))
+		r.Post("/subgroups/{id}/hotels", api.UpsertSubgroupHotels(pool))
+		r.Post("/subgroups/{id}/generate", api.GenerateSubgroupDocuments(pool, anthropicKey, uploadsDir, pythonScript))
+		r.Get("/subgroups/{id}/download", api.DownloadSubgroupZIP(pool, uploadsDir))
 
 		// Tourists
 		r.Get("/groups/{id}/tourists", api.ListTourists(pool))
@@ -113,7 +125,7 @@ func main() {
 
 		// Per-tourist uploads & parse
 		r.Get("/tourists/{id}/uploads", api.ListTouristUploads(pool))
-		r.Post("/tourists/{id}/uploads", api.UploadTouristFile(pool, uploadsDir))
+		r.Post("/tourists/{id}/uploads", api.UploadTouristFile(pool, uploadsDir, anthropicKey))
 		r.Post("/tourists/{id}/parse", api.ParseTourist(pool, anthropicKey))
 
 		// Group hotels
@@ -125,7 +137,8 @@ func main() {
 		r.Post("/groups/{id}/finalize", api.FinalizeGroup(pool, anthropicKey, uploadsDir, pythonScript))
 		r.Get("/groups/{id}/documents", api.GetDocuments(pool))
 		r.Get("/groups/{id}/download", api.DownloadZIP(pool))
-		r.Get("/groups/{id}/download/final", api.DownloadFinalZIP(pool))
+		r.Get("/groups/{id}/download/final", api.DownloadFinalZIP(uploadsDir))
+		r.Get("/groups/{id}/final/status", api.FinalStatus(uploadsDir))
 
 		// Google Sheets
 		if sheetsClient != nil {

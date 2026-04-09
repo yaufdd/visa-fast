@@ -3,6 +3,9 @@ package sheets
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
+
 	"fujitravel-admin/backend/internal/matcher"
 
 	"golang.org/x/oauth2/google"
@@ -44,12 +47,43 @@ func New(ctx context.Context, credentialsPath, sheetID string) (*Client, error) 
 	return &Client{svc: svc, sheetID: sheetID}, nil
 }
 
+// isTransient returns true for network-level errors that deserve a retry
+// (Google OAuth endpoint occasionally returns EOF / reset mid-handshake).
+func isTransient(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "EOF") ||
+		strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "i/o timeout") ||
+		strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "TLS handshake")
+}
+
 // AllRows fetches all rows from the first sheet and returns them as a slice of
-// maps keyed by the header row values.
+// maps keyed by the header row values. Retries transient network errors.
 func (c *Client) AllRows(ctx context.Context) ([]map[string]string, error) {
-	resp, err := c.svc.Spreadsheets.Values.Get(c.sheetID, "A1:ZZ").Context(ctx).Do()
+	var resp *sheets.ValueRange
+	var err error
+	backoff := 300 * time.Millisecond
+	for attempt := 0; attempt < 4; attempt++ {
+		resp, err = c.svc.Spreadsheets.Values.Get(c.sheetID, "A1:ZZ").Context(ctx).Do()
+		if err == nil {
+			break
+		}
+		if !isTransient(err) {
+			return nil, fmt.Errorf("fetch sheet values: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
 	if err != nil {
-		return nil, fmt.Errorf("fetch sheet values: %w", err)
+		return nil, fmt.Errorf("fetch sheet values after retries: %w", err)
 	}
 
 	if len(resp.Values) < 2 {
