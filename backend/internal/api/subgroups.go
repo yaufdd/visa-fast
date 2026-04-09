@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -11,15 +13,17 @@ import (
 )
 
 type Subgroup struct {
-	ID        string    `json:"id"`
-	GroupID   string    `json:"group_id"`
-	Name      string    `json:"name"`
-	SortOrder int       `json:"sort_order"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          string     `json:"id"`
+	GroupID     string     `json:"group_id"`
+	Name        string     `json:"name"`
+	SortOrder   int        `json:"sort_order"`
+	CreatedAt   time.Time  `json:"created_at"`
+	HasZip      bool       `json:"has_zip"`
+	GeneratedAt *time.Time `json:"generated_at,omitempty"`
 }
 
 // ListSubgroups handles GET /api/groups/:id/subgroups
-func ListSubgroups(db *pgxpool.Pool) http.HandlerFunc {
+func ListSubgroups(db *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
 		rows, err := db.Query(r.Context(),
@@ -40,6 +44,13 @@ func ListSubgroups(db *pgxpool.Pool) http.HandlerFunc {
 				slog.Error("scan subgroup", "err", err)
 				writeError(w, http.StatusInternalServerError, "scan error")
 				return
+			}
+			// Check if a generated ZIP exists on disk.
+			zipPath := filepath.Join(uploadsDir, s.GroupID, "subgroup_"+s.ID+".zip")
+			if info, err := os.Stat(zipPath); err == nil && !info.IsDir() {
+				s.HasZip = true
+				mt := info.ModTime()
+				s.GeneratedAt = &mt
 			}
 			subgroups = append(subgroups, s)
 		}

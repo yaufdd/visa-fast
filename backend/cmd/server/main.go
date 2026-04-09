@@ -106,7 +106,7 @@ func main() {
 		}
 
 		// Subgroups
-		r.Get("/groups/{id}/subgroups", api.ListSubgroups(pool))
+		r.Get("/groups/{id}/subgroups", api.ListSubgroups(pool, uploadsDir))
 		r.Post("/groups/{id}/subgroups", api.CreateSubgroup(pool))
 		r.Put("/subgroups/{id}", api.UpdateSubgroup(pool))
 		r.Delete("/subgroups/{id}", api.DeleteSubgroup(pool))
@@ -137,7 +137,8 @@ func main() {
 		r.Post("/groups/{id}/finalize", api.FinalizeGroup(pool, anthropicKey, uploadsDir, pythonScript))
 		r.Get("/groups/{id}/documents", api.GetDocuments(pool))
 		r.Get("/groups/{id}/download", api.DownloadZIP(pool))
-		r.Get("/groups/{id}/download/final", api.DownloadFinalZIP(pool))
+		r.Get("/groups/{id}/download/final", api.DownloadFinalZIP(uploadsDir))
+		r.Get("/groups/{id}/final/status", api.FinalStatus(uploadsDir))
 
 		// Google Sheets
 		if sheetsClient != nil {

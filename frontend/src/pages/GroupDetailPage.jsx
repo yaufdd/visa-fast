@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   getGroup,
   getHotels, getSubgroupHotels, saveSubgroupHotels,
-  finalizeGroup, getFinalDownloadUrl,
+  finalizeGroup, getFinalDownloadUrl, getFinalStatus,
   generateSubgroupDocuments, getSubgroupDownloadUrl,
   getTourists, addTouristFromSheet, deleteTourist,
   uploadFile, getUploads,
@@ -11,6 +11,13 @@ import {
   getSubgroups, createSubgroup, updateSubgroup, deleteSubgroup,
   assignTouristSubgroup, parseSubgroup, parseGroup,
 } from '../api/client';
+
+// Folder-download icon.
+const FolderIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+    <path d="M1.5 3.5a1 1 0 0 1 1-1h3.586a1 1 0 0 1 .707.293l1.414 1.414a1 1 0 0 0 .707.293H13.5a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V3.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+  </svg>
+);
 import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
 
@@ -799,20 +806,23 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
 // ── DocumentsTab ──────────────────────────────────────────────────────────────
 
 function SubgroupDocsRow({ subgroup }) {
-  const [state, setState] = useState('idle'); // idle | generating | done | error
+  // Start with server-persisted state: if a ZIP exists on disk, show it.
+  const [hasZip, setHasZip] = useState(!!subgroup.has_zip);
+  const [generatedAt, setGeneratedAt] = useState(subgroup.generated_at || null);
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState(null);
-  const [generatedAt, setGeneratedAt] = useState(null);
 
   const handleGenerate = async () => {
-    setState('generating');
+    setGenerating(true);
     setError(null);
     try {
       const res = await generateSubgroupDocuments(subgroup.id);
       setGeneratedAt(res.generated_at);
-      setState('done');
+      setHasZip(true);
     } catch (e) {
       setError(e.message);
-      setState('error');
+    } finally {
+      setGenerating(false);
     }
   };
 
@@ -821,12 +831,12 @@ function SubgroupDocsRow({ subgroup }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--white)' }}>{subgroup.name}</div>
-          {state === 'done' && generatedAt && (
+          {hasZip && generatedAt && (
             <div style={{ fontSize: 11, color: 'var(--white-dim)', marginTop: 3 }}>
               Сгенерировано: {formatDate(generatedAt)}
             </div>
           )}
-          {state === 'error' && error && (
+          {error && (
             <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 3 }}>{error}</div>
           )}
         </div>
@@ -834,15 +844,22 @@ function SubgroupDocsRow({ subgroup }) {
           <button
             className="btn btn-primary btn-sm"
             onClick={handleGenerate}
-            disabled={state === 'generating'}
+            disabled={generating}
           >
-            {state === 'generating'
+            {generating
               ? <><span className="spinner" /> Генерация...</>
-              : state === 'done' ? 'Перегенерировать' : 'Сгенерировать'}
+              : hasZip ? 'Перегенерировать' : 'Сгенерировать'}
           </button>
-          {state === 'done' && (
-            <a href={getSubgroupDownloadUrl(subgroup.id)} className="btn btn-secondary btn-sm" target="_blank" rel="noreferrer" download>
-              Скачать ZIP
+          {hasZip && (
+            <a
+              href={getSubgroupDownloadUrl(subgroup.id)}
+              className="btn btn-secondary btn-sm"
+              target="_blank"
+              rel="noreferrer"
+              download
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <FolderIcon /> Скачать ZIP
             </a>
           )}
         </div>
@@ -855,14 +872,21 @@ function DocumentsTab({ groupId }) {
   const [subgroups, setSubgroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [finalStep, setFinalStep] = useState('idle');
+  const [finalHasZip, setFinalHasZip] = useState(false);
+  const [finalGeneratedAt, setFinalGeneratedAt] = useState(null);
+  const [finalizing, setFinalizing] = useState(false);
   const [finalError, setFinalError] = useState(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const sgs = await getSubgroups(groupId);
+        const [sgs, fstat] = await Promise.all([
+          getSubgroups(groupId),
+          getFinalStatus(groupId).catch(() => ({ has_zip: false })),
+        ]);
         setSubgroups(Array.isArray(sgs) ? sgs : []);
+        setFinalHasZip(!!fstat.has_zip);
+        setFinalGeneratedAt(fstat.generated_at || null);
       } catch (e) {
         setError(e.message);
       } finally {
@@ -872,14 +896,16 @@ function DocumentsTab({ groupId }) {
   }, [groupId]);
 
   const handleFinalize = async () => {
-    setFinalStep('loading');
+    setFinalizing(true);
     setFinalError(null);
     try {
-      await finalizeGroup(groupId);
-      setFinalStep('done');
+      const res = await finalizeGroup(groupId);
+      setFinalHasZip(true);
+      setFinalGeneratedAt(res.generated_at || new Date().toISOString());
     } catch (e) {
       setFinalError(e.message);
-      setFinalStep('idle');
+    } finally {
+      setFinalizing(false);
     }
   };
 
@@ -922,15 +948,28 @@ function DocumentsTab({ groupId }) {
 
       <div className="card">
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button className="btn btn-primary" onClick={handleFinalize} disabled={finalStep === 'loading'}>
-            {finalStep === 'loading' ? <><span className="spinner" /> Генерация...</> : 'Сформировать финальные документы'}
+          <button className="btn btn-primary" onClick={handleFinalize} disabled={finalizing}>
+            {finalizing
+              ? <><span className="spinner" /> Генерация...</>
+              : finalHasZip ? 'Перегенерировать' : 'Сформировать финальные документы'}
           </button>
-          {finalStep === 'done' && (
-            <a href={getFinalDownloadUrl(groupId)} className="btn btn-secondary" target="_blank" rel="noreferrer" download>
-              Скачать final.zip
+          {finalHasZip && (
+            <a
+              href={getFinalDownloadUrl(groupId)}
+              className="btn btn-secondary"
+              target="_blank"
+              rel="noreferrer"
+              download
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <FolderIcon /> Скачать final.zip
             </a>
           )}
-          {finalStep === 'done' && <span style={{ fontSize: 13, color: 'var(--success)' }}>✓ Готово</span>}
+          {finalHasZip && finalGeneratedAt && (
+            <span style={{ fontSize: 12, color: 'var(--white-dim)' }}>
+              Сгенерировано: {formatDate(finalGeneratedAt)}
+            </span>
+          )}
         </div>
       </div>
     </div>

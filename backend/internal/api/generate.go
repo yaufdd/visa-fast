@@ -663,21 +663,30 @@ func GetDocuments(db *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-// DownloadFinalZIP handles GET /api/groups/:id/download/final
-func DownloadFinalZIP(db *pgxpool.Pool) http.HandlerFunc {
+// FinalStatus handles GET /api/groups/:id/final/status
+// Returns whether the final.zip exists on disk and when it was generated.
+func FinalStatus(uploadsDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "id")
-		var zipPath string
-		err := db.QueryRow(r.Context(),
-			`SELECT zip_path FROM documents WHERE group_id = $1 ORDER BY generated_at DESC LIMIT 1`,
-			groupID,
-		).Scan(&zipPath)
-		if err != nil {
-			writeError(w, http.StatusNotFound, "no documents found")
+		zipPath := filepath.Join(uploadsDir, groupID, "final.zip")
+		resp := map[string]any{"has_zip": false}
+		if info, err := os.Stat(zipPath); err == nil && !info.IsDir() {
+			resp["has_zip"] = true
+			resp["generated_at"] = info.ModTime()
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// DownloadFinalZIP handles GET /api/groups/:id/download/final
+func DownloadFinalZIP(uploadsDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		groupID := chi.URLParam(r, "id")
+		finalPath := filepath.Join(uploadsDir, groupID, "final.zip")
+		if _, err := os.Stat(finalPath); err != nil {
+			writeError(w, http.StatusNotFound, "final.zip not found — run finalize first")
 			return
 		}
-		// Replace output.zip with final.zip in same dir
-		finalPath := filepath.Join(filepath.Dir(zipPath), "final.zip")
 		w.Header().Set("Content-Type", "application/zip")
 		w.Header().Set("Content-Disposition", `attachment; filename="final.zip"`)
 		http.ServeFile(w, r, finalPath)

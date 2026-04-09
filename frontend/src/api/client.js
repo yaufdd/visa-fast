@@ -281,3 +281,9 @@ export async function finalizeGroup(groupId) {
 export function getFinalDownloadUrl(groupId) {
   return `${API}/api/groups/${groupId}/download/final`;
 }
+
+export async function getFinalStatus(groupId) {
+  const res = await fetch(`${API}/api/groups/${groupId}/final/status`);
+  if (!res.ok) throw new Error('Failed to fetch final status');
+  return res.json();
+}
