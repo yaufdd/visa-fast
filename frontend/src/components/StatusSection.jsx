@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import StatusBadge, { GROUP_STATUSES } from './StatusBadge';
 import { updateGroupStatus, updateGroupNotes } from '../api/client';
+import Celebration from './Celebration';
 
 function StatusPill({ cfg, active, onClick, disabled }) {
   const bg = active ? `${cfg.color}26` : 'transparent';
@@ -53,6 +54,11 @@ export default function StatusSection({ group, onGroupUpdated }) {
   const [savingNotes, setSavingNotes] = useState(false);
   const [notesError, setNotesError] = useState(null);
 
+  // Celebration trigger — fires only when the user presses "Готово" and the
+  // final confirmed status is visa_issued AND it was changed in this edit session.
+  const [celebrate, setCelebrate] = useState(0);
+  const editStartStatusRef = useRef(currentStatus);
+
   useEffect(() => {
     setNotes(group?.notes || '');
   }, [group?.notes]);
@@ -92,12 +98,21 @@ export default function StatusSection({ group, onGroupUpdated }) {
       }
       setSavingNotes(false);
     }
+    // 🎉 Celebrate only if the user transitioned TO visa_issued in this session.
+    if (
+      currentStatus === 'visa_issued' &&
+      editStartStatusRef.current !== 'visa_issued'
+    ) {
+      setCelebrate(c => c + 1);
+    }
     setEditing(false);
   };
 
   // ── Read-only view ─────────────────────────────────────────────
   if (!editing) {
     return (
+      <>
+      <Celebration trigger={celebrate} />
       <div
         className="card"
         style={{
@@ -127,7 +142,10 @@ export default function StatusSection({ group, onGroupUpdated }) {
           <button
             type="button"
             className="btn btn-secondary btn-sm"
-            onClick={() => setEditing(true)}
+            onClick={() => {
+              editStartStatusRef.current = currentStatus;
+              setEditing(true);
+            }}
           >
             Поменять статус
           </button>
@@ -160,11 +178,14 @@ export default function StatusSection({ group, onGroupUpdated }) {
           </div>
         )}
       </div>
+      </>
     );
   }
 
   // ── Edit form ──────────────────────────────────────────────────
   return (
+    <>
+    <Celebration trigger={celebrate} />
     <div
       className="card"
       style={{
@@ -247,5 +268,6 @@ export default function StatusSection({ group, onGroupUpdated }) {
         )}
       </div>
     </div>
+    </>
   );
 }
