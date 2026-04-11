@@ -185,6 +185,22 @@ export async function createHotel(data) {
   return res.json();
 }
 
+export async function getHotel(id) {
+  const res = await fetch(`${API}/api/hotels/${id}`);
+  if (!res.ok) throw new Error('Failed to fetch hotel');
+  return res.json();
+}
+
+export async function updateHotel(id, data) {
+  const res = await fetch(`${API}/api/hotels/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error('Failed to update hotel');
+  return res.json();
+}
+
 export async function getGroupHotels(groupId) {
   const res = await fetch(`${API}/api/groups/${groupId}/hotels`);
   if (!res.ok) throw new Error('Failed to fetch group hotels');

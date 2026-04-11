@@ -86,6 +86,60 @@ func CreateHotel(db *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
+// GetHotel handles GET /api/hotels/:id
+func GetHotel(db *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		var h Hotel
+		err := db.QueryRow(r.Context(),
+			`SELECT id, name_en, COALESCE(name_ru,''), city, COALESCE(address,''), COALESCE(phone,''), created_at, updated_at
+			   FROM hotels WHERE id = $1`, id,
+		).Scan(&h.ID, &h.NameEn, &h.NameRu, &h.City, &h.Address, &h.Phone, &h.CreatedAt, &h.UpdatedAt)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "hotel not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, h)
+	}
+}
+
+// UpdateHotel handles PUT /api/hotels/:id
+func UpdateHotel(db *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		var body struct {
+			NameEn  string `json:"name_en"`
+			NameRu  string `json:"name_ru"`
+			City    string `json:"city"`
+			Address string `json:"address"`
+			Phone   string `json:"phone"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if body.NameEn == "" {
+			writeError(w, http.StatusBadRequest, "field 'name_en' is required")
+			return
+		}
+
+		var h Hotel
+		err := db.QueryRow(r.Context(),
+			`UPDATE hotels
+			    SET name_en = $1, name_ru = $2, city = $3, address = $4, phone = $5, updated_at = NOW()
+			  WHERE id = $6
+			  RETURNING id, name_en, COALESCE(name_ru,''), city, COALESCE(address,''), COALESCE(phone,''), created_at, updated_at`,
+			body.NameEn, body.NameRu, body.City, body.Address, body.Phone, id,
+		).Scan(&h.ID, &h.NameEn, &h.NameRu, &h.City, &h.Address, &h.Phone, &h.CreatedAt, &h.UpdatedAt)
+		if err != nil {
+			slog.Error("update hotel", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		writeJSON(w, http.StatusOK, h)
+	}
+}
+
 // ListGroupHotels handles GET /api/groups/:id/hotels
 func ListGroupHotels(db *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

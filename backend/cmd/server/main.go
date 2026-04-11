@@ -98,6 +98,8 @@ func main() {
 		// Hotels
 		r.Get("/hotels", api.ListHotels(pool))
 		r.Post("/hotels", api.CreateHotel(pool))
+		r.Get("/hotels/{id}", api.GetHotel(pool))
+		r.Put("/hotels/{id}", api.UpdateHotel(pool))
 
 		// Groups
 		r.Get("/groups", api.ListGroups(pool))

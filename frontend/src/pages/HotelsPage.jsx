@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getHotels, createHotel } from '../api/client';
 
 const EMPTY_FORM = {
@@ -9,7 +10,43 @@ const EMPTY_FORM = {
   phone: '',
 };
 
+// English → Russian names for Japanese cities that appear in the hotel DB.
+// Unknown cities fall back to Title Case (first letter capitalized).
+const CITY_RU = {
+  tokyo: 'Токио',
+  kyoto: 'Киото',
+  osaka: 'Осака',
+  hakone: 'Хаконэ',
+  izu: 'Идзу',
+  okinawa: 'Окинава',
+  nara: 'Нара',
+  kanazawa: 'Канадзава',
+  nagoya: 'Нагоя',
+  hiroshima: 'Хиросима',
+  nikko: 'Никко',
+  yokohama: 'Иокогама',
+  kamakura: 'Камакура',
+  sapporo: 'Саппоро',
+  fukuoka: 'Фукуока',
+  takayama: 'Такаяма',
+  matsumoto: 'Мацумото',
+  kobe: 'Кобе',
+  miyajima: 'Миядзима',
+  shirakawa: 'Сиракава',
+  shirakawago: 'Сиракава-го',
+  'mt fuji': 'Гора Фудзи',
+  fuji: 'Фудзи',
+};
+
+function formatCity(raw) {
+  if (!raw) return '';
+  const key = raw.trim().toLowerCase();
+  if (CITY_RU[key]) return CITY_RU[key];
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
 export default function HotelsPage() {
+  const navigate = useNavigate();
   const [hotels, setHotels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -225,18 +262,30 @@ export default function HotelsPage() {
             </thead>
             <tbody>
               {hotels.map(h => (
-                <tr key={h.id}>
+                <tr
+                  key={h.id}
+                  onClick={() => navigate(`/hotels/${h.id}`)}
+                  style={{ cursor: 'pointer' }}
+                  title="Нажмите, чтобы редактировать"
+                >
                   <td style={{ fontWeight: 500 }}>{h.name_en}</td>
                   <td>
                     <span style={{
-                      padding: '2px 8px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      minWidth: 90,
+                      height: 22,
+                      padding: '0 10px',
                       borderRadius: 4,
-                      background: 'var(--accent-dim)',
-                      color: 'var(--accent)',
+                      background: h.city ? 'var(--accent-dim)' : 'transparent',
+                      color: h.city ? 'var(--accent)' : 'var(--white-dim)',
                       fontSize: 11,
                       fontWeight: 500,
+                      textAlign: 'center',
+                      boxSizing: 'border-box',
                     }}>
-                      {h.city || '—'}
+                      {formatCity(h.city) || '—'}
                     </span>
                   </td>
                   <td style={{ fontSize: 12, color: 'var(--white-dim)' }}>{h.address || '—'}</td>
