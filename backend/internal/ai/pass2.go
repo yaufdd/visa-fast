@@ -156,21 +156,44 @@ Only the following may stay in Russian Cyrillic: name_cyr, doverenost fields, in
 
 These map directly to PDF form fields. They must be filled accurately.
 
-anketa.nationality_iso: THREE-LETTER ISO code for the T50 dropdown. Examples: "RUS" for Russia, "KAZ" for Kazakhstan. This is different from the nationality field above which uses full name.
-anketa.former_nationality_text: always output "USSR" if former_nationality is "USSR", or "NO" if former_nationality is "NO". Never leave empty.
-anketa.gender_rb: radio button value. "0" = Male, "1" = Female.
-anketa.marital_status_rb: "0"=Single, "1"=Married, "2"=Widowed, "3"=Divorced.
-anketa.passport_type_rb: "0"=Diplomatic, "1"=Official, "2"=Ordinary, "3"=Other.
+Per-tourist PDF fields (one value per tourist, NOT trip-level). For each tourist object in tourists[] you MUST output these in addition to the regular fields:
+  tourists[i].nationality_iso: THREE-LETTER ISO code for the T50 dropdown, derived from that tourist's nationality. Examples: "RUS" for Russia, "KAZ" for Kazakhstan. Different from the nationality field above (which uses full name).
+  tourists[i].former_nationality_text: "USSR" if that tourist's former_nationality is "USSR", or "NO" if it is "NO". Never leave empty.
+  tourists[i].gender_rb: radio button, per tourist — "0" if gender is "Male", "1" if gender is "Female".
+  tourists[i].marital_status_rb: per tourist — "0"=Single, "1"=Married, "2"=Widowed, "3"=Divorced. Must match the tourist's marital_status field exactly.
+  tourists[i].passport_type_rb: per tourist — "0"=Diplomatic, "1"=Official, "2"=Ordinary, "3"=Other. Must match that tourist's passport_type.
+
+PER-TOURIST FLIGHT DATA — CRITICAL:
+Each tourist's raw_json (Pass 1 output) contains flight fields extracted from THEIR uploaded ticket:
+  flight_number, arrival_date, arrival_airport, arrival_time, departure_date, departure_time, departure_airport.
+Different tourists in the same group may have DIFFERENT flights (e.g. one travels separately). Each tourist's visa anketa MUST show THEIR OWN flight, not a shared one.
+
+Resolution rules (apply per tourist):
+  1. If that tourist's raw_json has flight fields populated (non-empty flight_number and arrival_date) → use their own ticket data.
+  2. If that tourist's raw_json has empty flight fields → this means only one ticket was uploaded for the whole group and all tourists are assumed to share it. Fall back to the FIRST tourist in the tourists[] array whose raw_json has non-empty flight fields, and copy their flight values.
+  3. NEVER leave these per-tourist flight fields empty — always resolve via rule 2.
+
+For EACH tourist, output these fields (in addition to everything else):
+  tourists[i].arrival_date_japan: DD.MM.YYYY — that tourist's Japan arrival date (from raw_json.arrival_date)
+  tourists[i].arrival_time: HH:MM — that tourist's arrival time in Japan (from raw_json.arrival_time)
+  tourists[i].arrival_airport: e.g. "TOKYO NARITA" or "OSAKA KANSAI" — from raw_json.arrival_airport. This is the "Port of Entry" for the PDF.
+  tourists[i].arrival_flight: e.g. "CZ 8101" — from raw_json.flight_number
+  tourists[i].departure_date_japan: DD.MM.YYYY — that tourist's departure date FROM Japan (from raw_json.departure_date if the ticket shows return; otherwise the last date of the trip)
+  tourists[i].departure_time: HH:MM
+  tourists[i].departure_airport: e.g. "TOKYO NARITA"
+  tourists[i].departure_flight: e.g. "CZ 8101"
+  tourists[i].intended_stay_days: integer, computed from THAT tourist's arrival_date_japan and departure_date_japan: (departure - arrival) + 1. Example: arrive May 4, depart May 17 → 14.
+
+Trip-level anketa fields (truly shared across all tourists):
 anketa.criminal_rb: always "1" (No) for all 5 criminal questions (RB5).
-anketa.arrival_date_japan: DD.MM.YYYY — the Japan arrival date (last leg if connecting flight).
-anketa.port_of_entry: first Japan airport, e.g. "OKINAWA, NAHA" or "OSAKA, KANSAI".
-anketa.airline_flight: flight number of last leg into Japan.
-anketa.intended_stay_days: integer. (Departure date minus Japan arrival date in days) + 1. Example: arrive May 4, depart May 17 → (17-4)+1 = 14 days.
 anketa.email: always "tour@fujitravel.ru".
 anketa.date_of_application: today_date (from input).
 anketa.first_hotel_name: name of the first hotel in the programme.
 anketa.first_hotel_address: address of the first hotel.
 anketa.first_hotel_phone: phone of the first hotel.
+
+Trip-level arrival/departure blocks (for the programme activity cells on arrival/departure days):
+  arrival.*, departure.* at the top level of the output — use the SAME "lead ticket" (the first tourist with a populated ticket) as the reference for programme display. The programme is one shared document and cannot show two different flights in one activity cell.
 
 === SECTION 4: DOVERENOST (POWER OF ATTORNEY) ===
 
@@ -259,7 +282,21 @@ email:
       "been_to_japan": "No",
       "previous_visits": "",
       "criminal_record": "No",
-      "maiden_name": ""
+      "maiden_name": "",
+      "nationality_iso": "RUS",
+      "former_nationality_text": "NO",
+      "gender_rb": "0",
+      "marital_status_rb": "0",
+      "passport_type_rb": "2",
+      "arrival_date_japan": "DD.MM.YYYY",
+      "arrival_time": "HH:MM",
+      "arrival_airport": "TOKYO NARITA",
+      "arrival_flight": "CZ 8101",
+      "departure_date_japan": "DD.MM.YYYY",
+      "departure_time": "HH:MM",
+      "departure_airport": "TOKYO NARITA",
+      "departure_flight": "CZ 8101",
+      "intended_stay_days": 9
     }
   ],
   "programme": [
@@ -271,16 +308,7 @@ email:
     }
   ],
   "anketa": {
-    "nationality_iso": "RUS",
-    "former_nationality_text": "NO",
-    "gender_rb": "0",
-    "marital_status_rb": "0",
-    "passport_type_rb": "2",
     "criminal_rb": "1",
-    "arrival_date_japan": "DD.MM.YYYY",
-    "port_of_entry": "...",
-    "airline_flight": "...",
-    "intended_stay_days": 0,
     "email": "tour@fujitravel.ru",
     "date_of_application": "DD.MM.YYYY",
     "first_hotel_name": "...",

@@ -362,13 +362,13 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
     maiden_name_val = tourist.get("maiden_name", "") or "NO"
     previous_visits_val = tourist.get("previous_visits", "") or "NO"
 
-    # Compute intended stay days from actual dates (AI often gets this wrong).
+    # Compute intended stay days from THIS tourist's own flight dates.
     # Stay = departure_date - arrival_date + 1 (both endpoints inclusive).
     from datetime import datetime as _dt
-    stay_days = anketa.get("intended_stay_days", 0)
+    stay_days = tourist.get("intended_stay_days", 0)
     try:
-        arrival_str = anketa.get("arrival_date_japan", "")
-        dep_str = departure_date_str
+        arrival_str = tourist.get("arrival_date_japan", "")
+        dep_str = tourist.get("departure_date_japan", "") or departure_date_str
         if arrival_str and dep_str:
             arr = _dt.strptime(arrival_str, "%d.%m.%Y")
             dep = _dt.strptime(dep_str, "%d.%m.%Y")
@@ -381,14 +381,14 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
         "topmostSubform[0].Page1[0].T2[0]":  last_name,
         "topmostSubform[0].Page1[0].T7[0]":  first_name,
         "topmostSubform[0].Page1[0].T49[0]": tourist.get("passport_number", ""),
-        "topmostSubform[0].Page1[0].T50[0]": anketa.get("nationality_iso", "RUS"),
+        "topmostSubform[0].Page1[0].T50[0]": tourist.get("nationality_iso", "RUS"),
         "topmostSubform[0].Page1[0].T34[0]": "  ",  # Former nationalities — dropdown only accepts country names; blank
         "topmostSubform[0].Page1[0].T37[0]": "NO",  # ID No. issued by government — always NO for Russians
         "topmostSubform[0].Page1[0].#area[4].T14[0]": tourist.get("birth_date", ""),
         "topmostSubform[0].Page1[0].#area[4].T16[0]": tourist.get("place_of_birth", ""),
-        "topmostSubform[0].Page1[0].#area[5].#area[6].#area[7].RB1[0]": anketa.get("gender_rb", "0"),
-        "topmostSubform[0].Page1[0].#area[8].RB2[0]": anketa.get("marital_status_rb", "0"),
-        "topmostSubform[0].Page1[0].#area[1].#area[2].RB3[0]": anketa.get("passport_type_rb", "2"),
+        "topmostSubform[0].Page1[0].#area[5].#area[6].#area[7].RB1[0]": tourist.get("gender_rb", "0"),
+        "topmostSubform[0].Page1[0].#area[8].RB2[0]": tourist.get("marital_status_rb", "0"),
+        "topmostSubform[0].Page1[0].#area[1].#area[2].RB3[0]": tourist.get("passport_type_rb", "2"),
         "topmostSubform[0].Page1[0].#area[9].T53[0]": tourist.get("issue_date", ""),
         "topmostSubform[0].Page1[0].#area[0].T59[0]": tourist.get("expiry_date", ""),  # fixed: was T59[0]
         "topmostSubform[0].Page1[0].#area[0].T57[0]": tourist.get("issued_by", ""),       # Issuing Authority = raw MVD code
@@ -400,9 +400,9 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
         "topmostSubform[0].Page1[0].#area[11].T3[0]": tourist.get("phone", ""),  # applicant phone
         "topmostSubform[0].Page1[0].T62[0]": "NO",                      # Certificate of Eligibility No. — always NO
         "topmostSubform[0].Page1[0].T64[0]": previous_visits_val,       # Dates/duration of previous stays in Japan
-        "topmostSubform[0].Page1[0].T66[0]": anketa.get("arrival_date_japan", ""),
-        "topmostSubform[0].Page1[0].#area[10].T68[0]": anketa.get("port_of_entry", ""),
-        "topmostSubform[0].Page1[0].#area[10].T68[1]": anketa.get("airline_flight", ""),
+        "topmostSubform[0].Page1[0].T66[0]": tourist.get("arrival_date_japan", ""),
+        "topmostSubform[0].Page1[0].#area[10].T68[0]": tourist.get("arrival_airport", ""),
+        "topmostSubform[0].Page1[0].#area[10].T68[1]": tourist.get("arrival_flight", ""),
         "topmostSubform[0].Page1[0].T68[2]": "tourism",
         "topmostSubform[0].Page1[0].T68[3]": str(stay_days),
         "topmostSubform[0].Page1[0].emp_adr[1]":           anketa.get("first_hotel_address", ""),
