@@ -722,17 +722,14 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState(null);
   const [form, setForm] = useState({ hotel_id: '', check_in: '', check_out: '' });
   const [showAddCard, setShowAddCard] = useState(false);
-  const [dirty, setDirty] = useState(false);
 
   const loadAll = useCallback(async () => {
     try {
       const [hotels, current] = await Promise.all([getHotels(), getSubgroupHotels(subgroupId)]);
       setAllHotels(Array.isArray(hotels) ? hotels : []);
       setGroupHotels(Array.isArray(current) ? current : []);
-      setDirty(false);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -742,70 +739,71 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
 
   useEffect(() => { loadAll(); }, [loadAll, reloadKey]);
 
-  // Warn on accidental tab close while there are unsaved local changes.
-  useEffect(() => {
-    if (!dirty) return;
-    const handler = (e) => { e.preventDefault(); e.returnValue = ''; };
-    window.addEventListener('beforeunload', handler);
-    return () => window.removeEventListener('beforeunload', handler);
-  }, [dirty]);
-
   const selectedHotel = allHotels.find(h => String(h.id) === String(form.hotel_id));
 
-  const handleAdd = () => {
-    if (!form.hotel_id || !form.check_in || !form.check_out) return;
-    const hotel = allHotels.find(h => String(h.id) === String(form.hotel_id));
-    if (!hotel) return;
-    setGroupHotels(prev => [...prev, {
-      hotel_id: hotel.id, hotel_name: hotel.name_en, hotel_name_ru: hotel.name_ru,
-      city: hotel.city, address: hotel.address, phone: hotel.phone,
-      check_in: form.check_in, check_out: form.check_out, sort_order: prev.length,
-    }]);
-    setForm({ hotel_id: '', check_in: '', check_out: '' });
-    setShowAddCard(false);
-    setDirty(true);
-  };
-
-  const handleRemove = (idx) => {
-    setGroupHotels(prev => prev.filter((_, i) => i !== idx).map((h, i) => ({ ...h, sort_order: i })));
-    setDirty(true);
-  };
-
-  const handleMoveUp = (idx) => {
-    if (idx === 0) return;
-    setGroupHotels(prev => {
-      const arr = [...prev];
-      [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]];
-      return arr.map((h, i) => ({ ...h, sort_order: i }));
-    });
-    setDirty(true);
-  };
-
-  const handleMoveDown = (idx) => {
-    setGroupHotels(prev => {
-      if (idx >= prev.length - 1) return prev;
-      const arr = [...prev];
-      [arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]];
-      return arr.map((h, i) => ({ ...h, sort_order: i }));
-    });
-    setDirty(true);
-  };
-
-  const handleSave = async () => {
+  // Persist the given hotel array to the backend immediately.
+  // On success: re-sync local state from the server response.
+  // On failure: roll back to the previous state and surface the error.
+  const persist = useCallback(async (nextHotels, prevHotels) => {
     setSaving(true);
-    setSaveMsg(null);
     setError(null);
     try {
-      await saveSubgroupHotels(subgroupId, groupHotels);
-      // Re-sync from server so the UI reflects any normalization the backend did.
-      await loadAll();
-      setSaveMsg('Отели сохранены');
-      setTimeout(() => setSaveMsg(null), 3000);
+      await saveSubgroupHotels(subgroupId, nextHotels);
+      // Re-fetch so we pick up any normalization (e.g. hotel name/address from DB).
+      const current = await getSubgroupHotels(subgroupId);
+      setGroupHotels(Array.isArray(current) ? current : []);
     } catch (e) {
       setError(e.message);
+      // Roll back optimistic update.
+      setGroupHotels(prevHotels);
     } finally {
       setSaving(false);
     }
+  }, [subgroupId]);
+
+  const handleAdd = () => {
+    if (saving) return;
+    if (!form.hotel_id || !form.check_in || !form.check_out) return;
+    const hotel = allHotels.find(h => String(h.id) === String(form.hotel_id));
+    if (!hotel) return;
+    const prev = groupHotels;
+    const next = [...prev, {
+      hotel_id: hotel.id, hotel_name: hotel.name_en, hotel_name_ru: hotel.name_ru,
+      city: hotel.city, address: hotel.address, phone: hotel.phone,
+      check_in: form.check_in, check_out: form.check_out, sort_order: prev.length,
+    }];
+    setGroupHotels(next);                                    // optimistic
+    setForm({ hotel_id: '', check_in: '', check_out: '' });
+    setShowAddCard(false);
+    persist(next, prev);
+  };
+
+  const handleRemove = (idx) => {
+    if (saving) return;
+    const prev = groupHotels;
+    const next = prev.filter((_, i) => i !== idx).map((h, i) => ({ ...h, sort_order: i }));
+    setGroupHotels(next);
+    persist(next, prev);
+  };
+
+  const handleMoveUp = (idx) => {
+    if (saving || idx === 0) return;
+    const prev = groupHotels;
+    const arr = [...prev];
+    [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]];
+    const next = arr.map((h, i) => ({ ...h, sort_order: i }));
+    setGroupHotels(next);
+    persist(next, prev);
+  };
+
+  const handleMoveDown = (idx) => {
+    if (saving || idx >= groupHotels.length - 1) return;
+    const prev = groupHotels;
+    const arr = [...prev];
+    [arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]];
+    const next = arr.map((h, i) => ({ ...h, sort_order: i }));
+    setGroupHotels(next);
+    persist(next, prev);
   };
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
@@ -813,7 +811,6 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
   return (
     <div>
       {error && <div className="error-message">{error}</div>}
-      {saveMsg && <div className="success-message">{saveMsg}</div>}
 
       {/* Hotel list (from AI / manually added) */}
       {groupHotels.length === 0 ? (
@@ -825,8 +822,8 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
           {groupHotels.map((h, idx) => (
             <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'var(--gray-dark)', border: '1px solid var(--border)', borderRadius: 8 }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 24 }}>
-                <button style={{ background: 'none', border: 'none', color: idx === 0 ? 'var(--border)' : 'var(--white-dim)', cursor: idx === 0 ? 'default' : 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }} onClick={() => handleMoveUp(idx)} disabled={idx === 0}>▲</button>
-                <button style={{ background: 'none', border: 'none', color: idx === groupHotels.length - 1 ? 'var(--border)' : 'var(--white-dim)', cursor: idx === groupHotels.length - 1 ? 'default' : 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }} onClick={() => handleMoveDown(idx)} disabled={idx === groupHotels.length - 1}>▼</button>
+                <button style={{ background: 'none', border: 'none', color: idx === 0 || saving ? 'var(--border)' : 'var(--white-dim)', cursor: idx === 0 || saving ? 'default' : 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }} onClick={() => handleMoveUp(idx)} disabled={idx === 0 || saving}>▲</button>
+                <button style={{ background: 'none', border: 'none', color: idx === groupHotels.length - 1 || saving ? 'var(--border)' : 'var(--white-dim)', cursor: idx === groupHotels.length - 1 || saving ? 'default' : 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }} onClick={() => handleMoveDown(idx)} disabled={idx === groupHotels.length - 1 || saving}>▼</button>
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 500, marginBottom: 3, fontSize: 13 }}>
@@ -843,21 +840,22 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
               <button
                 type="button"
                 onClick={() => handleRemove(idx)}
+                disabled={saving}
                 title="Удалить"
                 aria-label="Удалить"
                 style={{
                   background: 'none',
                   border: 'none',
-                  cursor: 'pointer',
-                  color: 'var(--white-dim)',
+                  cursor: saving ? 'default' : 'pointer',
+                  color: saving ? 'var(--border)' : 'var(--white-dim)',
                   fontSize: 14,
                   lineHeight: 1,
                   padding: '4px 6px',
                   borderRadius: 4,
                   transition: 'color 0.15s, background 0.15s',
                 }}
-                onMouseEnter={e => { e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
-                onMouseLeave={e => { e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
+                onMouseEnter={e => { if (saving) return; e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+                onMouseLeave={e => { if (saving) return; e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
               >✕</button>
             </div>
           ))}
@@ -908,21 +906,18 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
           </div>
 
           <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end' }}>
-            <button className="btn btn-secondary" onClick={handleAdd} disabled={!form.hotel_id || !form.check_in || !form.check_out}>
+            <button className="btn btn-secondary" onClick={handleAdd} disabled={saving || !form.hotel_id || !form.check_in || !form.check_out}>
               + Добавить
             </button>
           </div>
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
-        {dirty && !saving && (
-          <span style={{ fontSize: 11, color: 'var(--warning, #e0a82e)' }}>● Есть несохранённые изменения</span>
-        )}
-        <button className="btn btn-primary btn-sm" onClick={handleSave} disabled={saving || !dirty}>
-          {saving ? <><span className="spinner" /> Сохранение...</> : 'Сохранить отели'}
-        </button>
-      </div>
+      {saving && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, fontSize: 11, color: 'var(--white-dim)' }}>
+          <span className="spinner" /> Сохранение...
+        </div>
+      )}
     </div>
   );
 }

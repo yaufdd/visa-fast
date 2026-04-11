@@ -54,6 +54,17 @@ func main() {
 	}
 	slog.Info("database connected")
 
+	// ── Auto-migrate ──────────────────────────────────────────────────────────
+	migrationsDir := envOrDefault("MIGRATIONS_DIR", "migrations")
+	if !filepath.IsAbs(migrationsDir) {
+		cwd, _ := os.Getwd()
+		migrationsDir = filepath.Join(cwd, migrationsDir)
+	}
+	if err := runMigrations(ctx, pool, migrationsDir); err != nil {
+		slog.Error("run migrations", "err", err)
+		os.Exit(1)
+	}
+
 	// ── Google Sheets ─────────────────────────────────────────────────────────
 	sheetsClient, err := sheets.New(ctx, googleCredsPath, sheetID)
 	if err != nil {

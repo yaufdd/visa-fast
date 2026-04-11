@@ -1,0 +1,45 @@
+# ── Build stage ────────────────────────────────────────────────────────────────
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /src
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+
+COPY backend/ ./
+RUN CGO_ENABLED=0 go build -o /app/server ./cmd/server
+
+# ── Runtime stage ─────────────────────────────────────────────────────────────
+FROM python:3.12-slim
+
+# pdftk for PDF form filling (fillpdf dependency)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends pdftk-java && \
+    rm -rf /var/lib/apt/lists/*
+
+# Python dependencies for docgen
+RUN pip install --no-cache-dir python-docx fillpdf
+
+WORKDIR /app
+
+# Go binary
+COPY --from=builder /app/server ./server
+
+# Migrations
+COPY backend/migrations/ ./migrations/
+
+# Python docgen script
+COPY docgen/ ./docgen/
+
+# Document templates (.docx + .pdf)
+COPY templates/ ./templates/
+
+ENV PORT=8081
+ENV UPLOADS_DIR=/app/uploads
+ENV DOCGEN_SCRIPT=/app/docgen/generate.py
+ENV MIGRATIONS_DIR=/app/migrations
+ENV DOCGEN_TEMPLATES_DIR=/app/templates
+ENV DOCGEN_PDF_TEMPLATE=/app/templates/anketa_template.pdf
+
+EXPOSE 8081
+
+CMD ["./server"]

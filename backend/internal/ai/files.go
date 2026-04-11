@@ -13,6 +13,19 @@ import (
 	"time"
 )
 
+// snippet returns a short, log-friendly view of a response body.
+func snippet(body []byte) string {
+	s := string(body)
+	if strings.Contains(strings.ToLower(s), "cloudflare") && strings.Contains(strings.ToLower(s), "<html") {
+		return "cloudflare HTML error page — likely Anthropic upstream outage"
+	}
+	const maxLen = 300
+	if len(s) > maxLen {
+		return s[:maxLen] + "…"
+	}
+	return s
+}
+
 // isTransientHTTP returns true for network-level errors worth retrying.
 func isTransientHTTP(err error) bool {
 	if err == nil {
@@ -86,6 +99,15 @@ func UploadFileToAnthropic(apiKey, filename string, data []byte) (string, error)
 			body, derr = io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if derr == nil {
+				// Retry 5xx (Anthropic overloaded or Cloudflare upstream error).
+				if resp.StatusCode >= 500 {
+					if attempt == 3 {
+						return "", fmt.Errorf("files API upstream %d after retries: %s", resp.StatusCode, snippet(body))
+					}
+					time.Sleep(backoff)
+					backoff *= 2
+					continue
+				}
 				break
 			}
 		}

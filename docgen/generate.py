@@ -71,8 +71,8 @@ def _mvd_to_place_of_issue(issued_by: str) -> str:
     return "Russia"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-TEMPLATES_DIR = "/Users/yaufdd/Desktop/FUJIT TRAVEL/Шаблоны"
-PDF_TEMPLATE   = "/Users/yaufdd/Desktop/FUJIT TRAVEL/ТЕСТ_Бамба/Бамба Эрик.pdf"
+TEMPLATES_DIR = os.environ.get("DOCGEN_TEMPLATES_DIR", "/Users/yaufdd/Desktop/FUJIT TRAVEL/Шаблоны")
+PDF_TEMPLATE  = os.environ.get("DOCGEN_PDF_TEMPLATE", "/Users/yaufdd/Desktop/FUJIT TRAVEL/ТЕСТ_Бамба/Бамба Эрик.pdf")
 
 TMPL_PROGRAMME   = os.path.join(TEMPLATES_DIR, "ШАБЛОН программа.docx")
 TMPL_DOVERENOST  = os.path.join(TEMPLATES_DIR, "ШАБЛОН доверенность.docx")

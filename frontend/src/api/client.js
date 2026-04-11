@@ -1,4 +1,4 @@
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8081';
+const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8081';
 
 // Groups
 export async function getGroups() {
@@ -83,7 +83,7 @@ export async function parseDocuments(groupId) {
 }
 
 export async function parseGroup(groupId, notes = '') {
-  const url = new URL(`${API}/api/groups/${groupId}/parse`);
+  const url = new URL(`${API}/api/groups/${groupId}/parse`, window.location.origin);
   if (notes.trim()) url.searchParams.set('notes', notes.trim());
   const res = await fetch(url.toString(), { method: 'POST' });
   if (!res.ok) {
@@ -273,7 +273,7 @@ export function getSubgroupDownloadUrl(subgroupId) {
 }
 
 export async function parseSubgroup(subgroupId, notes = '') {
-  const url = new URL(`${API}/api/subgroups/${subgroupId}/parse`);
+  const url = new URL(`${API}/api/subgroups/${subgroupId}/parse`, window.location.origin);
   if (notes.trim()) url.searchParams.set('notes', notes.trim());
   const res = await fetch(url.toString(), { method: 'POST' });
   if (!res.ok) {
@@ -285,7 +285,7 @@ export async function parseSubgroup(subgroupId, notes = '') {
 
 // Documents
 export async function generateDocuments(groupId, guidePhone = '') {
-  const url = new URL(`${API}/api/groups/${groupId}/generate`);
+  const url = new URL(`${API}/api/groups/${groupId}/generate`, window.location.origin);
   if (guidePhone) url.searchParams.set('guide_phone', guidePhone);
   const res = await fetch(url.toString(), { method: 'POST' });
   if (!res.ok) throw new Error('Failed to generate documents');
@@ -297,7 +297,7 @@ export function getDownloadUrl(groupId) {
 }
 
 export async function finalizeGroup(groupId, submissionDate = '') {
-  const url = new URL(`${API}/api/groups/${groupId}/finalize`);
+  const url = new URL(`${API}/api/groups/${groupId}/finalize`, window.location.origin);
   if (submissionDate) url.searchParams.set('submission_date', submissionDate);
   const res = await fetch(url.toString(), { method: 'POST' });
   if (!res.ok) {
