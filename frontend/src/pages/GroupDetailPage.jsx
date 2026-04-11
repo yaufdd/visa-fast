@@ -724,6 +724,9 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ hotel_id: '', check_in: '', check_out: '' });
   const [showAddCard, setShowAddCard] = useState(false);
+  // Remembers the server-confirmed value of a date field at the moment the user
+  // focused it, so onBlur can decide whether to persist and what to roll back to.
+  const dateEditStartRef = useRef({});
 
   const loadAll = useCallback(async () => {
     try {
@@ -796,6 +799,28 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
     persist(next, prev);
   };
 
+  // Remember server value when the user starts editing.
+  const handleDateFocus = (idx, field) => {
+    dateEditStartRef.current[`${idx}:${field}`] = groupHotels[idx]?.[field] || '';
+  };
+
+  // Update local state only — do NOT persist on every keystroke, or the input
+  // gets disabled mid-edit and loses focus.
+  const handleDateChange = (idx, field, value) => {
+    setGroupHotels(prev => prev.map((h, i) => i === idx ? { ...h, [field]: value } : h));
+  };
+
+  // Persist on blur, but only if the value actually changed vs. what the server had.
+  const handleDateBlur = (idx, field) => {
+    const key = `${idx}:${field}`;
+    const original = dateEditStartRef.current[key] || '';
+    delete dateEditStartRef.current[key];
+    const current = groupHotels[idx]?.[field] || '';
+    if (!current || current === original) return;
+    const prevState = groupHotels.map((h, i) => i === idx ? { ...h, [field]: original } : h);
+    persist(groupHotels, prevState);
+  };
+
   const handleMoveDown = (idx) => {
     if (saving || idx >= groupHotels.length - 1) return;
     const prev = groupHotels;
@@ -831,8 +856,26 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
                   {h.hotel_name_ru && <span style={{ color: 'var(--white-dim)', marginLeft: 8, fontSize: 12 }}>/ {h.hotel_name_ru}</span>}
                   {h.city && <span style={{ color: 'var(--accent)', marginLeft: 8, fontSize: 11, fontWeight: 500 }}>{h.city}</span>}
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--white-dim)', display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-                  <span style={{ fontFamily: 'var(--font-mono)' }}>{h.check_in} → {h.check_out}</span>
+                <div style={{ fontSize: 12, color: 'var(--white-dim)', display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)' }}>
+                    <input
+                      type="date"
+                      value={h.check_in || ''}
+                      onFocus={() => handleDateFocus(idx, 'check_in')}
+                      onChange={e => handleDateChange(idx, 'check_in', e.target.value)}
+                      onBlur={() => handleDateBlur(idx, 'check_in')}
+                      className="hotel-date-input"
+                    />
+                    →
+                    <input
+                      type="date"
+                      value={h.check_out || ''}
+                      onFocus={() => handleDateFocus(idx, 'check_out')}
+                      onChange={e => handleDateChange(idx, 'check_out', e.target.value)}
+                      onBlur={() => handleDateBlur(idx, 'check_out')}
+                      className="hotel-date-input"
+                    />
+                  </span>
                   {h.address && <span>{h.address}</span>}
                   {h.phone && <span>{h.phone}</span>}
                 </div>

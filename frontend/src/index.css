@@ -434,3 +434,47 @@ select.form-input {
   font-family: var(--font-mono);
   font-size: 12px;
 }
+
+/* Inline editable hotel date inputs — look like plain text, no chrome */
+.hotel-date-input {
+  background: transparent;
+  /* transparent border by default so showing it on focus doesn't shift layout */
+  border: 1px solid transparent;
+  border-radius: 4px;
+  outline: none;
+  padding: 1px 4px;
+  margin: 0;
+  color: var(--white-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  color-scheme: dark;
+  transition: border-color 0.15s, color 0.15s;
+}
+.hotel-date-input:hover {
+  color: var(--white);
+}
+.hotel-date-input:focus {
+  color: var(--white);
+  border-color: var(--border);
+}
+.hotel-date-input::-webkit-calendar-picker-indicator {
+  display: none;
+  -webkit-appearance: none;
+}
+.hotel-date-input::-webkit-inner-spin-button,
+.hotel-date-input::-webkit-clear-button {
+  display: none;
+  -webkit-appearance: none;
+}
+/* Kill the blue background on the currently-focused date segment */
+.hotel-date-input::-webkit-datetime-edit-year-field:focus,
+.hotel-date-input::-webkit-datetime-edit-month-field:focus,
+.hotel-date-input::-webkit-datetime-edit-day-field:focus {
+  background: transparent;
+  color: inherit;
+  outline: none;
+}
+.hotel-date-input::selection {
+  background: transparent;
+}
