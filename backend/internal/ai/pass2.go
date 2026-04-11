@@ -164,25 +164,27 @@ Per-tourist PDF fields (one value per tourist, NOT trip-level). For each tourist
   tourists[i].passport_type_rb: per tourist — "0"=Diplomatic, "1"=Official, "2"=Ordinary, "3"=Other. Must match that tourist's passport_type.
 
 PER-TOURIST FLIGHT DATA — CRITICAL:
-Each tourist's raw_json (Pass 1 output) contains flight fields extracted from THEIR uploaded ticket:
-  flight_number, arrival_date, arrival_airport, arrival_time, departure_date, departure_time, departure_airport.
-Different tourists in the same group may have DIFFERENT flights (e.g. one travels separately). Each tourist's visa anketa MUST show THEIR OWN flight, not a shared one.
+Each tourist's raw_json (Pass 1 output) contains flight fields extracted from THEIR uploaded ticket. Two separate flights are captured:
+  OUTBOUND (arrival INTO Japan): flight_number, arrival_date, arrival_airport, arrival_time
+  RETURN (departure FROM Japan): departure_flight, departure_date, departure_airport, departure_time
+Different tourists in the same group may have DIFFERENT flights (e.g. one travels separately). Each tourist's visa anketa MUST show THEIR OWN flights, not a shared one.
 
-Resolution rules (apply per tourist):
-  1. If that tourist's raw_json has flight fields populated (non-empty flight_number and arrival_date) → use their own ticket data.
-  2. If that tourist's raw_json has empty flight fields → this means only one ticket was uploaded for the whole group and all tourists are assumed to share it. Fall back to the FIRST tourist in the tourists[] array whose raw_json has non-empty flight fields, and copy their flight values.
-  3. NEVER leave these per-tourist flight fields empty — always resolve via rule 2.
+Resolution rules (apply per tourist, SEPARATELY for outbound and return):
+  1. If that tourist's raw_json has outbound fields populated (non-empty flight_number and arrival_date) → use their own outbound ticket data.
+  2. If that tourist's raw_json has empty outbound fields → this means only one ticket was uploaded for the whole group and all tourists are assumed to share it. Fall back to the FIRST tourist in tourists[] whose raw_json has non-empty flight_number, and copy their outbound values.
+  3. Same rules apply separately for the return flight (using raw_json.departure_flight as the "populated" signal). It is possible for a tourist to have an outbound ticket but no return ticket in the uploaded files — in that case the return falls back to another tourist with a populated return.
+  4. If the ticket is genuinely ONE-WAY (no return leg exists anywhere in the group's uploaded files) → leave tourists[i].departure_date_japan / departure_time / departure_airport / departure_flight empty (""). Do NOT copy outbound values into return fields.
 
 For EACH tourist, output these fields (in addition to everything else):
-  tourists[i].arrival_date_japan: DD.MM.YYYY — that tourist's Japan arrival date (from raw_json.arrival_date)
-  tourists[i].arrival_time: HH:MM — that tourist's arrival time in Japan (from raw_json.arrival_time)
+  tourists[i].arrival_date_japan: DD.MM.YYYY — that tourist's Japan arrival date (from raw_json.arrival_date, with fallback per rule 2)
+  tourists[i].arrival_time: HH:MM — arrival time in Japan (from raw_json.arrival_time)
   tourists[i].arrival_airport: e.g. "TOKYO NARITA" or "OSAKA KANSAI" — from raw_json.arrival_airport. This is the "Port of Entry" for the PDF.
   tourists[i].arrival_flight: e.g. "CZ 8101" — from raw_json.flight_number
-  tourists[i].departure_date_japan: DD.MM.YYYY — that tourist's departure date FROM Japan (from raw_json.departure_date if the ticket shows return; otherwise the last date of the trip)
-  tourists[i].departure_time: HH:MM
-  tourists[i].departure_airport: e.g. "TOKYO NARITA"
-  tourists[i].departure_flight: e.g. "CZ 8101"
-  tourists[i].intended_stay_days: integer, computed from THAT tourist's arrival_date_japan and departure_date_japan: (departure - arrival) + 1. Example: arrive May 4, depart May 17 → 14.
+  tourists[i].departure_date_japan: DD.MM.YYYY — date of leaving Japan (from raw_json.departure_date, with fallback per rule 3; empty if one-way)
+  tourists[i].departure_time: HH:MM — local Japan takeoff time (from raw_json.departure_time)
+  tourists[i].departure_airport: e.g. "TOKYO NARITA" — Japan airport being left (from raw_json.departure_airport)
+  tourists[i].departure_flight: e.g. "CZ 8102" — return flight number (from raw_json.departure_flight)
+  tourists[i].intended_stay_days: integer, computed from THAT tourist's arrival_date_japan and departure_date_japan: (departure - arrival) + 1. Example: arrive May 4, depart May 17 → 14. If departure_date_japan is empty (one-way ticket), use 0.
 
 Trip-level anketa fields (truly shared across all tourists):
 anketa.criminal_rb: always "1" (No) for all 5 criminal questions (RB5).

@@ -46,14 +46,16 @@ type Pass1Result struct {
 	InternalIssuedBy string `json:"internal_issued_by"`
 	RegAddress      string `json:"reg_address"`
 
-	// Flight information — last leg INTO Japan (or only leg if direct).
-	FlightNumber     string `json:"flight_number"`
-	ArrivalTime      string `json:"arrival_time"`    // HH:MM local Japan time
-	ArrivalAirport   string `json:"arrival_airport"` // e.g. "OSAKA KANSAI"
-	ArrivalDate      string `json:"arrival_date"`    // DD.MM.YYYY — Japan arrival date
-	DepartureTime    string `json:"departure_time"`  // HH:MM
-	DepartureAirport string `json:"departure_airport"` // e.g. "MOSCOW SHEREMETYEVO"
-	DepartureDate    string `json:"departure_date"`  // DD.MM.YYYY — departure from Russia
+	// Outbound flight — last leg INTO Japan (or only leg if direct).
+	FlightNumber   string `json:"flight_number"`   // e.g. "CZ 8101" — outbound arrival flight
+	ArrivalTime    string `json:"arrival_time"`    // HH:MM local Japan time
+	ArrivalAirport string `json:"arrival_airport"` // e.g. "OSAKA KANSAI"
+	ArrivalDate    string `json:"arrival_date"`    // DD.MM.YYYY — Japan arrival date
+	// Return flight — first leg FROM Japan back home (only if ticket is round-trip).
+	DepartureFlight  string `json:"departure_flight"`  // e.g. "CZ 8102" — return flight leaving Japan
+	DepartureTime    string `json:"departure_time"`    // HH:MM local Japan time — return flight leaving Japan
+	DepartureAirport string `json:"departure_airport"` // e.g. "TOKYO NARITA" — Japan airport being left
+	DepartureDate    string `json:"departure_date"`    // DD.MM.YYYY — date of leaving Japan
 
 	// Hotels from vouchers (if any voucher files are provided).
 	HotelsFromVouchers []VoucherHotel `json:"hotels_from_vouchers"`
@@ -153,6 +155,7 @@ func ParseDocuments(ctx context.Context, apiKey string, inputs []FileInput, note
     "arrival_time": "HH:MM",
     "arrival_airport": "...",
     "arrival_date": "DD.MM.YYYY",
+    "departure_flight": "...",
     "departure_time": "HH:MM",
     "departure_airport": "...",
     "departure_date": "DD.MM.YYYY",
@@ -206,13 +209,21 @@ internal_series / internal_number / internal_issued / internal_issued_by / reg_a
 - If no internal passport is provided, all internal_* fields = "".
 
 flight_number / arrival_time / arrival_airport / arrival_date:
-- For multi-leg itineraries (e.g. Moscow → Shanghai → Osaka): use the LAST leg that arrives IN JAPAN.
+- The OUTBOUND flight ARRIVING IN JAPAN.
+- For multi-leg outbound itineraries (e.g. Moscow → Shanghai → Osaka): use the LAST leg — the one that lands IN JAPAN.
+- flight_number: the flight number of that last leg (e.g. "CZ 8101", "SU 262").
 - arrival_airport: city + airport name in CAPS, e.g. "OSAKA KANSAI", "TOKYO NARITA".
-- arrival_date: the calendar date of Japan arrival (may differ from Russia departure date if overnight flight).
+- arrival_date: the calendar date of Japan arrival in local Japan time (may differ from the Russia departure date if the flight is overnight).
+- arrival_time: local Japan time of landing, HH:MM.
 
-departure_time / departure_airport / departure_date:
-- The outbound flight LEAVING RUSSIA (first leg of the outbound journey).
-- departure_airport: city + airport name in CAPS, e.g. "MOSCOW SHEREMETYEVO".
+departure_flight / departure_time / departure_airport / departure_date:
+- The RETURN flight LEAVING JAPAN. These fields describe when the tourist departs FROM Japan on the way back home.
+- For multi-leg return itineraries (e.g. Osaka → Shanghai → Moscow): use the FIRST leg — the one that takes off FROM Japan.
+- departure_flight: flight number of that first-leg return flight, e.g. "CZ 8102", "SU 263".
+- departure_airport: city + airport name in CAPS of the Japan airport being left, e.g. "TOKYO NARITA", "OSAKA KANSAI".
+- departure_date: the calendar date of leaving Japan in local Japan time, DD.MM.YYYY.
+- departure_time: local Japan time of takeoff, HH:MM.
+- If the ticket is ONE-WAY with no return leg shown → leave all four fields empty (""). Do NOT guess or reuse the outbound flight as a placeholder.
 
 hotels_from_vouchers:
 - Array of objects, one per hotel found in any voucher document.
