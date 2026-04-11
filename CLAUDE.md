@@ -15,22 +15,33 @@ fujitravel-admin/
 ├── backend/
 │   ├── cmd/server/main.go
 │   ├── internal/
-│   │   ├── api/        — HTTP handlers
+│   │   ├── api/        — HTTP handlers (groups, subgroups, hotels, parse, generate)
 │   │   ├── sheets/     — Google Sheets client
 │   │   ├── ai/         — Claude API (Pass 1 + Pass 2)
 │   │   ├── matcher/    — fuzzy matching
 │   │   ├── docgen/     — document generation (calls Python)
 │   │   └── storage/    — file uploads
-│   ├── migrations/     — golang-migrate SQL files
+│   ├── migrations/     — golang-migrate SQL files (000001 … 000012)
 │   └── go.mod
 ├── frontend/
 │   ├── src/
-│   │   ├── pages/
+│   │   ├── pages/      — GroupsPage, GroupDetailPage, HotelsPage, HotelEditPage
 │   │   ├── components/
-│   │   └── api/
+│   │   └── api/client.js
 │   └── package.json
+├── docgen/generate.py  — python-docx + fillpdf generator
+├── templates/          — Word + PDF templates (committed)
+│   ├── ШАБЛОН программа.docx
+│   ├── ШАБЛОН доверенность.docx
+│   ├── ШАБЛОН для Инны в ВЦ.docx
+│   ├── ШАБЛОН заявка ВЦ.docx
+│   └── anketa_template.pdf   (whitelisted in .gitignore)
 ├── uploads/            — uploaded client files (gitignored)
-├── docker-compose.yml
+├── Dockerfile.backend  — Go + Python + templates
+├── Dockerfile.frontend — Vite build, served via nginx
+├── nginx.conf
+├── docker-compose.prod.yml
+├── .github/workflows/deploy.yml  — SSH deploy on push to main
 └── .claude/agents/
 ```
 
@@ -53,6 +64,7 @@ fujitravel-admin/
 ## Environment Variables
 
 ```env
+# Local dev
 DATABASE_URL=postgres://fuji:fuji123@localhost:5435/fujitravel?sslmode=disable
 ANTHROPIC_API_KEY=...
 GOOGLE_CREDENTIALS_PATH=/Users/yaufdd/Desktop/FUJIT TRAVEL/google-credentials.json
@@ -60,9 +72,11 @@ GOOGLE_SHEET_ID=1UH-MK_KsTPbghaAKrx6ous8jFACeL6uEQccsewLcrnM
 UPLOADS_DIR=./uploads
 PORT=8080
 DOCGEN_SCRIPT=../../docgen/generate.py
+DOCGEN_PDF_TEMPLATE=./templates/anketa_template.pdf
 ```
 
-> PostgreSQL runs on port **5435** (non-standard, 5432/5433 were occupied locally).
+> PostgreSQL runs on port **5435** locally (non-standard, 5432/5433 were occupied).
+> Inside docker-compose.prod.yml the backend reaches it via the service name `db:5432`.
 
 ---
 
@@ -83,12 +97,16 @@ DOCGEN_SCRIPT=../../docgen/generate.py
 ## Data Flow
 
 ```
-1. Create group
+1. Create group (optional: split into subgroups for logistics)
 2. Add tourists from Google Sheets (select by name)
 3. Per tourist: upload files (passport, ticket, voucher) → click Parse
    - Pass 1: Claude extracts structured data from documents (all fields in English)
-   - Hotels auto-created from voucher if not in DB yet
-4. Hotels auto-populated from vouchers into group_hotels (or add manually)
+   - Per-tourist flights: arrival flight + return/departure flight
+   - Hotels auto-created from voucher if not in DB yet (name only, city blank)
+   - Retries on Claude API errors
+4. Hotels auto-populated from vouchers into group_hotels (or added manually).
+   Dates (check-in/check-out) are inline-editable on the group page and
+   autosaved via POST /api/subgroups/:id/hotels.
 5. Click "Сгенерировать документы туристов":
    - Pass 2: Claude merges Pass 1 data + Sheets row → final JSON (pass2.json saved)
    - Python generates per-tourist docs: программа.docx, доверенность.docx, анкета.pdf
@@ -97,6 +115,11 @@ DOCGEN_SCRIPT=../../docgen/generate.py
    - Python generates group-level docs: для Инны в ВЦ.docx, заявка ВЦ.docx
    - Download final.zip
 ```
+
+### Hotels CRUD
+- `/hotels` — list all hotels (city tags normalized to Title Case + RU translation for known Japanese cities).
+- Row click → `/hotels/:id` (HotelEditPage) — dedicated edit page, PUT /api/hotels/:id.
+- Create via inline form at top of `/hotels`.
 
 ---
 
@@ -148,6 +171,35 @@ migrate -path backend/migrations -database $DATABASE_URL up
 # Start backend
 cd backend && go run cmd/server/main.go
 
-# Start frontend
+# Start frontend (Vite HMR — no rebuild needed for .jsx/.css changes)
 cd frontend && npm run dev
 ```
+
+---
+
+## Deployment
+
+Production runs on a single VM via `docker-compose.prod.yml`:
+
+- `backend` — Go API (Dockerfile.backend, includes Python + templates + anketa_template.pdf)
+- `frontend` — Vite build served by nginx (Dockerfile.frontend + nginx.conf)
+- `db` — PostgreSQL 16 with a named volume for persistence
+
+### CI/CD
+`.github/workflows/deploy.yml` triggers on push to `main`:
+1. SSH into server (secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_KEY`)
+2. `cd /opt/visa-fast && git pull origin main`
+3. `docker compose -f docker-compose.prod.yml build`
+4. `docker compose -f docker-compose.prod.yml up -d`
+5. `docker image prune -f` (clean up orphaned <none> images)
+
+Migrations are **not** auto-run by the workflow — run manually on the server
+after pulling if a new `backend/migrations/*.sql` was added.
+
+### Data NOT in git
+After `git clone` on a fresh server, these must be placed manually:
+- `.env` (prod secrets)
+- `google-credentials.json`
+
+The anketa PDF template **is** whitelisted in `.gitignore`
+(`!templates/anketa_template.pdf`), so docgen works out of the box.
