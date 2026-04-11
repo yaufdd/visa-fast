@@ -1,8 +1,10 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap');
 
-:root {
+:root,
+:root[data-theme="dark"] {
   --black: #080808;
   --dark: #0f1117;
+  --bg: #0f1117;
   --graphite: #161b27;
   --gray-dark: #1a1d27;
   --gray: #252836;
@@ -17,6 +19,30 @@
   --warning: #f59e0b;
   --danger: #ef4444;
   --info: #3b82f6;
+  --scheme: dark;
+  --font-mono: 'Space Mono', monospace;
+  --font-body: 'Inter', sans-serif;
+}
+
+:root[data-theme="light"] {
+  --black: #ffffff;
+  --dark: #ffffff;
+  --bg: #ffffff;
+  --graphite: #f5f5f5;
+  --gray-dark: #ffffff;
+  --gray: #ebebeb;
+  --gray-mid: #dcdcdc;
+  --border: #e2e2e2;
+  --white: #111111;
+  --white-dim: #5a5a5a;
+  --accent: #6366f1;
+  --accent-hover: #4f51cc;
+  --accent-dim: rgba(99, 102, 241, 0.10);
+  --success: #16a34a;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --info: #2563eb;
+  --scheme: light;
   --font-mono: 'Space Mono', monospace;
   --font-body: 'Inter', sans-serif;
 }
@@ -448,7 +474,7 @@ select.form-input {
   font-family: var(--font-mono);
   font-size: 12px;
   cursor: pointer;
-  color-scheme: dark;
+  color-scheme: var(--scheme);
   transition: border-color 0.15s, color 0.15s;
 }
 .hotel-date-input:hover {

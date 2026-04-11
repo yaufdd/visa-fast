@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { useTheme } from '../theme';
 
 const navItems = [
   { to: '/', label: 'Подачи', icon: '◫', end: true },
@@ -6,6 +7,7 @@ const navItems = [
 ];
 
 export default function Sidebar() {
+  const { theme, toggleTheme } = useTheme();
   return (
     <aside className="sidebar">
       <div className="sidebar-logo">
@@ -34,7 +36,20 @@ export default function Sidebar() {
       </nav>
 
       <div className="sidebar-footer">
-        <div className="sidebar-footer-text">v1.0.0</div>
+        <div className="sidebar-footer-row">
+          <button
+            type="button"
+            className="sidebar-theme-toggle"
+            onClick={toggleTheme}
+            aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
+          >
+            <span className="sidebar-theme-toggle-icon" key={theme}>
+              {theme === 'dark' ? '☀' : '☾'}
+            </span>
+          </button>
+          <div className="sidebar-footer-text">v1.0.0</div>
+        </div>
       </div>
 
       <style>{`
@@ -127,8 +142,64 @@ export default function Sidebar() {
         }
 
         .sidebar-footer {
-          padding: 16px 20px;
+          padding: 12px 16px 16px;
           border-top: 1px solid var(--border);
+        }
+
+        .sidebar-footer-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+        }
+
+        .sidebar-theme-toggle {
+          width: 32px;
+          height: 32px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0;
+          border-radius: 7px;
+          background: transparent;
+          color: var(--white-dim);
+          border: 1px solid var(--border);
+          cursor: pointer;
+          transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+          overflow: hidden;
+        }
+
+        .sidebar-theme-toggle:hover {
+          color: var(--white);
+          background: var(--gray);
+          border-color: var(--white-dim);
+        }
+
+        .sidebar-theme-toggle:active {
+          transform: scale(0.92);
+        }
+
+        .sidebar-theme-toggle-icon {
+          font-size: 15px;
+          line-height: 1;
+          display: inline-block;
+          transform-origin: center;
+          animation: theme-icon-pop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        @keyframes theme-icon-pop {
+          0% {
+            opacity: 0;
+            transform: rotate(-180deg) scale(0.4);
+          }
+          60% {
+            opacity: 1;
+            transform: rotate(10deg) scale(1.15);
+          }
+          100% {
+            opacity: 1;
+            transform: rotate(0deg) scale(1);
+          }
         }
 
         .sidebar-footer-text {
