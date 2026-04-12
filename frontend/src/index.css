@@ -504,3 +504,132 @@ select.form-input {
 .hotel-date-input::selection {
   background: transparent;
 }
+
+/* ── Document card row (name + buttons) ──────────────────────────────────── */
+.doc-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+/* ── Hamburger button (hidden on desktop) ─────────────────────────────────── */
+.hamburger-btn {
+  display: none;
+}
+
+/* ── Sidebar backdrop (mobile only, controlled via React) ─────────────────── */
+.sidebar-backdrop {
+  display: none;
+}
+
+/* ── Mobile responsive (< 768px) ──────────────────────────────────────────── */
+@media (max-width: 767px) {
+  /* Hamburger toggle */
+  .hamburger-btn {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 900;
+    width: 36px;
+    height: 36px;
+    padding: 8px;
+    background: var(--graphite);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .hamburger-icon {
+    display: block;
+    width: 100%;
+    height: 2px;
+    background: var(--white-dim);
+    border-radius: 1px;
+  }
+
+  /* Sidebar backdrop overlay */
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+    background: rgba(0, 0, 0, 0.55);
+  }
+
+  /* Layout: stacked, no side-by-side */
+  .app-layout {
+    flex-direction: column;
+  }
+
+  .main-content {
+    width: 100%;
+    min-height: 100vh;
+  }
+
+  /* Page container: tighter padding + top space for hamburger */
+  .page-container {
+    padding: 56px 16px 24px;
+  }
+
+  /* Page header: stack vertically */
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .page-subtitle {
+    font-size: 12px;
+  }
+
+  /* Tables: horizontal scroll */
+  .table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table-wrapper table {
+    min-width: 500px;
+  }
+
+  /* Grids: single column */
+  .grid-2,
+  .grid-3 {
+    grid-template-columns: 1fr;
+  }
+
+  /* Cards: tighter padding */
+  .card {
+    padding: 16px;
+  }
+
+  /* Tabs: horizontal scroll if overflow */
+  .tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap;
+    gap: 0;
+  }
+  .tab-btn {
+    flex-shrink: 0;
+    padding: 10px 14px;
+  }
+
+  /* Section header: allow wrapping */
+  .section-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* Document card: stack name + buttons vertically */
+  .doc-card-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+}

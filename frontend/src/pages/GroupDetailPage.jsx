@@ -990,8 +990,8 @@ function SubgroupDocsRow({ subgroup }) {
 
   return (
     <div className="card" style={{ marginBottom: 12, padding: '14px 18px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
-        <div style={{ minWidth: 0, flex: 1 }}>
+      <div className="doc-card-row">
+        <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--white)' }}>{subgroup.name}</div>
           {hasZip && generatedAt && (
             <div style={{ fontSize: 11, color: 'var(--white-dim)', marginTop: 3 }}>
@@ -1002,7 +1002,7 @@ function SubgroupDocsRow({ subgroup }) {
             <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 3 }}>{error}</div>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button
             className="btn btn-primary btn-sm"
             onClick={handleGenerate}
@@ -1133,8 +1133,8 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
       {finalError && <div className="error-message">{finalError}</div>}
 
       <div className="card" style={{ marginBottom: 12, padding: '14px 18px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontSize: 13, color: 'var(--white)', fontWeight: 500 }}>
+        <div className="doc-card-row">
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontSize: 13, color: 'var(--white)', fontWeight: 500, flexWrap: 'wrap' }}>
             Дата подачи:
             <input
               type="date"
@@ -1145,7 +1145,7 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
               style={{ fontSize: 13, padding: '6px 10px', height: 32 }}
             />
           </label>
-          <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
               className="btn btn-primary btn-sm"
               onClick={handleFinalize}

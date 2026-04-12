@@ -6,10 +6,10 @@ const navItems = [
   { to: '/hotels', label: 'Отели', icon: '⊞', end: true },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ open, onClose }) {
   const { theme, toggleTheme } = useTheme();
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${open ? ' sidebar--open' : ''}`}>
       <div className="sidebar-logo">
         <span className="sidebar-logo-icon">⛩</span>
         <div>
@@ -28,6 +28,7 @@ export default function Sidebar() {
             className={({ isActive }) =>
               `sidebar-link${isActive ? ' active' : ''}`
             }
+            onClick={onClose}
           >
             <span className="sidebar-link-icon">{item.icon}</span>
             {item.label}
@@ -207,6 +208,21 @@ export default function Sidebar() {
           color: var(--white-dim);
           opacity: 0.5;
           font-family: var(--font-mono);
+        }
+
+        @media (max-width: 767px) {
+          .sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 1000;
+            height: 100vh;
+            transform: translateX(-100%);
+            transition: transform 0.25s ease;
+          }
+          .sidebar.sidebar--open {
+            transform: translateX(0);
+          }
         }
       `}</style>
     </aside>
