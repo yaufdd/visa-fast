@@ -102,7 +102,8 @@ input, textarea, select {
 /* Layout */
 .app-layout {
   display: flex;
-  height: 100vh;
+  height: 100vh; /* fallback */
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -567,12 +568,13 @@ select.form-input {
 
   .main-content {
     width: 100%;
-    min-height: 100vh;
+    min-height: 100vh; /* fallback */
+    min-height: 100dvh;
   }
 
-  /* Page container: tighter padding + top space for hamburger */
+  /* Page container: tighter padding + top space for hamburger + safe area bottom */
   .page-container {
-    padding: 56px 16px 24px;
+    padding: 56px 16px calc(24px + env(safe-area-inset-bottom, 20px));
   }
 
   /* Page header: stack vertically */

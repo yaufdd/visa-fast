@@ -61,7 +61,8 @@ export default function Sidebar({ open, onClose }) {
           border-right: 1px solid var(--border);
           display: flex;
           flex-direction: column;
-          height: 100vh;
+          height: 100vh; /* fallback */
+          height: 100dvh;
           position: sticky;
           top: 0;
         }
@@ -216,7 +217,8 @@ export default function Sidebar({ open, onClose }) {
             top: 0;
             left: 0;
             z-index: 1000;
-            height: 100vh;
+            height: 100vh; /* fallback */
+            height: 100dvh;
             transform: translateX(-100%);
             transition: transform 0.25s ease;
           }
