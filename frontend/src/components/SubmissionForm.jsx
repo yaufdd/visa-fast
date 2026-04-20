@@ -282,33 +282,105 @@ export default function SubmissionForm({
       <label className={`sf-field${err ? ' has-error' : ''}`} data-field="passport_number">
         <span className="sf-label">Номер загранпаспорта</span>
         <div className="sf-passport-input">
-          <input
-            id="passport-part1"
-            type="text"
-            inputMode="numeric"
-            value={part1}
-            onChange={onFirst}
-            placeholder="XX"
-            maxLength={2}
-            className="sf-passport-seg sf-passport-seg--short"
-            autoComplete="off"
-          />
+          <div className="sf-passport-col">
+            <input
+              id="passport-part1"
+              type="text"
+              inputMode="numeric"
+              value={part1}
+              onChange={onFirst}
+              maxLength={2}
+              className="sf-passport-seg sf-passport-seg--short"
+              autoComplete="off"
+            />
+            <span className="sf-passport-sublabel">Серия</span>
+          </div>
           <span className="sf-passport-sep">№</span>
-          <input
-            id="passport-part2"
-            type="text"
-            inputMode="numeric"
-            value={part2}
-            onChange={onSecond}
-            onKeyDown={onSecondKey}
-            placeholder="XXXXXXX"
-            maxLength={7}
-            className="sf-passport-seg sf-passport-seg--long"
-            autoComplete="off"
-          />
+          <div className="sf-passport-col">
+            <input
+              id="passport-part2"
+              type="text"
+              inputMode="numeric"
+              value={part2}
+              onChange={onSecond}
+              onKeyDown={onSecondKey}
+              maxLength={7}
+              className="sf-passport-seg sf-passport-seg--long"
+              autoComplete="off"
+            />
+            <span className="sf-passport-sublabel">Номер</span>
+          </div>
         </div>
-        {!err && <span className="sf-hint">Серия (2 цифры) и номер (7 цифр) — как в паспорте.</span>}
         {err && <span className="sf-error">{err}</span>}
+      </label>
+    );
+  };
+
+  // Segmented internal Russian passport: 4-digit series + 6-digit number,
+  // stored as separate fields internal_series / internal_number.
+  const internalPassportField = () => {
+    const serErr = errors.internal_series;
+    const numErr = errors.internal_number;
+    const err = serErr || numErr;
+    const series = (payload.internal_series || '').replace(/\D/g, '').slice(0, 4);
+    const number = (payload.internal_number || '').replace(/\D/g, '').slice(0, 6);
+
+    const onSeries = (e) => {
+      const v = e.target.value.replace(/\D/g, '').slice(0, 4);
+      setField('internal_series', v);
+      if (v.length === 4) {
+        const next = document.getElementById('internal-number');
+        if (next) next.focus();
+      }
+    };
+
+    const onNumber = (e) => {
+      const v = e.target.value.replace(/\D/g, '').slice(0, 6);
+      setField('internal_number', v);
+    };
+
+    const onNumberKey = (e) => {
+      if (e.key === 'Backspace' && !number) {
+        const prev = document.getElementById('internal-series');
+        if (prev) prev.focus();
+      }
+    };
+
+    return (
+      <label className={`sf-field${err ? ' has-error' : ''}`} data-field="internal_series">
+        <span className="sf-label">Серия и номер</span>
+        <div className="sf-passport-input">
+          <div className="sf-passport-col">
+            <input
+              id="internal-series"
+              type="text"
+              inputMode="numeric"
+              value={series}
+              onChange={onSeries}
+              maxLength={4}
+              className="sf-passport-seg sf-passport-seg--series"
+              autoComplete="off"
+            />
+            <span className="sf-passport-sublabel">Серия</span>
+          </div>
+          <span className="sf-passport-sep">№</span>
+          <div className="sf-passport-col">
+            <input
+              id="internal-number"
+              type="text"
+              inputMode="numeric"
+              value={number}
+              onChange={onNumber}
+              onKeyDown={onNumberKey}
+              maxLength={6}
+              className="sf-passport-seg sf-passport-seg--number"
+              autoComplete="off"
+            />
+            <span className="sf-passport-sublabel">Номер</span>
+          </div>
+        </div>
+        {serErr && <span className="sf-error">{serErr}</span>}
+        {numErr && !serErr && <span className="sf-error">{numErr}</span>}
       </label>
     );
   };
@@ -378,8 +450,7 @@ export default function SubmissionForm({
 
       <h2 className="sf-heading">Внутренний паспорт РФ</h2>
 
-      {textField('internal_series', 'Серия', { hint: '4 цифры' })}
-      {textField('internal_number', 'Номер', { hint: '6 цифр' })}
+      {internalPassportField()}
       {dateField('internal_issued_ru', 'Дата выдачи')}
       {textField('internal_issued_by_ru', 'Кем выдан')}
       {textareaField('reg_address_ru', 'Адрес регистрации')}

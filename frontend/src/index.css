@@ -908,8 +908,31 @@ select.form-input {
   width: 10ch;
 }
 
+.sf-passport-input input.sf-passport-seg--series {
+  width: 5ch;
+}
+
+.sf-passport-input input.sf-passport-seg--number {
+  width: 8ch;
+}
+
 .sf-passport-sep {
   opacity: 0.55;
   font-size: 1.1rem;
   user-select: none;
+  align-self: flex-start;
+  padding-top: 10px;
+}
+
+.sf-passport-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.sf-passport-sublabel {
+  font-size: 0.75rem;
+  opacity: 0.6;
+  letter-spacing: 0.02em;
 }
