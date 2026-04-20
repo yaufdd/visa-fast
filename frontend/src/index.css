@@ -876,32 +876,36 @@ select.form-input {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: auto;
 }
 
-.sf-passport-seg {
+.sf-passport-input input.sf-passport-seg {
+  flex: 0 0 auto;
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 1.05rem;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.18em;
   text-align: center;
-  padding: 10px 12px;
-  background: var(--input-bg, rgba(255, 255, 255, 0.04));
+  padding: 9px 10px;
+  background: var(--input-bg, var(--graphite, rgba(255, 255, 255, 0.04)));
   border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
-  border-radius: 8px;
+  border-radius: 6px;
   color: var(--white, #fff);
+  box-sizing: content-box;
+  min-width: 0;
 }
 
-.sf-passport-seg:focus {
+.sf-passport-input input.sf-passport-seg:focus {
   outline: none;
   border-color: var(--accent, #e04a4a);
   background: var(--input-bg-focus, rgba(255, 255, 255, 0.07));
 }
 
-.sf-passport-seg--short {
-  width: 5.5ch;
+.sf-passport-input input.sf-passport-seg--short {
+  width: 3ch;
 }
 
-.sf-passport-seg--long {
-  width: 14ch;
+.sf-passport-input input.sf-passport-seg--long {
+  width: 10ch;
 }
 
 .sf-passport-sep {
