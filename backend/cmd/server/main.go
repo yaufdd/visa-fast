@@ -109,10 +109,6 @@ func main() {
 		r.Put("/groups/{id}/status", api.UpdateGroupStatus(pool))
 		r.Put("/groups/{id}/notes", api.UpdateGroupNotes(pool))
 
-		// Uploads
-		r.Get("/groups/{id}/uploads", api.ListUploads(pool))
-		r.Post("/groups/{id}/uploads", api.UploadFile(pool, uploadsDir, anthropicKey))
-
 		// Parse (AI Pass 1 + auto-match)
 		if sheetsClient != nil {
 			r.Post("/groups/{id}/parse", api.ParseGroup(pool, anthropicKey, sheetsClient))
