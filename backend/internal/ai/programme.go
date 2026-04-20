@@ -98,11 +98,14 @@ func GenerateProgramme(ctx context.Context, apiKey string, in ProgrammeInput) ([
 
 	userMsg := "Trip data:\n\n```json\n" + string(body) + "\n```\n\nProduce the programme array."
 
+	// Note: claude-opus-4-7 deprecates the `temperature` parameter; the
+	// model uses its default sampling. `omitempty` on the struct field
+	// would also drop `0`, but omitting the line entirely makes the
+	// intent explicit.
 	req := anthropicRequest{
-		Model:       ModelOpusProgramme,
-		MaxTokens:   4096,
-		Temperature: 0.3,
-		System:      programmeSystemPrompt,
+		Model:     ModelOpusProgramme,
+		MaxTokens: 4096,
+		System:    programmeSystemPrompt,
 		Messages: []anthropicMessage{{
 			Role: "user",
 			Content: []anthropicContent{
