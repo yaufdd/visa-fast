@@ -24,6 +24,9 @@ services:
       dockerfile: Dockerfile.backend
     restart: unless-stopped
     env_file: .env
+    environment:
+      APP_SECRET: ${APP_SECRET}
+      APP_ENV: production
     volumes:
       - uploads:/app/uploads
     depends_on:
