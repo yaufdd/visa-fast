@@ -54,80 +54,10 @@ export async function deleteGroup(id) {
   if (!res.ok) throw new Error('Failed to delete group');
 }
 
-// Uploads
-export async function uploadFile(groupId, file, fileType, subgroupId = '') {
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('file_type', fileType || 'document');
-  if (subgroupId) formData.append('subgroup_id', subgroupId);
-  const res = await fetch(`${API}/api/groups/${groupId}/uploads`, {
-    method: 'POST',
-    body: formData,
-  });
-  if (!res.ok) throw new Error('Failed to upload file');
-  return res.json();
-}
-
-export async function getUploads(groupId) {
-  const res = await fetch(`${API}/api/groups/${groupId}/uploads`);
-  if (!res.ok) throw new Error('Failed to fetch uploads');
-  return res.json();
-}
-
-export async function parseDocuments(groupId) {
-  const res = await fetch(`${API}/api/groups/${groupId}/parse`, {
-    method: 'POST',
-  });
-  if (!res.ok) throw new Error('Failed to start parsing');
-  return res.json();
-}
-
-export async function parseGroup(groupId, notes = '') {
-  const url = new URL(`${API}/api/groups/${groupId}/parse`, window.location.origin);
-  if (notes.trim()) url.searchParams.set('notes', notes.trim());
-  const res = await fetch(url.toString(), { method: 'POST' });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Failed to parse group');
-  }
-  return res.json();
-}
-
-// Tourists (legacy helpers kept for compatibility)
+// Tourists
 export async function getTourists(groupId) {
   const res = await fetch(`${API}/api/groups/${groupId}/tourists`);
   if (!res.ok) throw new Error('Failed to fetch tourists');
-  return res.json();
-}
-
-export async function matchTourist(touristId, sheetRow) {
-  const res = await fetch(`${API}/api/tourists/${touristId}/match`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sheet_row: sheetRow }),
-  });
-  if (!res.ok) throw new Error('Failed to match tourist');
-  return res.json();
-}
-
-// Sheets rows
-export async function getSheetRows(q = '') {
-  const url = q.trim()
-    ? `${API}/api/sheets/rows?q=${encodeURIComponent(q.trim())}`
-    : `${API}/api/sheets/rows`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('Failed to fetch sheet rows');
-  return res.json();
-}
-
-// Tourists — new workflow
-export async function addTouristFromSheet(groupId, sheetRow, subgroupId = null) {
-  const res = await fetch(`${API}/api/groups/${groupId}/tourists`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sheet_row: sheetRow, subgroup_id: subgroupId || undefined }),
-  });
-  if (!res.ok) throw new Error('Failed to add tourist');
   return res.json();
 }
 
@@ -136,29 +66,25 @@ export async function deleteTourist(touristId) {
   if (!res.ok) throw new Error('Failed to delete tourist');
 }
 
-// Per-tourist uploads
+// Per-tourist uploads (ticket | voucher). Backend auto-parses on upload.
 export async function getTouristUploads(touristId) {
   const res = await fetch(`${API}/api/tourists/${touristId}/uploads`);
   if (!res.ok) throw new Error('Failed to fetch tourist uploads');
   return res.json();
 }
 
-export async function uploadTouristFile(touristId, file) {
+export async function uploadTouristFile(touristId, file, fileType) {
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('file_type', fileType);
   const res = await fetch(`${API}/api/tourists/${touristId}/uploads`, {
     method: 'POST',
     body: formData,
   });
-  if (!res.ok) throw new Error('Failed to upload tourist file');
-  return res.json();
-}
-
-export async function parseTourist(touristId) {
-  const res = await fetch(`${API}/api/tourists/${touristId}/parse`, {
-    method: 'POST',
-  });
-  if (!res.ok) throw new Error('Failed to start parsing');
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to upload tourist file');
+  }
   return res.json();
 }
 
@@ -280,17 +206,6 @@ export async function generateSubgroupDocuments(subgroupId) {
 
 export function getSubgroupDownloadUrl(subgroupId) {
   return `${API}/api/subgroups/${subgroupId}/download`;
-}
-
-export async function parseSubgroup(subgroupId, notes = '') {
-  const url = new URL(`${API}/api/subgroups/${subgroupId}/parse`, window.location.origin);
-  if (notes.trim()) url.searchParams.set('notes', notes.trim());
-  const res = await fetch(url.toString(), { method: 'POST' });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Failed to parse subgroup');
-  }
-  return res.json();
 }
 
 // Documents

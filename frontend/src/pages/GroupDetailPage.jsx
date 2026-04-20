@@ -5,14 +5,15 @@ import {
   getHotels, getSubgroupHotels, saveSubgroupHotels,
   finalizeGroup, getFinalDownloadUrl, getFinalStatus,
   generateSubgroupDocuments, getSubgroupDownloadUrl,
-  getTourists, addTouristFromSheet, deleteTourist,
-  uploadFile, getUploads,
-  getSheetRows,
+  getTourists, deleteTourist,
+  uploadTouristFile, getTouristUploads,
   getSubgroups, createSubgroup, updateSubgroup, deleteSubgroup,
-  assignTouristSubgroup, parseSubgroup, parseGroup,
+  assignTouristSubgroup,
   updateGroupStatus, deleteGroup,
 } from '../api/client';
 import StatusSection from '../components/StatusSection';
+import AddFromDBModal from '../components/AddFromDBModal';
+import FlightDataCard from '../components/FlightDataCard';
 
 // Folder-download icon.
 const FolderIcon = () => (
@@ -30,287 +31,252 @@ function formatDate(iso) {
   return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-function basename(filePath) {
-  if (!filePath) return '';
-  return filePath.split('/').pop().split('\\').pop();
+// Read a field from the tourist's submission_snapshot (raw JSON blob from DB).
+function snapshotOf(tourist) {
+  const raw = tourist?.submission_snapshot;
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  try { return JSON.parse(raw); } catch { return {}; }
 }
 
 function getTouristName(tourist) {
-  const row = tourist.matched_sheet_row || {};
-  return (
-    row['ФИО (латиницей, как в загранпаспорте)'] ||
-    row['ФИО (латиницей)'] ||
-    row['ФИО латиницей'] ||
-    tourist.raw_json?.name_lat ||
-    Object.values(row)[0] ||
-    '—'
-  );
+  const snap = snapshotOf(tourist);
+  return snap.name_lat || snap.name_cyr || '—';
 }
 
-// ── AddFromSheetModal ─────────────────────────────────────────────────────────
+// ── TouristUploadsBar — per-tourist ticket/voucher uploads ───────────────────
 
-function AddFromSheetModal({ groupId, subgroupId, onAdded, onClose }) {
-  const [query, setQuery] = useState('');
-  const [rows, setRows] = useState([]);
+function TouristUploadsBar({ touristId, onChanged }) {
+  const [uploads, setUploads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [selected, setSelected] = useState(new Set());
-  const [adding, setAdding] = useState(false);
-  const debounceRef = useRef(null);
+  const [uploadingType, setUploadingType] = useState(null);
+  const ticketRef = useRef(null);
+  const voucherRef = useRef(null);
 
-  const loadRows = useCallback((q) => {
-    setLoading(true);
-    setError(null);
-    getSheetRows(q)
-      .then(data => setRows(Array.isArray(data) ? data.map(i => i.row ?? i) : []))
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { loadRows(''); }, [loadRows]);
-
-  useEffect(() => {
-    if (!query.trim()) { loadRows(''); return; }
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => loadRows(query), 350);
-    return () => clearTimeout(debounceRef.current);
-  }, [query, loadRows]);
-
-  const toggleRow = (key) => setSelected(prev => {
-    const next = new Set(prev);
-    next.has(key) ? next.delete(key) : next.add(key);
-    return next;
-  });
-
-  const handleAdd = async () => {
-    if (selected.size === 0) return;
-    setAdding(true);
-    setError(null);
-    let added = 0;
-    let failErr = null;
+  const load = useCallback(async () => {
     try {
-      for (const k of selected) {
-        const row = JSON.parse(k);
-        try {
-          await addTouristFromSheet(groupId, row, subgroupId);
-          added += 1;
-        } catch (e) {
-          failErr = e;
-          break;
-        }
-      }
+      const data = await getTouristUploads(touristId);
+      setUploads(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setError(e.message);
     } finally {
-      // Always refresh so partial progress is visible even on mid-loop error.
-      if (added > 0) onAdded();
-      if (failErr) {
-        setError(`${failErr.message} (добавлено: ${added} из ${selected.size})`);
-        setAdding(false);
-      } else {
-        onClose();
+      setLoading(false);
+    }
+  }, [touristId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleUpload = async (file, fileType) => {
+    if (!file) return;
+    setUploadingType(fileType);
+    setError(null);
+    try {
+      const res = await uploadTouristFile(touristId, file, fileType);
+      if (res?.parse_error) {
+        setError(`Парсинг не удался: ${res.parse_error}`);
       }
+      await load();
+      onChanged?.();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setUploadingType(null);
     }
   };
 
+  const counts = uploads.reduce((acc, u) => {
+    acc[u.file_type] = (acc[u.file_type] || 0) + 1;
+    return acc;
+  }, {});
+
   return (
-    <div>
-      <div className="form-group" style={{ marginBottom: 16 }}>
-        <input
-          className="form-input"
-          type="text"
-          placeholder="Поиск по имени..."
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          autoFocus
-        />
-      </div>
-      {error && <div className="error-message" style={{ marginBottom: 12 }}>{error}</div>}
-      {loading ? (
-        <div className="loading-center" style={{ padding: 32 }}>
-          <div className="spinner" /><span style={{ color: 'var(--white-dim)', fontSize: 13 }}>Загрузка...</span>
-        </div>
-      ) : rows.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--white-dim)', fontSize: 13 }}>Ничего не найдено</div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 380, overflowY: 'auto', marginBottom: 16 }}>
-          {rows.map((row, i) => {
-            const name = row['ФИО (латиницей, как в загранпаспорте)'] || row['ФИО (латиницей)'] || row['ФИО латиницей'] || Object.values(row)[0] || '—';
-            const dob = row['Дата рождения'] || '';
-            const passport = row['З/паспорт'] || '';
-            const key = JSON.stringify(row);
-            const checked = selected.has(key);
-            return (
-              <label key={i} style={{
-                display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
-                background: checked ? 'var(--accent-dim)' : 'var(--graphite)',
-                border: `1px solid ${checked ? 'var(--accent)' : 'var(--border)'}`,
-                borderRadius: 7, cursor: 'pointer', color: 'var(--white)', transition: 'all 0.15s',
-              }}>
-                <input type="checkbox" checked={checked} onChange={() => toggleRow(key)}
-                  style={{ width: 16, height: 16, accentColor: 'var(--accent)', flexShrink: 0, cursor: 'pointer' }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>{name}</div>
-                  {(dob || passport) && (
-                    <div style={{ fontSize: 11, color: 'var(--white-dim)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
-                      {dob}{dob && passport ? ' · ' : ''}{passport}
-                    </div>
-                  )}
-                </div>
-              </label>
-            );
-          })}
-        </div>
-      )}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <span style={{ fontSize: 12, color: 'var(--white-dim)' }}>
-          {selected.size > 0 ? `Выбрано: ${selected.size}` : 'Выберите туристов'}
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginTop: 10,
+      }}
+    >
+      <span
+        style={{
+          fontSize: 11,
+          color: 'var(--white-dim)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+        }}
+      >
+        Сканы:
+      </span>
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm"
+        onClick={() => ticketRef.current?.click()}
+        disabled={loading || uploadingType === 'ticket'}
+      >
+        {uploadingType === 'ticket'
+          ? <><span className="spinner" /> Билет...</>
+          : `+ Билет${counts.ticket ? ` (${counts.ticket})` : ''}`}
+      </button>
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm"
+        onClick={() => voucherRef.current?.click()}
+        disabled={loading || uploadingType === 'voucher'}
+      >
+        {uploadingType === 'voucher'
+          ? <><span className="spinner" /> Ваучер...</>
+          : `+ Ваучер${counts.voucher ? ` (${counts.voucher})` : ''}`}
+      </button>
+      <input
+        ref={ticketRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png"
+        style={{ display: 'none' }}
+        onChange={(e) => { handleUpload(e.target.files?.[0], 'ticket'); e.target.value = ''; }}
+      />
+      <input
+        ref={voucherRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png"
+        style={{ display: 'none' }}
+        onChange={(e) => { handleUpload(e.target.files?.[0], 'voucher'); e.target.value = ''; }}
+      />
+      {error && (
+        <span style={{ fontSize: 11, color: 'var(--danger)', width: '100%' }}>
+          {error}
         </span>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-secondary btn-sm" onClick={onClose} disabled={adding}>Отмена</button>
-          <button className="btn btn-primary btn-sm" onClick={handleAdd} disabled={selected.size === 0 || adding}>
-            {adding ? <><span className="spinner" /> Добавляем...</> : `Добавить (${selected.size})`}
-          </button>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
 
-// ── TouristRow ────────────────────────────────────────────────────────────────
+// ── TouristCard — full per-tourist card (name + flight + uploads) ────────────
 
-function TouristRow({ tourist, onDelete, subgroups, onAssign }) {
+function TouristCard({ tourist, onDelete, subgroups, onAssign, onUpdated }) {
   const name = getTouristName(tourist);
-  const isParsed = !!(tourist.raw_json && Object.keys(tourist.raw_json).length > 0);
+  const snap = snapshotOf(tourist);
+  const dob = snap.birth_date || snap.date_of_birth;
+
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '8px 12px', background: 'var(--gray-dark)',
-      border: '1px solid var(--border)', borderRadius: 7, gap: 8,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
-        <div style={{
-          width: 26, height: 26, borderRadius: '50%', background: 'var(--gray)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 10, fontWeight: 700, color: 'var(--white-dim)', flexShrink: 0,
-        }}>
-          {name.charAt(0) || '?'}
-        </div>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
-          {tourist.matched_sheet_row?.['Дата рождения'] && (
-            <div style={{ fontSize: 11, color: 'var(--white-dim)', fontFamily: 'var(--font-mono)' }}>
-              {tourist.matched_sheet_row['Дата рождения']}
-            </div>
-          )}
-        </div>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-        {subgroups && subgroups.length > 0 && onAssign && (
-          <select
-            value=""
-            onChange={e => e.target.value && onAssign(tourist.id, e.target.value)}
+    <div
+      style={{
+        padding: '12px 14px',
+        background: 'var(--gray-dark)',
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+          <div
             style={{
-              background: 'var(--gray)', border: '1px solid var(--border)', borderRadius: 5,
-              color: 'var(--white-dim)', fontSize: 11, padding: '3px 6px', cursor: 'pointer',
+              width: 28, height: 28, borderRadius: '50%', background: 'var(--gray)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 11, fontWeight: 700, color: 'var(--white-dim)', flexShrink: 0,
             }}
           >
-            <option value="">→ в группу</option>
-            {subgroups.map(sg => <option key={sg.id} value={sg.id}>{sg.name}</option>)}
-          </select>
-        )}
-        <span style={{
-          padding: '2px 8px', borderRadius: 100, fontSize: 11, fontWeight: 500, whiteSpace: 'nowrap',
-          background: isParsed ? 'rgba(34,197,94,0.12)' : 'var(--gray)',
-          color: isParsed ? 'var(--success)' : 'var(--white-dim)',
-        }}>
-          {isParsed ? 'Распознан ✓' : 'Ожидает'}
-        </span>
-        <button
-          type="button"
-          onClick={onDelete}
-          title="Удалить"
-          aria-label="Удалить"
+            {name.charAt(0) || '?'}
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: 500,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {name}
+            </div>
+            {dob && (
+              <div
+                style={{
+                  fontSize: 11,
+                  color: 'var(--white-dim)',
+                  fontFamily: 'var(--font-mono)',
+                }}
+              >
+                {dob}
+              </div>
+            )}
+          </div>
+        </div>
+        <div
           style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            color: 'var(--white-dim)',
-            fontSize: 14,
-            lineHeight: 1,
-            padding: '4px 6px',
-            borderRadius: 4,
-            transition: 'color 0.15s, background 0.15s',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexShrink: 0,
           }}
-          onMouseEnter={e => { e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
-        >✕</button>
+        >
+          {subgroups && subgroups.length > 0 && onAssign && (
+            <select
+              value=""
+              onChange={(e) => e.target.value && onAssign(tourist.id, e.target.value)}
+              style={{
+                background: 'var(--gray)',
+                border: '1px solid var(--border)',
+                borderRadius: 5,
+                color: 'var(--white-dim)',
+                fontSize: 11,
+                padding: '3px 6px',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="">→ в группу</option>
+              {subgroups.map((sg) => (
+                <option key={sg.id} value={sg.id}>{sg.name}</option>
+              ))}
+            </select>
+          )}
+          <button
+            type="button"
+            onClick={onDelete}
+            title="Удалить"
+            aria-label="Удалить"
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: 'var(--white-dim)',
+              fontSize: 14,
+              lineHeight: 1,
+              padding: '4px 6px',
+              borderRadius: 4,
+            }}
+          >✕</button>
+        </div>
       </div>
+
+      <FlightDataCard tourist={tourist} onUpdated={onUpdated} />
+
+      <TouristUploadsBar touristId={tourist.id} onChanged={onUpdated} />
     </div>
   );
 }
 
 // ── GroupCard ─────────────────────────────────────────────────────────────────
 
-function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, onTouristDeleted, onRenamed, onDeleted }) {
+function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, onRenamed, onDeleted }) {
   const [expanded, setExpanded] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(group.name);
-
-  // Upload state
-  const [uploading, setUploading] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
-  const fileInputRef = useRef(null);
-
-  // Parse state
-  const [parsing, setParsing] = useState(false);
-  const [parseResult, setParseResult] = useState(null);
-  const [parseError, setParseError] = useState(null);
-  const [notes, setNotes] = useState('');
-  const [hotelsReloadKey, setHotelsReloadKey] = useState(0);
+  const [cardError, setCardError] = useState(null);
   const [hotelsExpanded, setHotelsExpanded] = useState(false);
 
   const tourists = allTourists.filter(t => t.subgroup_id === group.id);
-  const uploads = allUploads.filter(u => u.subgroup_id === group.id);
-
-  const handleFiles = async (files) => {
-    if (!files || files.length === 0) return;
-    setUploading(true);
-    try {
-      for (const file of Array.from(files)) {
-        await uploadFile(groupId, file, 'document', group.id);
-      }
-      onTouristAdded(); // reload uploads
-    } catch (e) {
-      setParseError(e.message);
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const handleParse = async () => {
-    setParsing(true);
-    setParseResult(null);
-    setParseError(null);
-    try {
-      const result = await parseSubgroup(group.id, notes);
-      // Collect detected hotels from all tourists in the result
-      const detectedHotels = [];
-      const seen = new Set();
-      for (const t of result.tourists || []) {
-        for (const h of t.result?.hotels_from_vouchers || []) {
-          const key = `${h.name}|${h.checkin}|${h.checkout}`;
-          if (!seen.has(key)) { seen.add(key); detectedHotels.push(h); }
-        }
-      }
-      setParseResult({ ...result, detectedHotels });
-      onTouristAdded(); // reload tourists
-      if (detectedHotels.length > 0) setHotelsReloadKey(k => k + 1);
-    } catch (e) {
-      setParseError(e.message);
-    } finally {
-      setParsing(false);
-    }
-  };
 
   const handleRename = async () => {
     if (!editName.trim() || editName === group.name) { setEditing(false); return; }
@@ -319,7 +285,7 @@ function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, on
       onRenamed(group.id, editName.trim());
       setEditing(false);
     } catch (e) {
-      setParseError(e.message);
+      setCardError(e.message);
     }
   };
 
@@ -329,7 +295,7 @@ function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, on
       await deleteSubgroup(group.id);
       onDeleted(group.id);
     } catch (e) {
-      setParseError(e.message);
+      setCardError(e.message);
     }
   };
 
@@ -402,29 +368,52 @@ function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, on
       {/* Body */}
       {expanded && (
         <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {parseError && <div className="error-message">{parseError}</div>}
+          {cardError && <div className="error-message">{cardError}</div>}
 
           {/* Tourist list */}
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <span style={{ fontSize: 12, color: 'var(--white-dim)', fontWeight: 500 }}>Туристы</span>
-              <button className="btn btn-secondary btn-sm" style={{ fontSize: 11 }} onClick={() => setShowAddModal(true)}>
-                + Добавить из таблицы
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: 8,
+              }}
+            >
+              <span style={{ fontSize: 12, color: 'var(--white-dim)', fontWeight: 500 }}>
+                Туристы
+              </span>
+              <button
+                className="btn btn-secondary btn-sm"
+                style={{ fontSize: 11 }}
+                onClick={() => setShowAddModal(true)}
+              >
+                + Добавить туриста
               </button>
             </div>
             {tourists.length === 0 ? (
-              <div style={{ padding: '10px 14px', border: '1px dashed var(--border)', borderRadius: 7, fontSize: 12, color: 'var(--white-dim)', textAlign: 'center' }}>
-                Нет туристов — добавьте из таблицы
+              <div
+                style={{
+                  padding: '10px 14px',
+                  border: '1px dashed var(--border)',
+                  borderRadius: 7,
+                  fontSize: 12,
+                  color: 'var(--white-dim)',
+                  textAlign: 'center',
+                }}
+              >
+                Нет туристов — добавьте из пула анкет
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                {tourists.map(t => (
-                  <TouristRow
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {tourists.map((t) => (
+                  <TouristCard
                     key={t.id}
                     tourist={t}
+                    onUpdated={onReload}
                     onDelete={async () => {
                       try { await deleteTourist(t.id); onTouristDeleted(t.id); }
-                      catch (e) { setParseError(e.message); }
+                      catch (e) { setCardError(e.message); }
                     }}
                   />
                 ))}
@@ -432,100 +421,10 @@ function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, on
             )}
           </div>
 
-          {/* File upload */}
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--white-dim)', fontWeight: 500, marginBottom: 8 }}>Файлы</div>
-            {uploads.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 8 }}>
-                {uploads.map((u, i) => (
-                  <span key={u.id || i} style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px',
-                    background: 'var(--gray)', border: '1px solid var(--border)', borderRadius: 5,
-                    fontSize: 11, color: 'var(--white-dim)', fontFamily: 'var(--font-mono)',
-                  }}>
-                    <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
-                      <path d="M9 1H3a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6L9 1z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-                      <path d="M9 1v5h5" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-                    </svg>
-                    {basename(u.file_path) || `файл ${i + 1}`}
-                  </span>
-                ))}
-              </div>
-            )}
-            <div
-              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={e => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
-              onClick={() => fileInputRef.current?.click()}
-              style={{
-                border: `1px dashed ${dragOver ? 'var(--accent)' : 'var(--border)'}`, borderRadius: 6,
-                padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
-                background: dragOver ? 'var(--accent-dim)' : 'transparent', transition: 'all 0.15s',
-              }}
-            >
-              {uploading
-                ? <><div className="spinner" style={{ flexShrink: 0 }} /><span style={{ fontSize: 12, color: 'var(--white-dim)' }}>Загрузка...</span></>
-                : <><svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, color: 'var(--white-dim)' }}>
-                    <path d="M8 11V3M8 3L5 6M8 3l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    <path d="M2 13h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                  </svg>
-                  <span style={{ fontSize: 12, color: 'var(--white-dim)' }}>
-                    {uploads.length === 0 ? 'Перетащите файлы или нажмите' : '+ Добавить ещё'}
-                  </span></>
-              }
-            </div>
-            <input ref={fileInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png"
-              style={{ display: 'none' }} onChange={e => { handleFiles(e.target.files); e.target.value = ''; }} />
-          </div>
-
-          {/* Notes + parse */}
-          <div>
-            <textarea
-              className="form-input"
-              rows={2}
-              placeholder="Уточнение (необязательно)..."
-              value={notes}
-              onChange={e => setNotes(e.target.value)}
-              style={{ resize: 'vertical', fontFamily: 'inherit', fontSize: 12, marginBottom: 8 }}
-            />
-            {parseResult && (
-              <div className="success-message" style={{ marginBottom: 8 }}>
-                <div>Распознано: {parseResult.count ?? parseResult.tourists?.length ?? '?'} туристов</div>
-                {parseResult.detectedHotels?.length > 0 && (
-                  <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
-                    Обнаружено отелей из ваучеров: {parseResult.detectedHotels.length} ↓
-                  </div>
-                )}
-              </div>
-            )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={handleParse}
-                disabled={parsing || uploads.length === 0}
-                title={uploads.length === 0 ? 'Сначала загрузите файлы' : ''}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-              >
-                {parsing
-                  ? <><span className="spinner" /> Распознавание...</>
-                  : <>
-                  Распознать
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
-                        <path d="M8 1.5l1.1 3.4 3.4 1.1-3.4 1.1L8 10.5 6.9 7.1 3.5 6l3.4-1.1L8 1.5z" fill="currentColor"/>
-                        <path d="M12.5 10l0.5 1.5L14.5 12l-1.5 0.5L12.5 14l-0.5-1.5L10.5 12l1.5-0.5L12.5 10z" fill="currentColor"/>
-                        <path d="M3 11.5l0.3 1 1 0.3-1 0.3L3 14.1l-0.3-1-1-0.3 1-0.3L3 11.5z" fill="currentColor"/>
-                      </svg>
-                      
-                    </>
-                }
-              </button>
-            </div>
-          </div>
-
           {/* Hotels for this subgroup — collapsible, collapsed by default */}
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
             <div
-              onClick={() => setHotelsExpanded(e => !e)}
+              onClick={() => setHotelsExpanded((e) => !e)}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -535,35 +434,44 @@ function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, on
                 marginBottom: hotelsExpanded ? 10 : 0,
               }}
             >
-              <span style={{
-                fontSize: 10,
-                color: 'var(--white-dim)',
-                transition: 'transform 0.2s',
-                display: 'inline-block',
-                transform: hotelsExpanded ? 'rotate(90deg)' : 'none',
-              }}>▶</span>
-              <span style={{
-                fontSize: 12,
-                color: 'var(--white-dim)',
-                fontWeight: 500,
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-              }}>
+              <span
+                style={{
+                  fontSize: 10,
+                  color: 'var(--white-dim)',
+                  transition: 'transform 0.2s',
+                  display: 'inline-block',
+                  transform: hotelsExpanded ? 'rotate(90deg)' : 'none',
+                }}
+              >▶</span>
+              <span
+                style={{
+                  fontSize: 12,
+                  color: 'var(--white-dim)',
+                  fontWeight: 500,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                }}
+              >
                 Отели группы
               </span>
             </div>
             {hotelsExpanded && (
-              <SubgroupHotelsSection subgroupId={group.id} reloadKey={hotelsReloadKey} />
+              <SubgroupHotelsSection subgroupId={group.id} />
             )}
           </div>
         </div>
       )}
 
-      <Modal open={showAddModal} onClose={() => setShowAddModal(false)} title={`Добавить в "${group.name}"`} width={560}>
-        <AddFromSheetModal
+      <Modal
+        open={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        title={`Добавить в "${group.name}"`}
+        width={560}
+      >
+        <AddFromDBModal
           groupId={groupId}
           subgroupId={group.id}
-          onAdded={onTouristAdded}
+          onAdded={onReload}
           onClose={() => setShowAddModal(false)}
         />
       </Modal>
@@ -576,7 +484,6 @@ function GroupCard({ group, groupId, allTourists, allUploads, onTouristAdded, on
 function GroupsTab({ groupId }) {
   const [subgroups, setSubgroups] = useState([]);
   const [tourists, setTourists] = useState([]);
-  const [uploads, setUploads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showNewForm, setShowNewForm] = useState(false);
@@ -585,14 +492,12 @@ function GroupsTab({ groupId }) {
 
   const load = useCallback(async () => {
     try {
-      const [sgs, ts, ups] = await Promise.all([
+      const [sgs, ts] = await Promise.all([
         getSubgroups(groupId),
         getTourists(groupId),
-        getUploads(groupId),
       ]);
       setSubgroups(Array.isArray(sgs) ? sgs : []);
       setTourists(Array.isArray(ts) ? ts : []);
-      setUploads(Array.isArray(ups) ? ups : []);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -672,8 +577,7 @@ function GroupsTab({ groupId }) {
               group={sg}
               groupId={groupId}
               allTourists={tourists}
-              allUploads={uploads}
-              onTouristAdded={load}
+              onReload={load}
               onTouristDeleted={handleTouristDeleted}
               onRenamed={handleRenamed}
               onDeleted={handleDeleted}
@@ -686,12 +590,13 @@ function GroupsTab({ groupId }) {
               <div style={{ fontSize: 12, color: 'var(--white-dim)', fontWeight: 500, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 Без группы ({unassigned.length})
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {unassigned.map(t => (
-                  <TouristRow
+                  <TouristCard
                     key={t.id}
                     tourist={t}
                     subgroups={subgroups}
+                    onUpdated={load}
                     onAssign={async (touristId, sgId) => {
                       try {
                         await assignTouristSubgroup(touristId, sgId);
@@ -716,7 +621,7 @@ function GroupsTab({ groupId }) {
 
 // ── SubgroupHotelsSection ─────────────────────────────────────────────────────
 
-function SubgroupHotelsSection({ subgroupId, reloadKey }) {
+function SubgroupHotelsSection({ subgroupId }) {
   const [groupHotels, setGroupHotels] = useState([]);
   const [allHotels, setAllHotels] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -740,7 +645,7 @@ function SubgroupHotelsSection({ subgroupId, reloadKey }) {
     }
   }, [subgroupId]);
 
-  useEffect(() => { loadAll(); }, [loadAll, reloadKey]);
+  useEffect(() => { loadAll(); }, [loadAll]);
 
   const selectedHotel = allHotels.find(h => String(h.id) === String(form.hotel_id));
 
