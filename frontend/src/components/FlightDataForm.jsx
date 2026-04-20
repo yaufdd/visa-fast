@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import Modal from './Modal';
+import { dmyToIso, isoToDmy } from '../utils/dates';
 
 // Shape of flight_data in DB (matches backend/internal/ai/ticket_parser.go):
 //   { arrival:   { flight_number, date, time, airport },
@@ -86,19 +87,19 @@ export default function FlightDataForm({ open, initial, onClose, onSave }) {
           <div className="form-group">
             <label className="form-label">Дата</label>
             <input
+              type="date"
               className="form-input"
-              value={leg.date}
-              onChange={update(setter)('date')}
-              placeholder="ДД.ММ.ГГГГ"
+              value={dmyToIso(leg.date)}
+              onChange={(e) => setter((prev) => ({ ...prev, date: isoToDmy(e.target.value) }))}
             />
           </div>
           <div className="form-group">
             <label className="form-label">Время</label>
             <input
+              type="time"
               className="form-input"
               value={leg.time}
               onChange={update(setter)('time')}
-              placeholder="ЧЧ:ММ"
             />
           </div>
           <div className="form-group" style={{ gridColumn: '1 / -1' }}>
