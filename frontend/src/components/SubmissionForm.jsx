@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { getConsentText } from '../api/client';
 import { ruToLatICAO } from '../utils/translit';
 import { dmyToIso, isoToDmy } from '../utils/dates';
-import { normalizePhone } from '../utils/phone';
+import { normalizePhone, phoneOnInput } from '../utils/phone';
 
 // Flat submission form. Field names MUST match the backend "payload"
 // contract (see backend/internal/api/submissions.go and
@@ -236,9 +236,8 @@ export default function SubmissionForm({
         <input
           type="tel"
           value={payload[name] ?? ''}
-          onChange={(e) => setField(name, e.target.value)}
+          onChange={(e) => setField(name, phoneOnInput(e.target.value))}
           onBlur={handlePhoneBlur(name)}
-          placeholder="+7 (999) 123-45-67"
           autoComplete="off"
         />
         {err && <span className="sf-error">{err}</span>}
@@ -299,7 +298,7 @@ export default function SubmissionForm({
 
       <h2 className="sf-heading">Загранпаспорт</h2>
 
-      {textField('passport_number', 'Номер загранпаспорта', { hint: '9 символов' })}
+      {textField('passport_number', 'Номер и серия загранпаспорта', { hint: '9 символов' })}
       {selectField('passport_type_ru', 'Тип паспорта', [
         { value: 'Обычный', label: 'Обычный' },
         { value: 'Дипломатический', label: 'Дипломатический' },
