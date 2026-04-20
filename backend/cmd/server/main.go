@@ -130,9 +130,7 @@ func main() {
 
 		// Tourists
 		r.Get("/groups/{id}/tourists", api.ListTourists(pool))
-		r.Post("/groups/{id}/tourists", api.AddTouristFromSheet(pool))
 		r.Delete("/tourists/{id}", api.DeleteTourist(pool))
-		r.Post("/tourists/{id}/match", api.ConfirmMatch(pool))
 
 		// Per-tourist uploads & parse
 		r.Get("/tourists/{id}/uploads", api.ListTouristUploads(pool))
