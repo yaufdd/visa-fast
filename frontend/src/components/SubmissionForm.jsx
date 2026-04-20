@@ -2,30 +2,33 @@ import { useEffect, useMemo, useState } from 'react';
 import { getConsentText } from '../api/client';
 
 // Field definitions grouped into blocks. Each field has a name, label, and optional type/hint.
-// Field names match the backend "payload" shape expected by /api/submissions.
+// Field names match the backend "payload" contract (see backend/internal/api/submissions.go
+// and backend/internal/ai/assembler.go). All enum values are the Russian strings expected
+// by MapGender / MapMaritalStatus / MapPassportType / MapYesNo / CountryISO helpers.
 const BLOCKS = [
   {
     id: 'persons',
     title: 'Блок 1 · Личные данные',
     fields: [
-      { name: 'name_cyr', label: 'ФИО (кириллицей, как в паспорте РФ)' },
-      { name: 'name_lat', label: 'ФИО латиницей (как в загранпаспорте)', latin: true, hint: 'Только A–Z и пробелы' },
-      { name: 'sex', label: 'Пол', type: 'select', options: [
+      { name: 'name_cyr', label: 'ФИО кириллицей' },
+      { name: 'name_lat', label: 'ФИО латиницей', latin: true, hint: 'Только A–Z и пробелы' },
+      { name: 'gender_ru', label: 'Пол', type: 'select', options: [
         { value: '', label: '—' },
-        { value: 'M', label: 'Мужской (M)' },
-        { value: 'F', label: 'Женский (F)' },
+        { value: 'Мужской', label: 'Мужской' },
+        { value: 'Женский', label: 'Женский' },
       ] },
-      { name: 'date_of_birth', label: 'Дата рождения', type: 'date-hint', hint: 'ДД.ММ.ГГГГ' },
-      { name: 'place_of_birth', label: 'Место рождения (город, страна / USSR, если до 1991)' },
-      { name: 'nationality', label: 'Гражданство', placeholder: 'RUSSIA' },
-      { name: 'former_nationality', label: 'Прежнее гражданство', placeholder: 'USSR / NO' },
-      { name: 'marital_status', label: 'Семейное положение', type: 'select', options: [
+      { name: 'birth_date', label: 'Дата рождения', hint: 'ДД.ММ.ГГГГ' },
+      { name: 'marital_status_ru', label: 'Семейное положение', type: 'select', options: [
         { value: '', label: '—' },
-        { value: 'SINGLE', label: 'Не женат / не замужем' },
-        { value: 'MARRIED', label: 'Женат / замужем' },
-        { value: 'DIVORCED', label: 'В разводе' },
-        { value: 'WIDOWED', label: 'Вдовец / вдова' },
+        { value: 'Холост/не замужем', label: 'Холост / не замужем' },
+        { value: 'Женат/замужем', label: 'Женат / замужем' },
+        { value: 'Вдовец/вдова', label: 'Вдовец / вдова' },
+        { value: 'Разведен(а)', label: 'Разведён(а)' },
       ] },
+      { name: 'place_of_birth_ru', label: 'Место рождения' },
+      { name: 'nationality_ru', label: 'Гражданство', placeholder: 'Россия' },
+      { name: 'former_nationality_ru', label: 'Прежнее гражданство (опционально)', placeholder: 'USSR / NO' },
+      { name: 'maiden_name_ru', label: 'Девичья фамилия (опционально)' },
     ],
   },
   {
@@ -33,9 +36,14 @@ const BLOCKS = [
     title: 'Блок 2 · Загранпаспорт',
     fields: [
       { name: 'passport_number', label: 'Номер загранпаспорта', hint: '9 символов' },
-      { name: 'passport_issue_date', label: 'Дата выдачи', type: 'date-hint', hint: 'ДД.ММ.ГГГГ' },
-      { name: 'passport_expiry_date', label: 'Дата окончания', type: 'date-hint', hint: 'ДД.ММ.ГГГГ' },
-      { name: 'passport_issued_by', label: 'Кем выдан' },
+      { name: 'passport_type_ru', label: 'Тип паспорта', type: 'select', options: [
+        { value: 'Обычный', label: 'Обычный' },
+        { value: 'Дипломатический', label: 'Дипломатический' },
+        { value: 'Служебный', label: 'Служебный' },
+      ] },
+      { name: 'issue_date', label: 'Дата выдачи', hint: 'ДД.ММ.ГГГГ' },
+      { name: 'expiry_date', label: 'Дата окончания', hint: 'ДД.ММ.ГГГГ' },
+      { name: 'issued_by_ru', label: 'Кем выдан' },
     ],
   },
   {
@@ -44,40 +52,51 @@ const BLOCKS = [
     fields: [
       { name: 'internal_series', label: 'Серия', hint: '4 цифры' },
       { name: 'internal_number', label: 'Номер', hint: '6 цифр' },
-      { name: 'internal_issue_date', label: 'Дата выдачи', type: 'date-hint', hint: 'ДД.ММ.ГГГГ' },
-      { name: 'internal_issued_by', label: 'Кем выдан' },
-      { name: 'internal_code', label: 'Код подразделения' },
+      { name: 'internal_issued_ru', label: 'Дата выдачи', hint: 'ДД.ММ.ГГГГ' },
+      { name: 'internal_issued_by_ru', label: 'Кем выдан' },
+      { name: 'reg_address_ru', label: 'Адрес регистрации', type: 'textarea' },
     ],
   },
   {
     id: 'contacts',
     title: 'Блок 4 · Контакты',
     fields: [
-      { name: 'home_address', label: 'Адрес регистрации', type: 'textarea' },
+      { name: 'home_address_ru', label: 'Домашний адрес', type: 'textarea' },
       { name: 'phone', label: 'Телефон', placeholder: '+7...' },
-      { name: 'email', label: 'Email', type: 'email' },
     ],
   },
   {
     id: 'work',
     title: 'Блок 5 · Работа',
     fields: [
-      { name: 'occupation', label: 'Должность / профессия' },
-      { name: 'employer_name', label: 'Название организации' },
-      { name: 'employer_address', label: 'Адрес организации', type: 'textarea' },
-      { name: 'employer_phone', label: 'Телефон организации' },
+      { name: 'occupation_ru', label: 'Должность' },
+      { name: 'employer_ru', label: 'Название организации' },
+      { name: 'employer_address_ru', label: 'Адрес организации', type: 'textarea' },
     ],
   },
   {
     id: 'history',
-    title: 'Блок 6 · История поездок',
+    title: 'Блок 6 · История',
     fields: [
-      { name: 'prev_japan_visits', label: 'Предыдущие визиты в Японию (даты / нет)', type: 'textarea' },
-      { name: 'prev_visa_refusals', label: 'Отказы в визе (страна, дата / нет)', type: 'textarea' },
-      { name: 'relatives_in_japan', label: 'Родственники в Японии (ФИО, адрес / нет)', type: 'textarea' },
+      { name: 'been_to_japan_ru', label: 'Был ли в Японии', type: 'select', options: [
+        { value: 'Нет', label: 'Нет' },
+        { value: 'Да', label: 'Да' },
+      ] },
+      { name: 'previous_visits_ru', label: 'Даты прошлых визитов', type: 'textarea' },
+      { name: 'criminal_record_ru', label: 'Была ли судимость', type: 'select', options: [
+        { value: 'Нет', label: 'Нет' },
+        { value: 'Да', label: 'Да' },
+      ] },
     ],
   },
 ];
+
+// Defaults for selects that should not start empty.
+const SELECT_DEFAULTS = {
+  passport_type_ru: 'Обычный',
+  been_to_japan_ru: 'Нет',
+  criminal_record_ru: 'Нет',
+};
 
 function sanitizeLatin(value) {
   return value.toUpperCase().replace(/[^A-Z\s]/g, '');
@@ -113,7 +132,9 @@ export default function SubmissionForm({
   const initialState = useMemo(() => {
     const base = {};
     for (const block of BLOCKS) {
-      for (const f of block.fields) base[f.name] = '';
+      for (const f of block.fields) {
+        base[f.name] = SELECT_DEFAULTS[f.name] ?? '';
+      }
     }
     return { ...base, ...initialPayload };
   }, [initialPayload]);
