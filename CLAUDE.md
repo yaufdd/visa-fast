@@ -15,10 +15,14 @@ fujitravel-admin/
 ├── backend/
 │   ├── cmd/server/main.go
 │   ├── internal/
-│   │   ├── api/        — HTTP handlers (groups, subgroups, hotels, submissions, tourists, flight_data, generate, uploads)
+│   │   ├── api/        — HTTP handlers (auth, public slug, groups, subgroups, hotels, submissions, tourists, flight_data, generate, uploads)
+│   │   ├── auth/       — argon2id password hashing, session tokens, org slug generation
 │   │   ├── ai/         — Claude API (translate.go, programme.go, assembler.go, ticket_parser.go, voucher_parser.go)
 │   │   ├── consent/    — consent / form-submission helpers
+│   │   ├── db/         — tenant-aware repository functions (every query takes orgID)
 │   │   ├── docgen/     — document generation (calls Python)
+│   │   ├── middleware/ — requireAuth + in-memory rate limiter
+│   │   ├── server/     — chi router builder (shared by main and integration tests)
 │   │   ├── storage/    — file uploads
 │   │   └── translit/   — Cyrillic transliteration helpers
 │   ├── migrations/     — golang-migrate SQL files
@@ -57,20 +61,27 @@ fujitravel-admin/
 | Frontend | React + Vite |
 | AI | Anthropic Claude API — Haiku 4.5 for `translate.go`, Opus 4.7 for `programme.go`, Opus 4.6 for scan parsers (`ticket_parser.go`, `voucher_parser.go`) |
 | Doc generation | python-docx + fillpdf (Python subprocess) |
+| Auth | session cookie + argon2id passwords, row-level multi-tenancy via `org_id` |
 
 ---
 
 ## Environment Variables
 
 ```env
-# Local dev
+# Required
 DATABASE_URL=postgres://fuji:fuji123@localhost:5435/fujitravel?sslmode=disable
 ANTHROPIC_API_KEY=...
+APP_SECRET=<32-byte-base64 from `openssl rand -base64 32`>
+
+# Optional
+APP_ENV=production      # dev|production — controls Secure cookie flag
 UPLOADS_DIR=./uploads
 PORT=8080
 DOCGEN_SCRIPT=../../docgen/generate.py
 DOCGEN_PDF_TEMPLATE=./templates/anketa_template.pdf
 ```
+
+Backend **refuses to start** without `APP_SECRET` set.
 
 > PostgreSQL runs on port **5435** locally (non-standard, 5432/5433 were occupied).
 > Inside docker-compose.prod.yml the backend reaches it via the service name `db:5432`.
@@ -90,10 +101,31 @@ DOCGEN_PDF_TEMPLATE=./templates/anketa_template.pdf
 
 ---
 
+## SaaS Model
+
+Every travel agency is an `organizations` row with a unique random 7-char
+`slug`. Users (managers) belong to one org; sessions are scoped to that
+user + org. Every owned entity (`groups`, `subgroups`, `tourists`,
+`tourist_submissions`, `group_hotels`, `documents`, `uploads`) has an
+`org_id NOT NULL`. Hotels are split: `org_id IS NULL` = global catalog
+(seed data, read-only for all orgs), `org_id` set = private catalog of
+that agency.
+
+- Agencies self-register at `/register` (rate-limited: 5/15min/IP).
+- Tourists fill the form at `/form/<slug>` — that slug resolves to an
+  `org_id`; their submission lands only in that agency's pool.
+- Every protected handler reads `middleware.OrgID(r.Context())` and
+  delegates SQL to `backend/internal/db/*.go` functions that take
+  `orgID` as a mandatory parameter (compiler-enforced — cannot be
+  forgotten).
+- Cross-org access returns `404 not found` (never `403`) to prevent
+  ID enumeration.
+
 ## Data Flow
 
 ```
-1. Tourist (or manager) submits form at /form → POST /api/submissions → tourist_submissions row.
+0. Agency registers at /register or signs in at /login.
+1. Tourist (or manager) submits form at /form/<slug> → POST /api/public/submissions/<slug> → tourist_submissions row with org_id.
 2. Manager creates a group, picks submissions from the pool via AddFromDBModal
    → POST /api/submissions/:id/attach → tourists row with submission_snapshot.
 3. Manager optionally:
@@ -161,8 +193,8 @@ with the name from the voucher (city left empty). Manager can edit later.
 
 ## Running locally
 
-Required env vars: `DATABASE_URL`, `ANTHROPIC_API_KEY`. Optional: `UPLOADS_DIR`,
-`PORT`, `DOCGEN_SCRIPT`, `DOCGEN_PDF_TEMPLATE`. No Google credentials are needed.
+Required env vars: `DATABASE_URL`, `ANTHROPIC_API_KEY`, `APP_SECRET`. Optional:
+`APP_ENV`, `UPLOADS_DIR`, `PORT`, `DOCGEN_SCRIPT`, `DOCGEN_PDF_TEMPLATE`.
 
 ```bash
 # Start DB
