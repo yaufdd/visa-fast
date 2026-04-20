@@ -100,12 +100,6 @@ export async function getTourists(groupId) {
   return res.json();
 }
 
-export async function searchSheets(query) {
-  const res = await fetch(`${API}/api/sheets/search?q=${encodeURIComponent(query)}`);
-  if (!res.ok) throw new Error('Failed to search sheets');
-  return res.json();
-}
-
 export async function matchTourist(touristId, sheetRow) {
   const res = await fetch(`${API}/api/tourists/${touristId}/match`, {
     method: 'POST',
@@ -330,5 +324,80 @@ export function getFinalDownloadUrl(groupId) {
 export async function getFinalStatus(groupId) {
   const res = await fetch(`${API}/api/groups/${groupId}/final/status`);
   if (!res.ok) throw new Error('Failed to fetch final status');
+  return res.json();
+}
+
+// Submissions (form-workflow)
+async function errFromRes(res) {
+  const data = await res.json().catch(() => ({}));
+  return new Error(data.error || `Request failed (${res.status})`);
+}
+
+export async function createSubmission(payload, consentAccepted, source = 'tourist') {
+  const res = await fetch(`${API}/api/submissions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ payload, consent_accepted: consentAccepted, source }),
+  });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+export async function listSubmissions(q = '', status = '') {
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (status) params.set('status', status);
+  const qs = params.toString();
+  const url = qs ? `${API}/api/submissions?${qs}` : `${API}/api/submissions`;
+  const res = await fetch(url);
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+export async function getSubmission(id) {
+  const res = await fetch(`${API}/api/submissions/${id}`);
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+export async function updateSubmission(id, payload) {
+  const res = await fetch(`${API}/api/submissions/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ payload }),
+  });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+export async function archiveSubmission(id) {
+  const res = await fetch(`${API}/api/submissions/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+export async function attachSubmission(id, groupId, subgroupId = null) {
+  const res = await fetch(`${API}/api/submissions/${id}/attach`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ group_id: groupId, subgroup_id: subgroupId }),
+  });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+export async function getConsentText() {
+  const res = await fetch(`${API}/api/consent/text`);
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+export async function updateFlightData(touristId, data) {
+  const res = await fetch(`${API}/api/tourists/${touristId}/flight_data`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
