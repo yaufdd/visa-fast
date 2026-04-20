@@ -1,8 +1,9 @@
 import { useState, useCallback } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { AuthProvider } from './auth/AuthContext';
+import { AuthProvider, useAuth } from './auth/AuthContext';
 import RequireAuth from './auth/RequireAuth';
 import Sidebar from './components/Sidebar';
+import CopyFormLinkButton from './components/CopyFormLinkButton';
 import GroupsPage from './pages/GroupsPage';
 import GroupDetailPage from './pages/GroupDetailPage';
 import HotelsPage from './pages/HotelsPage';
@@ -16,6 +17,23 @@ import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import PublicFormFallbackPage from './pages/PublicFormFallbackPage';
 
+function AdminShellHeader() {
+  const { user, org, logout } = useAuth();
+  return (
+    <header className="admin-shell-header">
+      <div className="org-info">
+        <strong>{org?.name}</strong>
+        <span className="muted">/{org?.slug}</span>
+      </div>
+      <div className="shell-actions">
+        <CopyFormLinkButton />
+        <span className="user-email">{user?.email}</span>
+        <button onClick={logout} className="btn-outline">Выйти</button>
+      </div>
+    </header>
+  );
+}
+
 function AdminShell({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
@@ -28,6 +46,7 @@ function AdminShell({ children }) {
         <div className="sidebar-backdrop" onClick={closeSidebar} />
       )}
       <main className="main-content">
+        <AdminShellHeader />
         <button
           className="hamburger-btn"
           onClick={toggleSidebar}
