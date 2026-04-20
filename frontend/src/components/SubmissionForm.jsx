@@ -245,6 +245,74 @@ export default function SubmissionForm({
     );
   };
 
+  // Segmented passport number: 2 digits + 7 digits = 9 total.
+  // Stores the concatenated 9-digit string in payload.passport_number.
+  const passportNumberField = () => {
+    const err = errors.passport_number;
+    const raw = (payload.passport_number || '').replace(/\D/g, '').slice(0, 9);
+    const part1 = raw.slice(0, 2);
+    const part2 = raw.slice(2, 9);
+
+    const setCombined = (p1, p2) => {
+      setField('passport_number', (p1 + p2).slice(0, 9));
+    };
+
+    const onFirst = (e) => {
+      const v = e.target.value.replace(/\D/g, '').slice(0, 2);
+      setCombined(v, part2);
+      if (v.length === 2) {
+        const next = document.getElementById('passport-part2');
+        if (next) next.focus();
+      }
+    };
+
+    const onSecond = (e) => {
+      const v = e.target.value.replace(/\D/g, '').slice(0, 7);
+      setCombined(part1, v);
+    };
+
+    const onSecondKey = (e) => {
+      if (e.key === 'Backspace' && !part2) {
+        const prev = document.getElementById('passport-part1');
+        if (prev) prev.focus();
+      }
+    };
+
+    return (
+      <label className={`sf-field${err ? ' has-error' : ''}`} data-field="passport_number">
+        <span className="sf-label">Номер загранпаспорта</span>
+        <div className="sf-passport-input">
+          <input
+            id="passport-part1"
+            type="text"
+            inputMode="numeric"
+            value={part1}
+            onChange={onFirst}
+            placeholder="XX"
+            maxLength={2}
+            className="sf-passport-seg sf-passport-seg--short"
+            autoComplete="off"
+          />
+          <span className="sf-passport-sep">№</span>
+          <input
+            id="passport-part2"
+            type="text"
+            inputMode="numeric"
+            value={part2}
+            onChange={onSecond}
+            onKeyDown={onSecondKey}
+            placeholder="XXXXXXX"
+            maxLength={7}
+            className="sf-passport-seg sf-passport-seg--long"
+            autoComplete="off"
+          />
+        </div>
+        {!err && <span className="sf-hint">Серия (2 цифры) и номер (7 цифр) — как в паспорте.</span>}
+        {err && <span className="sf-error">{err}</span>}
+      </label>
+    );
+  };
+
   return (
     <form className="submission-form" onSubmit={handleSubmit} noValidate>
       <h2 className="sf-heading">Личные данные</h2>
@@ -298,7 +366,7 @@ export default function SubmissionForm({
 
       <h2 className="sf-heading">Загранпаспорт</h2>
 
-      {textField('passport_number', 'Номер и серия загранпаспорта', { hint: '9 символов' })}
+      {passportNumberField()}
       {selectField('passport_type_ru', 'Тип паспорта', [
         { value: 'Обычный', label: 'Обычный' },
         { value: 'Дипломатический', label: 'Дипломатический' },
