@@ -1,5 +1,5 @@
 -- Pool of form submissions (the "tourist list" the manager picks from)
-CREATE TABLE tourist_submissions (
+CREATE TABLE IF NOT EXISTS tourist_submissions (
   id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   payload               JSONB NOT NULL,
   consent_accepted      BOOLEAN NOT NULL,
@@ -12,12 +12,12 @@ CREATE TABLE tourist_submissions (
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_submissions_status   ON tourist_submissions(status);
-CREATE INDEX idx_submissions_created  ON tourist_submissions(created_at DESC);
-CREATE INDEX idx_submissions_name_lat ON tourist_submissions ((payload ->> 'name_lat'));
+CREATE INDEX IF NOT EXISTS idx_tourist_submissions_status   ON tourist_submissions(status);
+CREATE INDEX IF NOT EXISTS idx_tourist_submissions_created  ON tourist_submissions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tourist_submissions_name_lat ON tourist_submissions ((payload ->> 'name_lat'));
 
 -- Dedup guard: same foreign passport submitted twice on the same day while pending
-CREATE UNIQUE INDEX idx_submissions_dedup ON tourist_submissions
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tourist_submissions_dedup ON tourist_submissions
   ((payload ->> 'passport_number'), ((created_at AT TIME ZONE 'UTC')::DATE))
   WHERE status = 'pending';
 
@@ -29,12 +29,15 @@ ALTER TABLE tourists
 
 -- Add new columns
 ALTER TABLE tourists
-  ADD COLUMN submission_id       UUID REFERENCES tourist_submissions(id) ON DELETE SET NULL,
-  ADD COLUMN submission_snapshot JSONB,
-  ADD COLUMN flight_data         JSONB,
-  ADD COLUMN translations        JSONB;
+  ADD COLUMN IF NOT EXISTS submission_id       UUID REFERENCES tourist_submissions(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS submission_snapshot JSONB,
+  ADD COLUMN IF NOT EXISTS flight_data         JSONB,
+  ADD COLUMN IF NOT EXISTS translations        JSONB;
 
--- Clean legacy passport-scan upload rows before tightening file_type constraint
+-- Pre-launch cleanup: drop legacy passport-scan upload rows before tightening the
+-- file_type constraint. This is safe ONLY because the feature has not launched yet
+-- and these rows are test data. Do NOT copy this DELETE into any post-launch
+-- migration without a proper data-migration plan.
 DELETE FROM uploads WHERE file_type NOT IN ('ticket', 'voucher');
 
 ALTER TABLE uploads
