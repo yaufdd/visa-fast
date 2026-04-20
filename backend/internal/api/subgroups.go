@@ -10,6 +10,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"fujitravel-admin/backend/internal/db"
+	"fujitravel-admin/backend/internal/middleware"
 )
 
 type Subgroup struct {
@@ -23,27 +26,26 @@ type Subgroup struct {
 }
 
 // ListSubgroups handles GET /api/groups/:id/subgroups
-func ListSubgroups(db *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
+func ListSubgroups(pool *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		groupID := chi.URLParam(r, "id")
-		rows, err := db.Query(r.Context(),
-			`SELECT id, group_id, name, sort_order, created_at
-			   FROM subgroups WHERE group_id = $1 ORDER BY sort_order, created_at`,
-			groupID)
+
+		items, err := db.ListSubgroups(r.Context(), pool, orgID, groupID)
 		if err != nil {
 			slog.Error("list subgroups", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
-		defer rows.Close()
 
-		var subgroups []Subgroup
-		for rows.Next() {
-			var s Subgroup
-			if err := rows.Scan(&s.ID, &s.GroupID, &s.Name, &s.SortOrder, &s.CreatedAt); err != nil {
-				slog.Error("scan subgroup", "err", err)
-				writeError(w, http.StatusInternalServerError, "scan error")
-				return
+		subgroups := make([]Subgroup, 0, len(items))
+		for _, it := range items {
+			s := Subgroup{
+				ID:        it.ID,
+				GroupID:   it.GroupID,
+				Name:      it.Name,
+				SortOrder: it.SortOrder,
+				CreatedAt: it.CreatedAt,
 			}
 			// Check if a generated ZIP exists on disk.
 			zipPath := filepath.Join(uploadsDir, s.GroupID, "subgroup_"+s.ID+".zip")
@@ -54,16 +56,14 @@ func ListSubgroups(db *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 			}
 			subgroups = append(subgroups, s)
 		}
-		if subgroups == nil {
-			subgroups = []Subgroup{}
-		}
 		writeJSON(w, http.StatusOK, subgroups)
 	}
 }
 
 // CreateSubgroup handles POST /api/groups/:id/subgroups
-func CreateSubgroup(db *pgxpool.Pool) http.HandlerFunc {
+func CreateSubgroup(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		groupID := chi.URLParam(r, "id")
 
 		var body struct {
@@ -75,42 +75,49 @@ func CreateSubgroup(db *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		var s Subgroup
-		err := db.QueryRow(r.Context(),
-			`INSERT INTO subgroups (group_id, name, sort_order)
-			 VALUES ($1, $2, $3) RETURNING id, group_id, name, sort_order, created_at`,
-			groupID, body.Name, body.SortOrder,
-		).Scan(&s.ID, &s.GroupID, &s.Name, &s.SortOrder, &s.CreatedAt)
+		id, err := db.CreateSubgroup(r.Context(), pool, orgID, groupID, body.Name)
 		if err != nil {
 			slog.Error("create subgroup", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
-		writeJSON(w, http.StatusCreated, s)
+		if id == "" {
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, Subgroup{
+			ID:        id,
+			GroupID:   groupID,
+			Name:      body.Name,
+			SortOrder: body.SortOrder,
+			CreatedAt: time.Now(),
+		})
 	}
 }
 
 // UpdateSubgroup handles PUT /api/subgroups/:id
-func UpdateSubgroup(db *pgxpool.Pool) http.HandlerFunc {
+func UpdateSubgroup(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		id := chi.URLParam(r, "id")
 
 		var body struct {
-			Name string `json:"name"`
+			Name      string `json:"name"`
+			SortOrder int    `json:"sort_order"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" {
 			writeError(w, http.StatusBadRequest, "field 'name' is required")
 			return
 		}
 
-		tag, err := db.Exec(r.Context(),
-			`UPDATE subgroups SET name = $1 WHERE id = $2`, body.Name, id)
+		ok, err := db.UpdateSubgroup(r.Context(), pool, orgID, id, body.Name, body.SortOrder)
 		if err != nil {
 			slog.Error("update subgroup", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
-		if tag.RowsAffected() == 0 {
+		if !ok {
 			writeError(w, http.StatusNotFound, "subgroup not found")
 			return
 		}
@@ -120,16 +127,18 @@ func UpdateSubgroup(db *pgxpool.Pool) http.HandlerFunc {
 
 // DeleteSubgroup handles DELETE /api/subgroups/:id
 // Tourists in this subgroup have their subgroup_id set to NULL (they stay in the group).
-func DeleteSubgroup(db *pgxpool.Pool) http.HandlerFunc {
+func DeleteSubgroup(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		id := chi.URLParam(r, "id")
-		tag, err := db.Exec(r.Context(), `DELETE FROM subgroups WHERE id = $1`, id)
+
+		ok, err := db.DeleteSubgroup(r.Context(), pool, orgID, id)
 		if err != nil {
 			slog.Error("delete subgroup", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
-		if tag.RowsAffected() == 0 {
+		if !ok {
 			writeError(w, http.StatusNotFound, "subgroup not found")
 			return
 		}
@@ -139,8 +148,9 @@ func DeleteSubgroup(db *pgxpool.Pool) http.HandlerFunc {
 
 // AssignTouristSubgroup handles PUT /api/tourists/:id/subgroup
 // Body: {"subgroup_id": "uuid"} or {"subgroup_id": null} to unassign.
-func AssignTouristSubgroup(db *pgxpool.Pool) http.HandlerFunc {
+func AssignTouristSubgroup(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		touristID := chi.URLParam(r, "id")
 
 		var body struct {
@@ -151,9 +161,27 @@ func AssignTouristSubgroup(db *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		tag, err := db.Exec(r.Context(),
-			`UPDATE tourists SET subgroup_id = $1, updated_at = now() WHERE id = $2`,
-			body.SubgroupID, touristID)
+		// If assigning, verify the target subgroup belongs to the same org.
+		// If unassigning (nil), just scope the tourist update by org.
+		if body.SubgroupID != nil {
+			var exists bool
+			if err := pool.QueryRow(r.Context(),
+				`SELECT EXISTS(SELECT 1 FROM subgroups WHERE id = $1 AND org_id = $2)`,
+				*body.SubgroupID, orgID).Scan(&exists); err != nil {
+				slog.Error("verify subgroup org", "err", err)
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
+			if !exists {
+				writeError(w, http.StatusNotFound, "subgroup not found")
+				return
+			}
+		}
+
+		tag, err := pool.Exec(r.Context(),
+			`UPDATE tourists SET subgroup_id = $1, updated_at = now()
+			   WHERE id = $2 AND org_id = $3`,
+			body.SubgroupID, touristID, orgID)
 		if err != nil {
 			slog.Error("assign tourist subgroup", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
