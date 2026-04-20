@@ -19,3 +19,57 @@ export function ruToLatICAO(s) {
   }
   return out;
 }
+
+// Naive reverse mapping Latin → Cyrillic. Lossy (Й/И, Ё/Е, Ь collapse),
+// but good enough for auto-filling the Cyrillic field while the tourist
+// types their passport Latin name. Manager can fix edge cases in admin.
+// Multi-letter combos are checked longest-first.
+const MULTI_REVERSE = [
+  ['SHCH', 'Щ'],
+  ['ZH', 'Ж'],
+  ['KH', 'Х'],
+  ['CH', 'Ч'],
+  ['SH', 'Ш'],
+  ['TS', 'Ц'],
+  ['TC', 'Ц'],
+  ['IE', 'Ъ'],
+  ['IU', 'Ю'],
+  ['YU', 'Ю'],
+  ['IA', 'Я'],
+  ['YA', 'Я'],
+  ['YO', 'Ё'],
+];
+
+const SINGLE_REVERSE = {
+  A: 'А', B: 'Б', V: 'В', G: 'Г', D: 'Д', E: 'Е',
+  Z: 'З', I: 'И', K: 'К', L: 'Л', M: 'М', N: 'Н',
+  O: 'О', P: 'П', R: 'Р', S: 'С', T: 'Т', U: 'У',
+  F: 'Ф', Y: 'Ы', J: 'Й', H: 'Х',
+};
+
+export function latToCyr(s) {
+  if (!s) return '';
+  const upper = s.toUpperCase();
+  let out = '';
+  let i = 0;
+  while (i < upper.length) {
+    const ch = upper[i];
+    if (/\s/.test(ch) || ch === '-' || ch === '.' || ch === ',') {
+      out += ch; i++; continue;
+    }
+    let matched = false;
+    for (const [lat, cyr] of MULTI_REVERSE) {
+      if (upper.startsWith(lat, i)) {
+        out += cyr; i += lat.length; matched = true; break;
+      }
+    }
+    if (matched) continue;
+    if (SINGLE_REVERSE[ch]) { out += SINGLE_REVERSE[ch]; i++; continue; }
+    i++; // unknown char — skip
+  }
+  // Title-case the result: first letter of each word upper, rest lower.
+  return out
+    .split(/(\s+)/)
+    .map((w) => (w.trim() ? w[0] + w.slice(1).toLowerCase() : w))
+    .join('');
+}

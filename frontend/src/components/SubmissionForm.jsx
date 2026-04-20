@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getConsentText } from '../api/client';
-import { ruToLatICAO } from '../utils/translit';
+import { ruToLatICAO, latToCyr } from '../utils/translit';
 import { dmyToIso, isoToDmy } from '../utils/dates';
 import { normalizePhone, phoneOnInput } from '../utils/phone';
 
@@ -106,20 +106,30 @@ export default function SubmissionForm({
     clearError(name);
   };
 
-  // Cyrillic name → auto-derived Latin, unless user has edited Latin.
+  // Bidirectional name sync: whichever field the user types into, the
+  // other one is auto-derived. The `latManuallyEdited` flag is kept
+  // only to preserve an existing manually-typed Latin during initial
+  // edit mode; during active typing both fields track each other.
   const handleCyrChange = (value) => {
     setPayload((p) => ({
       ...p,
       name_cyr: value,
-      name_lat: latManuallyEdited ? p.name_lat : ruToLatICAO(value),
+      name_lat: ruToLatICAO(value),
     }));
     clearError('name_cyr');
-    if (!latManuallyEdited) clearError('name_lat');
+    clearError('name_lat');
   };
 
   const handleLatChange = (value) => {
+    const cleaned = sanitizeLatin(value);
     setLatManuallyEdited(true);
-    setField('name_lat', sanitizeLatin(value));
+    setPayload((p) => ({
+      ...p,
+      name_lat: cleaned,
+      name_cyr: latToCyr(cleaned),
+    }));
+    clearError('name_cyr');
+    clearError('name_lat');
   };
 
   const handleDateChange = (name) => (e) => {
