@@ -133,6 +133,56 @@ func Register(pool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
+// Login handles POST /api/auth/login. Body: {email, password}.
+func Login(pool *pgxpool.Pool) http.HandlerFunc {
+	type req struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body req
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, 400, "invalid JSON")
+			return
+		}
+		body.Email = strings.ToLower(strings.TrimSpace(body.Email))
+
+		user, err := db.GetUserByEmail(r.Context(), pool, body.Email)
+		if err != nil {
+			slog.Error("get user by email", "err", err)
+			writeError(w, 500, "db error")
+			return
+		}
+		if user == nil || !user.IsActive {
+			writeError(w, 401, "invalid credentials")
+			return
+		}
+		ok, err := auth.VerifyPassword(body.Password, user.PasswordHash)
+		if err != nil || !ok {
+			writeError(w, 401, "invalid credentials")
+			return
+		}
+
+		token, err := auth.NewSessionToken()
+		if err != nil {
+			writeError(w, 500, "token gen")
+			return
+		}
+		if err := db.CreateSession(r.Context(), pool, user.ID, token, sessionTTL); err != nil {
+			writeError(w, 500, "create session")
+			return
+		}
+		_ = db.TouchLastLogin(r.Context(), pool, user.ID)
+		setSessionCookie(w, token)
+
+		org, _ := db.GetOrganizationByID(r.Context(), pool, user.OrgID)
+		writeJSON(w, 200, authMeResp{
+			User: authUserResp{ID: user.ID, Email: user.Email, DisplayName: user.DisplayName, Role: user.Role},
+			Org:  authOrgResp{ID: org.ID, Name: org.Name, Slug: org.Slug},
+		})
+	}
+}
+
 func setSessionCookie(w http.ResponseWriter, token string) {
 	secure := os.Getenv("APP_ENV") == "production"
 	http.SetCookie(w, &http.Cookie{
