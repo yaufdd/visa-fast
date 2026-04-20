@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getConsentText } from '../api/client';
-import { ruToLatICAO, latToCyr } from '../utils/translit';
+import { latToCyr } from '../utils/translit';
 import { dmyToIso, isoToDmy } from '../utils/dates';
 import { normalizePhone, phoneOnInput } from '../utils/phone';
 
@@ -71,9 +71,6 @@ export default function SubmissionForm({
   }, [initialPayload]);
 
   const [payload, setPayload] = useState(initialState);
-  const [latManuallyEdited, setLatManuallyEdited] = useState(
-    Boolean(initialPayload.name_lat)
-  );
   const [consentChecked, setConsentChecked] = useState(false);
   const [consent, setConsent] = useState(null);
   const [consentLoading, setConsentLoading] = useState(showConsent);
@@ -106,23 +103,16 @@ export default function SubmissionForm({
     clearError(name);
   };
 
-  // Bidirectional name sync: whichever field the user types into, the
-  // other one is auto-derived. The `latManuallyEdited` flag is kept
-  // only to preserve an existing manually-typed Latin during initial
-  // edit mode; during active typing both fields track each other.
+  // Latin → Cyrillic one-way auto-fill. Typing in the Latin field
+  // auto-fills the Cyrillic field via naive reverse transliteration.
+  // Typing in Cyrillic is free-form (no auto-fill back to Latin) — the
+  // tourist can still correct the Cyrillic result manually.
   const handleCyrChange = (value) => {
-    setPayload((p) => ({
-      ...p,
-      name_cyr: value,
-      name_lat: ruToLatICAO(value),
-    }));
-    clearError('name_cyr');
-    clearError('name_lat');
+    setField('name_cyr', value);
   };
 
   const handleLatChange = (value) => {
     const cleaned = sanitizeLatin(value);
-    setLatManuallyEdited(true);
     setPayload((p) => ({
       ...p,
       name_lat: cleaned,
