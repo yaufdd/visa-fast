@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"fujitravel-admin/backend/internal/api"
+	appmw "fujitravel-admin/backend/internal/middleware"
 )
 
 func main() {
@@ -22,6 +24,13 @@ func main() {
 	anthropicKey := mustEnv("ANTHROPIC_API_KEY")
 	uploadsDir := envOrDefault("UPLOADS_DIR", "./uploads")
 	port := envOrDefault("PORT", "8080")
+
+	appSecret := os.Getenv("APP_SECRET")
+	if appSecret == "" {
+		slog.Error("APP_SECRET environment variable is required")
+		os.Exit(1)
+	}
+	_ = appSecret // currently unused — will be consumed when Tier 2 adds token signing
 
 	// Resolve uploads dir to absolute path relative to cwd.
 	if !filepath.IsAbs(uploadsDir) {
@@ -62,12 +71,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ── Rate limiters ─────────────────────────────────────────────────────────
+	registerRL := appmw.NewRateLimiter(5, 15*time.Minute)
+	loginRL := appmw.NewRateLimiter(10, 15*time.Minute)
+	publicRL := appmw.NewRateLimiter(3, 10*time.Minute)
+
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
-	r.Use(middleware.RealIP)
-	r.Use(middleware.RequestID)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
+	r.Use(chimw.RealIP)
+	r.Use(chimw.RequestID)
+	r.Use(chimw.Logger)
+	r.Use(chimw.Recoverer)
 
 	// CORS — simple permissive policy for local dev.
 	r.Use(func(next http.Handler) http.Handler {
@@ -84,63 +98,90 @@ func main() {
 	})
 
 	r.Route("/api", func(r chi.Router) {
-		// Hotels
-		r.Get("/hotels", api.ListHotels(pool))
-		r.Post("/hotels", api.CreateHotel(pool))
-		r.Get("/hotels/{id}", api.GetHotel(pool))
-		r.Put("/hotels/{id}", api.UpdateHotel(pool))
+		// Health
+		r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
+			if err := pool.Ping(req.Context()); err != nil {
+				w.WriteHeader(503)
+				return
+			}
+			w.WriteHeader(200)
+		})
 
-		// Groups
-		r.Get("/groups", api.ListGroups(pool))
-		r.Post("/groups", api.CreateGroup(pool))
-		r.Get("/groups/{id}", api.GetGroup(pool))
-		r.Delete("/groups/{id}", api.DeleteGroup(pool))
-		r.Put("/groups/{id}/status", api.UpdateGroupStatus(pool))
-		r.Put("/groups/{id}/notes", api.UpdateGroupNotes(pool))
+		// Public — auth
+		r.With(registerRL.Middleware()).Post("/auth/register", api.Register(pool))
+		r.With(loginRL.Middleware()).Post("/auth/login", api.Login(pool))
 
-		// Subgroups
-		r.Get("/groups/{id}/subgroups", api.ListSubgroups(pool, uploadsDir))
-		r.Post("/groups/{id}/subgroups", api.CreateSubgroup(pool))
-		r.Put("/subgroups/{id}", api.UpdateSubgroup(pool))
-		r.Delete("/subgroups/{id}", api.DeleteSubgroup(pool))
-		r.Put("/tourists/{id}/subgroup", api.AssignTouristSubgroup(pool))
-		r.Get("/subgroups/{id}/hotels", api.ListSubgroupHotels(pool))
-		r.Post("/subgroups/{id}/hotels", api.UpsertSubgroupHotels(pool))
-		r.Post("/subgroups/{id}/generate", api.GenerateSubgroupDocuments(pool, anthropicKey, uploadsDir, pythonScript))
-		r.Get("/subgroups/{id}/download", api.DownloadSubgroupZIP(pool, uploadsDir))
+		// Public — slug form
+		r.Get("/public/org/{slug}", api.PublicOrg(pool))
+		r.With(publicRL.Middleware()).Post("/public/submissions/{slug}", api.PublicSubmit(pool))
 
-		// Tourists
-		r.Get("/groups/{id}/tourists", api.ListTourists(pool))
-		r.Delete("/tourists/{id}", api.DeleteTourist(pool))
-
-		// Per-tourist uploads
-		r.Get("/tourists/{id}/uploads", api.ListTouristUploads(pool))
-		r.Post("/tourists/{id}/uploads", api.UploadTouristFile(pool, uploadsDir, anthropicKey))
-
-		// Group hotels
-		r.Get("/groups/{id}/hotels", api.ListGroupHotels(pool))
-		r.Post("/groups/{id}/hotels", api.UpsertGroupHotels(pool))
-
-		// Document generation (AI Pass 2 + Python)
-		r.Post("/groups/{id}/generate", api.GenerateDocuments(pool, anthropicKey, uploadsDir, pythonScript))
-		r.Post("/groups/{id}/finalize", api.FinalizeGroup(pool, anthropicKey, uploadsDir, pythonScript))
-		r.Get("/groups/{id}/documents", api.GetDocuments(pool))
-		r.Get("/groups/{id}/download", api.DownloadZIP(pool))
-		r.Get("/groups/{id}/download/final", api.DownloadFinalZIP(pool, uploadsDir))
-		r.Get("/groups/{id}/final/status", api.FinalStatus(pool, uploadsDir))
-
-		// Submissions (form-based workflow)
-		r.Post("/submissions", api.CreateSubmissionByManager(pool))
-		r.Get("/submissions", api.ListSubmissions(pool))
-		r.Get("/submissions/{id}", api.GetSubmission(pool))
-		r.Put("/submissions/{id}", api.UpdateSubmission(pool))
-		r.Delete("/submissions/{id}", api.ArchiveSubmission(pool))
-		r.Delete("/submissions/{id}/erase", api.EraseSubmission(pool))
-		r.Post("/submissions/{id}/attach", api.AttachSubmission(pool))
+		// Public — consent text
 		r.Get("/consent/text", api.GetConsentText())
 
-		// Flight data
-		r.Put("/tourists/{id}/flight_data", api.UpdateFlightData(pool))
+		// Protected — everything else
+		r.Group(func(r chi.Router) {
+			r.Use(appmw.RequireAuth(pool))
+
+			r.Post("/auth/logout", api.Logout(pool))
+			r.Get("/auth/me", api.Me(pool))
+
+			// Hotels
+			r.Get("/hotels", api.ListHotels(pool))
+			r.Post("/hotels", api.CreateHotel(pool))
+			r.Get("/hotels/{id}", api.GetHotel(pool))
+			r.Put("/hotels/{id}", api.UpdateHotel(pool))
+
+			// Groups
+			r.Get("/groups", api.ListGroups(pool))
+			r.Post("/groups", api.CreateGroup(pool))
+			r.Get("/groups/{id}", api.GetGroup(pool))
+			r.Delete("/groups/{id}", api.DeleteGroup(pool))
+			r.Put("/groups/{id}/status", api.UpdateGroupStatus(pool))
+			r.Put("/groups/{id}/notes", api.UpdateGroupNotes(pool))
+
+			// Subgroups
+			r.Get("/groups/{id}/subgroups", api.ListSubgroups(pool, uploadsDir))
+			r.Post("/groups/{id}/subgroups", api.CreateSubgroup(pool))
+			r.Put("/subgroups/{id}", api.UpdateSubgroup(pool))
+			r.Delete("/subgroups/{id}", api.DeleteSubgroup(pool))
+			r.Put("/tourists/{id}/subgroup", api.AssignTouristSubgroup(pool))
+			r.Get("/subgroups/{id}/hotels", api.ListSubgroupHotels(pool))
+			r.Post("/subgroups/{id}/hotels", api.UpsertSubgroupHotels(pool))
+			r.Post("/subgroups/{id}/generate", api.GenerateSubgroupDocuments(pool, anthropicKey, uploadsDir, pythonScript))
+			r.Get("/subgroups/{id}/download", api.DownloadSubgroupZIP(pool, uploadsDir))
+
+			// Tourists
+			r.Get("/groups/{id}/tourists", api.ListTourists(pool))
+			r.Delete("/tourists/{id}", api.DeleteTourist(pool))
+
+			// Per-tourist uploads
+			r.Get("/tourists/{id}/uploads", api.ListTouristUploads(pool))
+			r.Post("/tourists/{id}/uploads", api.UploadTouristFile(pool, uploadsDir, anthropicKey))
+
+			// Group hotels
+			r.Get("/groups/{id}/hotels", api.ListGroupHotels(pool))
+			r.Post("/groups/{id}/hotels", api.UpsertGroupHotels(pool))
+
+			// Document generation (AI Pass 2 + Python)
+			r.Post("/groups/{id}/generate", api.GenerateDocuments(pool, anthropicKey, uploadsDir, pythonScript))
+			r.Post("/groups/{id}/finalize", api.FinalizeGroup(pool, anthropicKey, uploadsDir, pythonScript))
+			r.Get("/groups/{id}/documents", api.GetDocuments(pool))
+			r.Get("/groups/{id}/download", api.DownloadZIP(pool))
+			r.Get("/groups/{id}/download/final", api.DownloadFinalZIP(pool, uploadsDir))
+			r.Get("/groups/{id}/final/status", api.FinalStatus(pool, uploadsDir))
+
+			// Submissions (form-based workflow)
+			r.Post("/submissions", api.CreateSubmissionByManager(pool))
+			r.Get("/submissions", api.ListSubmissions(pool))
+			r.Get("/submissions/{id}", api.GetSubmission(pool))
+			r.Put("/submissions/{id}", api.UpdateSubmission(pool))
+			r.Delete("/submissions/{id}", api.ArchiveSubmission(pool))
+			r.Delete("/submissions/{id}/erase", api.EraseSubmission(pool))
+			r.Post("/submissions/{id}/attach", api.AttachSubmission(pool))
+
+			// Flight data
+			r.Put("/tourists/{id}/flight_data", api.UpdateFlightData(pool))
+		})
 	})
 
 	slog.Info("starting server", "port", port)
