@@ -252,18 +252,6 @@ export async function apiCreateSubmission(payload, consentAccepted) {
   return res.json();
 }
 
-// Legacy compatibility shim — kept until Task 28 migrates public form callers
-// to publicCreateSubmission(slug, ...). Do not use for new code.
-export async function createSubmission(payload, consentAccepted, source = 'tourist') {
-  const res = await fetch(`${API}/submissions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ payload, consent_accepted: consentAccepted, source }),
-  });
-  if (!res.ok) throw await errFromRes(res);
-  return res.json();
-}
-
 export async function listSubmissions(q = '', status = '') {
   const params = new URLSearchParams();
   if (q) params.set('q', q);
