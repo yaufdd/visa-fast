@@ -130,7 +130,7 @@ func main() {
 		r.Get("/groups/{id}/final/status", api.FinalStatus(uploadsDir))
 
 		// Submissions (form-based workflow)
-		r.Post("/submissions", api.CreateSubmission(pool))
+		r.Post("/submissions", api.CreateSubmissionByManager(pool))
 		r.Get("/submissions", api.ListSubmissions(pool))
 		r.Get("/submissions/{id}", api.GetSubmission(pool))
 		r.Put("/submissions/{id}", api.UpdateSubmission(pool))
