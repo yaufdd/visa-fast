@@ -1,7 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,14 +14,92 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/errgroup"
 
 	"fujitravel-admin/backend/internal/ai"
 	"fujitravel-admin/backend/internal/docgen"
 )
 
-// loadHotelsForSubgroup loads hotels for a specific subgroup. If subgroupID is "",
+// Sentinel errors returned by runPipeline so callers can translate them into
+// HTTP status codes without string matching.
+var (
+	errNoTourists      = errors.New("no tourists")
+	errNoHotelsForPipe = errors.New("no hotels configured")
+)
+
+// freeTextKeys lists the submission_snapshot fields that are free-text Russian
+// strings requiring translation before they land in the final pass2 JSON.
+// The set mirrors what ai.AssembleTourist feeds through the translations map.
+var freeTextKeys = []string{
+	"place_of_birth_ru",
+	"issued_by_ru",
+	"home_address_ru",
+	"occupation_ru",
+	"employer_ru",
+	"employer_address_ru",
+	"previous_visits_ru",
+	"nationality_ru",
+}
+
+// touristRow is the minimal shape loaded from tourists for the pipeline.
+type touristRow struct {
+	ID           string
+	GroupID      string
+	SubgroupID   *string
+	Payload      []byte // submission_snapshot
+	FlightData   []byte
+	Translations []byte
+}
+
+// loadTouristRowsForSubgroup loads all tourists for a subgroup (or the whole
+// group when subgroupID == "") returning their submission_snapshot, flight_data
+// and cached translations.
+func loadTouristRowsForSubgroup(ctx context.Context, db *pgxpool.Pool, groupID, subgroupID string) ([]touristRow, error) {
+	var rows interface {
+		Next() bool
+		Scan(...any) error
+		Close()
+	}
+	var err error
+	if subgroupID != "" {
+		rows, err = db.Query(ctx,
+			`SELECT id, group_id, subgroup_id, submission_snapshot, flight_data, translations
+			   FROM tourists
+			  WHERE group_id = $1 AND subgroup_id = $2
+			  ORDER BY created_at`, groupID, subgroupID)
+	} else {
+		rows, err = db.Query(ctx,
+			`SELECT id, group_id, subgroup_id, submission_snapshot, flight_data, translations
+			   FROM tourists
+			  WHERE group_id = $1 AND subgroup_id IS NULL
+			  ORDER BY created_at`, groupID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []touristRow
+	for rows.Next() {
+		var t touristRow
+		var subID *string
+		var payload, flight, tr []byte
+		if err := rows.Scan(&t.ID, &t.GroupID, &subID, &payload, &flight, &tr); err != nil {
+			return nil, err
+		}
+		t.SubgroupID = subID
+		t.Payload = payload
+		t.FlightData = flight
+		t.Translations = tr
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// loadHotelBriefsForSubgroup loads hotels for a specific subgroup as ai.HotelBrief
+// entries (the shape consumed by the new pipeline). If subgroupID is "",
 // it falls back to all hotels for the group (legacy/no-subgroup mode).
-func loadHotelsForSubgroup(db *pgxpool.Pool, r *http.Request, groupID, subgroupID string) ([]ai.HotelEntry, error) {
+func loadHotelBriefsForSubgroup(ctx context.Context, db *pgxpool.Pool, groupID, subgroupID string) ([]ai.HotelBrief, error) {
 	var hRows interface {
 		Next() bool
 		Scan(...any) error
@@ -26,17 +107,17 @@ func loadHotelsForSubgroup(db *pgxpool.Pool, r *http.Request, groupID, subgroupI
 	}
 	var err error
 	if subgroupID != "" {
-		hRows, err = db.Query(r.Context(),
-			`SELECT h.name_en, COALESCE(h.address,''), COALESCE(h.phone,''), h.city,
-			        gh.check_in::text, gh.check_out::text, COALESCE(gh.room_type,''), gh.sort_order
+		hRows, err = db.Query(ctx,
+			`SELECT h.name_en, h.city, COALESCE(h.address,''), COALESCE(h.phone,''),
+			        gh.check_in::text, gh.check_out::text
 			   FROM group_hotels gh
 			   JOIN hotels h ON h.id = gh.hotel_id
 			  WHERE gh.subgroup_id = $1
 			  ORDER BY gh.sort_order`, subgroupID)
 	} else {
-		hRows, err = db.Query(r.Context(),
-			`SELECT h.name_en, COALESCE(h.address,''), COALESCE(h.phone,''), h.city,
-			        gh.check_in::text, gh.check_out::text, COALESCE(gh.room_type,''), gh.sort_order
+		hRows, err = db.Query(ctx,
+			`SELECT h.name_en, h.city, COALESCE(h.address,''), COALESCE(h.phone,''),
+			        gh.check_in::text, gh.check_out::text
 			   FROM group_hotels gh
 			   JOIN hotels h ON h.id = gh.hotel_id
 			  WHERE gh.group_id = $1 AND gh.subgroup_id IS NULL
@@ -46,11 +127,10 @@ func loadHotelsForSubgroup(db *pgxpool.Pool, r *http.Request, groupID, subgroupI
 		return nil, err
 	}
 	defer hRows.Close()
-	var hotels []ai.HotelEntry
+	var hotels []ai.HotelBrief
 	for hRows.Next() {
-		var h ai.HotelEntry
-		if err := hRows.Scan(&h.NameEn, &h.Address, &h.Phone, &h.City,
-			&h.CheckIn, &h.CheckOut, &h.RoomType, &h.SortOrder); err != nil {
+		var h ai.HotelBrief
+		if err := hRows.Scan(&h.Name, &h.City, &h.Address, &h.Phone, &h.CheckIn, &h.CheckOut); err != nil {
 			return nil, err
 		}
 		hotels = append(hotels, h)
@@ -58,40 +138,210 @@ func loadHotelsForSubgroup(db *pgxpool.Pool, r *http.Request, groupID, subgroupI
 	return hotels, nil
 }
 
-// loadTouristsForSubgroup loads confirmed tourists for a subgroup (or whole group if subgroupID=="").
-func loadTouristsForSubgroup(db *pgxpool.Pool, r *http.Request, groupID, subgroupID string) ([]ai.TouristData, error) {
-	var rows interface{ Next() bool; Scan(...any) error; Close() }
-	var err error
-	if subgroupID != "" {
-		rows, err = db.Query(r.Context(),
-			`SELECT raw_json, matched_sheet_row FROM tourists
-			  WHERE group_id = $1 AND subgroup_id = $2 AND match_confirmed = true
-			  ORDER BY created_at`, groupID, subgroupID)
-	} else {
-		rows, err = db.Query(r.Context(),
-			`SELECT raw_json, matched_sheet_row FROM tourists
-			  WHERE group_id = $1 AND match_confirmed = true
-			  ORDER BY created_at`, groupID)
+// touristPayloads unmarshals each tourist's submission_snapshot into map[string]any.
+// Missing / invalid payloads become empty maps so downstream indexing is safe.
+func touristPayloads(rows []touristRow) []map[string]any {
+	out := make([]map[string]any, len(rows))
+	for i, r := range rows {
+		m := map[string]any{}
+		if len(r.Payload) > 0 {
+			_ = json.Unmarshal(r.Payload, &m)
+		}
+		out[i] = m
 	}
+	return out
+}
+
+// touristFlights unmarshals each tourist's flight_data into map[string]any.
+func touristFlights(rows []touristRow) []map[string]any {
+	out := make([]map[string]any, len(rows))
+	for i, r := range rows {
+		m := map[string]any{}
+		if len(r.FlightData) > 0 {
+			_ = json.Unmarshal(r.FlightData, &m)
+		}
+		out[i] = m
+	}
+	return out
+}
+
+// collectFreeText walks the tourist payloads collecting distinct non-empty
+// values for freeTextKeys. It returns the unique strings (stable order) and a
+// per-tourist map from source string → index in the uniques slice so the
+// translation output can be indexed back to each tourist.
+func collectFreeText(payloads []map[string]any, keys []string) ([]string, []map[string]int) {
+	uniques := make([]string, 0, 16)
+	indexOfUnique := map[string]int{}
+	perTourist := make([]map[string]int, len(payloads))
+
+	for i, payload := range payloads {
+		perTourist[i] = map[string]int{}
+		for _, k := range keys {
+			v, ok := payload[k].(string)
+			if !ok || v == "" {
+				continue
+			}
+			idx, seen := indexOfUnique[v]
+			if !seen {
+				idx = len(uniques)
+				uniques = append(uniques, v)
+				indexOfUnique[v] = idx
+			}
+			perTourist[i][v] = idx
+		}
+	}
+	return uniques, perTourist
+}
+
+// buildTranslationMaps turns the batched translator output into per-tourist
+// source → translated maps suitable for ai.AssembleTourist.
+func buildTranslationMaps(perTourist []map[string]int, translations []string) []map[string]string {
+	out := make([]map[string]string, len(perTourist))
+	for i, m := range perTourist {
+		tm := make(map[string]string, len(m))
+		for src, idx := range m {
+			if idx < 0 || idx >= len(translations) {
+				continue
+			}
+			t := translations[idx]
+			if t == "" {
+				continue
+			}
+			tm[src] = t
+		}
+		out[i] = tm
+	}
+	return out
+}
+
+// buildProgrammeInput picks the first tourist with a populated outbound flight
+// as the "lead ticket" (programme shows one shared activity cell) and packages
+// the non-PII trip data needed by ai.GenerateProgramme.
+func buildProgrammeInput(payloads []map[string]any, flights []map[string]any, hotels []ai.HotelBrief, contactPhone string) ai.ProgrammeInput {
+	var in ai.ProgrammeInput
+	in.Hotels = hotels
+	in.ContactPhone = contactPhone
+
+	for i, fl := range flights {
+		arr := subMapAny(fl, "arrival")
+		dep := subMapAny(fl, "departure")
+		if strGetAny(arr, "flight_number") == "" {
+			continue
+		}
+		in.ArrivalDate = strGetAny(arr, "date")
+		in.ArrivalFlight = ai.FlightBrief{
+			Number:  strGetAny(arr, "flight_number"),
+			Time:    strGetAny(arr, "time"),
+			Airport: strGetAny(arr, "airport"),
+		}
+		if strGetAny(dep, "flight_number") != "" {
+			in.DepartureDate = strGetAny(dep, "date")
+			in.DepartureFlight = ai.FlightBrief{
+				Number:  strGetAny(dep, "flight_number"),
+				Time:    strGetAny(dep, "time"),
+				Airport: strGetAny(dep, "airport"),
+			}
+		}
+		// Fallback contact phone: use lead tourist's phone if none supplied.
+		if in.ContactPhone == "" && i < len(payloads) {
+			if phone, ok := payloads[i]["phone"].(string); ok {
+				in.ContactPhone = phone
+			}
+		}
+		return in
+	}
+
+	// No tourist has an outbound flight — still return whatever we have.
+	if in.ContactPhone == "" && len(payloads) > 0 {
+		if phone, ok := payloads[0]["phone"].(string); ok {
+			in.ContactPhone = phone
+		}
+	}
+	return in
+}
+
+// runPipeline executes the NEW AI pipeline for one subgroup (or whole group if
+// subgroupID=="") and returns the marshaled pass2 JSON bytes.
+func runPipeline(ctx context.Context, db *pgxpool.Pool, apiKey, groupID, subgroupID, guidePhone string, now time.Time) ([]byte, error) {
+	rows, err := loadTouristRowsForSubgroup(ctx, db, groupID, subgroupID)
 	if err != nil {
+		return nil, fmt.Errorf("load tourists: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, errNoTourists
+	}
+
+	hotels, err := loadHotelBriefsForSubgroup(ctx, db, groupID, subgroupID)
+	if err != nil {
+		return nil, fmt.Errorf("load hotels: %w", err)
+	}
+	if len(hotels) == 0 {
+		return nil, errNoHotelsForPipe
+	}
+
+	payloads := touristPayloads(rows)
+	flights := touristFlights(rows)
+
+	uniques, perTourist := collectFreeText(payloads, freeTextKeys)
+	programmeInput := buildProgrammeInput(payloads, flights, hotels, guidePhone)
+
+	var (
+		translations []string
+		programme    []ai.ProgrammeDay
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		t, err := ai.TranslateStrings(gctx, apiKey, uniques)
+		if err != nil {
+			return fmt.Errorf("translate: %w", err)
+		}
+		translations = t
+		return nil
+	})
+	g.Go(func() error {
+		p, err := ai.GenerateProgramme(gctx, apiKey, programmeInput)
+		if err != nil {
+			return fmt.Errorf("programme: %w", err)
+		}
+		programme = p
+		return nil
+	})
+	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var tourists []ai.TouristData
-	for rows.Next() {
-		var rawJSON, matchedRow []byte
-		if err := rows.Scan(&rawJSON, &matchedRow); err != nil {
-			return nil, err
+
+	trMaps := buildTranslationMaps(perTourist, translations)
+
+	// Best-effort cache of per-tourist translations back into DB.
+	for i, row := range rows {
+		if i >= len(trMaps) {
+			break
 		}
-		t := ai.TouristData{RawJSON: json.RawMessage(rawJSON)}
-		if matchedRow != nil {
-			var m map[string]string
-			_ = json.Unmarshal(matchedRow, &m)
-			t.MatchedSheetRow = m
+		buf, mErr := json.Marshal(trMaps[i])
+		if mErr != nil {
+			continue
 		}
-		tourists = append(tourists, t)
+		if _, err := db.Exec(ctx,
+			`UPDATE tourists SET translations = $1, updated_at = NOW() WHERE id = $2`,
+			buf, row.ID); err != nil {
+			slog.Warn("cache tourist translations", "tourist_id", row.ID, "err", err)
+		}
 	}
-	return tourists, nil
+
+	pass2 := ai.AssemblePass2(
+		payloads,
+		trMaps,
+		flights,
+		programme,
+		hotels,
+		now.Format("02.01.2006"),
+	)
+
+	out, err := json.MarshalIndent(pass2, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal pass2: %w", err)
+	}
+	return out, nil
 }
 
 // GenerateDocuments handles POST /api/groups/:id/generate
@@ -136,43 +386,21 @@ func GenerateDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string
 		docsDir := filepath.Join(uploadsDir, groupID, "docs")
 		_ = os.RemoveAll(docsDir)
 
-		var lastPass2JSON json.RawMessage
+		var lastPass2JSON []byte
 
 		for _, sg := range subgroups {
-			tourists, err := loadTouristsForSubgroup(db, r, groupID, sg.id)
+			pass2JSON, err := runPipeline(r.Context(), db, apiKey, groupID, sg.id, guidePhone, now)
 			if err != nil {
-				slog.Error("fetch tourists for subgroup", "subgroup", sg.name, "err", err)
-				writeError(w, http.StatusInternalServerError, "database error")
-				return
-			}
-			if len(tourists) == 0 {
-				slog.Warn("subgroup has no confirmed tourists, skipping", "subgroup", sg.name)
-				continue
-			}
-
-			// Load hotels specific to this subgroup.
-			hotels, err := loadHotelsForSubgroup(db, r, groupID, sg.id)
-			if err != nil {
-				slog.Error("fetch hotels for subgroup", "subgroup", sg.name, "err", err)
-				writeError(w, http.StatusInternalServerError, "database error")
-				return
-			}
-			if len(hotels) == 0 {
-				writeError(w, http.StatusBadRequest, "no hotels configured for subgroup "+sg.name)
-				return
-			}
-
-			pass2Input := ai.Pass2Input{
-				Tourists:   tourists,
-				Hotels:     hotels,
-				GuidePhone: guidePhone,
-				TodayDate:  now.Format("02.01.2006"),
-			}
-
-			pass2JSON, err := ai.FormatDocuments(r.Context(), apiKey, pass2Input)
-			if err != nil {
-				slog.Error("ai pass2", "subgroup", sg.name, "err", err)
-				writeError(w, http.StatusInternalServerError, "AI Pass 2 failed for "+sg.name+": "+err.Error())
+				if errors.Is(err, errNoTourists) {
+					slog.Warn("subgroup has no tourists, skipping", "subgroup", sg.name)
+					continue
+				}
+				if errors.Is(err, errNoHotelsForPipe) {
+					writeError(w, http.StatusBadRequest, "no hotels configured for subgroup "+sg.name)
+					return
+				}
+				slog.Error("ai pipeline", "subgroup", sg.name, "err", err)
+				writeError(w, http.StatusInternalServerError, fmt.Sprintf("ai pipeline (%s): %s", sg.name, err))
 				return
 			}
 			lastPass2JSON = pass2JSON
@@ -182,6 +410,11 @@ func GenerateDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string
 				writeError(w, http.StatusInternalServerError, "document generation failed for "+sg.name+": "+err.Error())
 				return
 			}
+		}
+
+		if lastPass2JSON == nil {
+			writeError(w, http.StatusBadRequest, "no tourists found in any subgroup")
+			return
 		}
 
 		// Pack all docs/{subgroup}/ folders into one ZIP.
@@ -197,7 +430,7 @@ func GenerateDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string
 		err = db.QueryRow(r.Context(),
 			`INSERT INTO documents (group_id, pass2_json, zip_path, generated_at)
 			 VALUES ($1, $2, $3, $4) RETURNING id`,
-			groupID, []byte(lastPass2JSON), zipPath, now,
+			groupID, lastPass2JSON, zipPath, now,
 		).Scan(&docID)
 		if err != nil {
 			slog.Error("insert document", "err", err)
@@ -232,28 +465,6 @@ func GenerateSubgroupDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScrip
 			return
 		}
 
-		tourists, err := loadTouristsForSubgroup(db, r, groupID, subgroupID)
-		if err != nil {
-			slog.Error("fetch tourists for subgroup", "err", err)
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		if len(tourists) == 0 {
-			writeError(w, http.StatusBadRequest, "no confirmed tourists in this subgroup")
-			return
-		}
-
-		hotels, err := loadHotelsForSubgroup(db, r, groupID, subgroupID)
-		if err != nil {
-			slog.Error("fetch hotels for subgroup", "err", err)
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		if len(hotels) == 0 {
-			writeError(w, http.StatusBadRequest, "no hotels configured for this subgroup")
-			return
-		}
-
 		guidePhone := r.URL.Query().Get("guide_phone")
 		now := time.Now()
 
@@ -261,17 +472,18 @@ func GenerateSubgroupDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScrip
 		subDocsDir := filepath.Join(uploadsDir, groupID, "docs", subgroupName)
 		_ = os.RemoveAll(subDocsDir)
 
-		pass2Input := ai.Pass2Input{
-			Tourists:   tourists,
-			Hotels:     hotels,
-			GuidePhone: guidePhone,
-			TodayDate:  now.Format("02.01.2006"),
-		}
-
-		pass2JSON, err := ai.FormatDocuments(r.Context(), apiKey, pass2Input)
+		pass2JSON, err := runPipeline(r.Context(), db, apiKey, groupID, subgroupID, guidePhone, now)
 		if err != nil {
-			slog.Error("ai pass2 subgroup", "err", err)
-			writeError(w, http.StatusInternalServerError, "AI Pass 2 failed: "+err.Error())
+			if errors.Is(err, errNoTourists) {
+				writeError(w, http.StatusBadRequest, "no tourists in this subgroup")
+				return
+			}
+			if errors.Is(err, errNoHotelsForPipe) {
+				writeError(w, http.StatusBadRequest, "no hotels configured for this subgroup")
+				return
+			}
+			slog.Error("ai pipeline subgroup", "err", err)
+			writeError(w, http.StatusInternalServerError, "AI pipeline failed: "+err.Error())
 			return
 		}
 
@@ -293,7 +505,7 @@ func GenerateSubgroupDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScrip
 		if _, err := db.Exec(r.Context(),
 			`INSERT INTO documents (group_id, pass2_json, zip_path, generated_at)
 			 VALUES ($1, $2, $3, $4)`,
-			groupID, []byte(pass2JSON), zipPath, now,
+			groupID, pass2JSON, zipPath, now,
 		); err != nil {
 			slog.Warn("insert document record", "err", err)
 		}
@@ -448,7 +660,7 @@ func translitLatToCyr(s string) string {
 
 // FinalizeGroup handles POST /api/groups/:id/finalize
 // Generates group-level docs (для Инны в ВЦ, заявка ВЦ) for ALL tourists across
-// ALL subgroups in the подача. Skips Pass 2 — builds the list from DB directly
+// ALL subgroups in the подача. Skips AI — builds the list from DB directly
 // and reuses the latest subgroup's pass2_json as a template for trip-level fields.
 func FinalizeGroup(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -464,9 +676,9 @@ func FinalizeGroup(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) ht
 			return
 		}
 
-		// Collect Russian names of ALL tourists across ALL subgroups (no match_confirmed filter).
+		// Collect Russian names of ALL tourists across ALL subgroups from submission_snapshot.
 		rows, err := db.Query(r.Context(),
-			`SELECT raw_json, matched_sheet_row FROM tourists
+			`SELECT submission_snapshot FROM tourists
 			  WHERE group_id = $1
 			  ORDER BY created_at`, groupID)
 		if err != nil {
@@ -476,65 +688,35 @@ func FinalizeGroup(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) ht
 		}
 		defer rows.Close()
 
-		// Two-pass: collect candidates with a "reliability score" (parsed > sheet).
+		// Two-pass: collect candidates with a "reliability score".
+		// 2 = name_cyr from submission (reliable), 0 = transliterated from name_lat.
 		type candidate struct {
 			name  string
-			score int // 2 = from raw_json.name_cyr, 1 = from sheet Cyrillic, 0 = transliterated
+			score int
 		}
 		var candidates []candidate
 		for rows.Next() {
-			var rawJSON, matchedRow []byte
-			if err := rows.Scan(&rawJSON, &matchedRow); err != nil {
+			var snapshot []byte
+			if err := rows.Scan(&snapshot); err != nil {
+				continue
+			}
+			if len(snapshot) == 0 {
+				continue
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(snapshot, &payload); err != nil {
 				continue
 			}
 			name := ""
 			score := 0
-			// 1. raw_json.name_cyr (most reliable — from parsed passport).
-			if len(rawJSON) > 0 {
-				var raw map[string]any
-				if err := json.Unmarshal(rawJSON, &raw); err == nil {
-					if s, ok := raw["name_cyr"].(string); ok && s != "" {
-						name = s
-						score = 2
-					}
-				}
+			if s, ok := payload["name_cyr"].(string); ok && s != "" {
+				name = s
+				score = 2
 			}
-			// 2. matched_sheet_row Cyrillic column.
-			if name == "" && len(matchedRow) > 0 {
-				var m map[string]string
-				if err := json.Unmarshal(matchedRow, &m); err == nil {
-					for _, key := range []string{"ФИО (кириллицей)", "ФИО кириллицей", "ФИО"} {
-						if v := m[key]; v != "" {
-							name = v
-							score = 1
-							break
-						}
-					}
-					// 2b. Sheet "latin" column may actually contain Cyrillic text.
-					if name == "" {
-						for _, key := range []string{"ФИО (латиницей, как в загранпаспорте)", "ФИО латиницей", "ФИО (латиницей)"} {
-							if v := m[key]; v != "" {
-								if isCyrillic(v) {
-									name = v
-									score = 1
-								} else {
-									name = translitLatToCyr(v)
-									score = 0
-								}
-								break
-							}
-						}
-					}
-				}
-			}
-			// 3. raw_json.name_lat — last resort, transliterated.
-			if name == "" && len(rawJSON) > 0 {
-				var raw map[string]any
-				if err := json.Unmarshal(rawJSON, &raw); err == nil {
-					if s, ok := raw["name_lat"].(string); ok && s != "" {
-						name = translitLatToCyr(s)
-						score = 0
-					}
+			if name == "" {
+				if s, ok := payload["name_lat"].(string); ok && s != "" {
+					name = translitLatToCyr(s)
+					score = 0
 				}
 			}
 			if name == "" {
@@ -545,8 +727,7 @@ func FinalizeGroup(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) ht
 		rows.Close()
 
 		// Fuzzy dedupe preserving creation order. When a duplicate is found (edit
-		// distance ≤ 2 on normalized key), keep the version with the higher score
-		// but leave its position where the first occurrence was.
+		// distance ≤ 2 on normalized key), keep the version with the higher score.
 		type kept struct {
 			name  string
 			key   string
@@ -579,12 +760,11 @@ func FinalizeGroup(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) ht
 		}
 
 		if len(applicantsRu) == 0 {
-			writeError(w, http.StatusBadRequest, "no confirmed tourists found in this group")
+			writeError(w, http.StatusBadRequest, "no tourists with submission data found in this group")
 			return
 		}
 
 		// Resolve submission date: ?submission_date=YYYY-MM-DD from query, else tomorrow.
-		// Used as the "дата подачи" that appears in final docs (для Инны + заявка ВЦ filename).
 		submissionDateDDMMYYYY := ""
 		if raw := r.URL.Query().Get("submission_date"); raw != "" {
 			if t, err := time.Parse("2006-01-02", raw); err == nil {
@@ -744,4 +924,30 @@ func DownloadZIP(db *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Disposition", `attachment; filename="`+filepath.Base(zipPath)+`"`)
 		http.ServeFile(w, r, zipPath)
 	}
+}
+
+// subMapAny extracts a nested map[string]any from m[key].
+func subMapAny(m map[string]any, key string) map[string]any {
+	if m == nil {
+		return nil
+	}
+	if v, ok := m[key]; ok {
+		if sub, ok := v.(map[string]any); ok {
+			return sub
+		}
+	}
+	return nil
+}
+
+// strGetAny returns m[k] as a string (empty if missing or wrong type).
+func strGetAny(m map[string]any, k string) string {
+	if m == nil {
+		return ""
+	}
+	if v, ok := m[k]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
 }
