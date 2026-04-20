@@ -269,7 +269,7 @@ export default function SubmissionForm({
         />
         {!errors.name_lat && (
           <span className="sf-hint">
-            Заполняется автоматически из кириллицы (ICAO). Если в загранпаспорте другой вариант — отредактируйте.
+            Пожалуйста, проверьте, что написание совпадает с вашим загранпаспортом. Если отличается — отредактируйте поле вручную.
           </span>
         )}
         {errors.name_lat && <span className="sf-error">{errors.name_lat}</span>}
