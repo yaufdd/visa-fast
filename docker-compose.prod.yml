@@ -26,7 +26,6 @@ services:
     env_file: .env
     volumes:
       - uploads:/app/uploads
-      - ./google-credentials.json:/app/google-credentials.json:ro
     depends_on:
       db:
         condition: service_healthy

@@ -62,8 +62,6 @@ dev-backend:
 	cd backend && \
 	DATABASE_URL="postgres://fuji:fuji123@localhost:5435/fujitravel?sslmode=disable" \
 	ANTHROPIC_API_KEY="$${ANTHROPIC_API_KEY}" \
-	GOOGLE_CREDENTIALS_PATH="/Users/yaufdd/Desktop/FUJIT TRAVEL/google-credentials.json" \
-	GOOGLE_SHEET_ID="1UH-MK_KsTPbghaAKrx6ous8jFACeL6uEQccsewLcrnM" \
 	PORT=8081 \
 	go run cmd/server/main.go
 
