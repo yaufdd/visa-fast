@@ -4,56 +4,40 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"fujitravel-admin/backend/internal/db"
+	"fujitravel-admin/backend/internal/middleware"
 )
 
-type Hotel struct {
-	ID        string    `json:"id"`
-	NameEn    string    `json:"name_en"`
-	NameRu    string    `json:"name_ru"`
-	City      string    `json:"city"`
-	Address   string    `json:"address"`
-	Phone     string    `json:"phone"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+// strPtr returns nil for empty strings, otherwise a pointer to s.
+func strPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // ListHotels handles GET /api/hotels
-func ListHotels(db *pgxpool.Pool) http.HandlerFunc {
+func ListHotels(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.Query(r.Context(),
-			`SELECT id, name_en, COALESCE(name_ru,''), city, COALESCE(address,''), COALESCE(phone,''), created_at, updated_at
-			   FROM hotels ORDER BY city, name_en`)
+		orgID := middleware.OrgID(r.Context())
+		hotels, err := db.ListHotels(r.Context(), pool, orgID)
 		if err != nil {
 			slog.Error("list hotels", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
-		}
-		defer rows.Close()
-
-		var hotels []Hotel
-		for rows.Next() {
-			var h Hotel
-			if err := rows.Scan(&h.ID, &h.NameEn, &h.NameRu, &h.City, &h.Address, &h.Phone, &h.CreatedAt, &h.UpdatedAt); err != nil {
-				slog.Error("scan hotel", "err", err)
-				writeError(w, http.StatusInternalServerError, "scan error")
-				return
-			}
-			hotels = append(hotels, h)
-		}
-		if hotels == nil {
-			hotels = []Hotel{}
 		}
 		writeJSON(w, http.StatusOK, hotels)
 	}
 }
 
 // CreateHotel handles POST /api/hotels
-func CreateHotel(db *pgxpool.Pool) http.HandlerFunc {
+func CreateHotel(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		var body struct {
 			NameEn  string `json:"name_en"`
 			NameRu  string `json:"name_ru"`
@@ -70,15 +54,21 @@ func CreateHotel(db *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		var h Hotel
-		err := db.QueryRow(r.Context(),
-			`INSERT INTO hotels (name_en, name_ru, city, address, phone)
-			 VALUES ($1, $2, $3, $4, $5)
-			 RETURNING id, name_en, COALESCE(name_ru,''), city, COALESCE(address,''), COALESCE(phone,''), created_at, updated_at`,
-			body.NameEn, body.NameRu, body.City, body.Address, body.Phone,
-		).Scan(&h.ID, &h.NameEn, &h.NameRu, &h.City, &h.Address, &h.Phone, &h.CreatedAt, &h.UpdatedAt)
+		id, err := db.CreateHotel(r.Context(), pool, orgID, db.Hotel{
+			NameEn:  body.NameEn,
+			NameRu:  strPtr(body.NameRu),
+			City:    strPtr(body.City),
+			Address: strPtr(body.Address),
+			Phone:   strPtr(body.Phone),
+		})
 		if err != nil {
 			slog.Error("insert hotel", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		h, err := db.GetHotel(r.Context(), pool, orgID, id)
+		if err != nil || h == nil {
+			slog.Error("load created hotel", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -87,15 +77,17 @@ func CreateHotel(db *pgxpool.Pool) http.HandlerFunc {
 }
 
 // GetHotel handles GET /api/hotels/:id
-func GetHotel(db *pgxpool.Pool) http.HandlerFunc {
+func GetHotel(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		id := chi.URLParam(r, "id")
-		var h Hotel
-		err := db.QueryRow(r.Context(),
-			`SELECT id, name_en, COALESCE(name_ru,''), city, COALESCE(address,''), COALESCE(phone,''), created_at, updated_at
-			   FROM hotels WHERE id = $1`, id,
-		).Scan(&h.ID, &h.NameEn, &h.NameRu, &h.City, &h.Address, &h.Phone, &h.CreatedAt, &h.UpdatedAt)
+		h, err := db.GetHotel(r.Context(), pool, orgID, id)
 		if err != nil {
+			slog.Error("get hotel", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if h == nil {
 			writeError(w, http.StatusNotFound, "hotel not found")
 			return
 		}
@@ -104,8 +96,11 @@ func GetHotel(db *pgxpool.Pool) http.HandlerFunc {
 }
 
 // UpdateHotel handles PUT /api/hotels/:id
-func UpdateHotel(db *pgxpool.Pool) http.HandlerFunc {
+// Only the calling org's private hotels can be updated; global hotels
+// (org_id IS NULL) are read-only and return 404.
+func UpdateHotel(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		id := chi.URLParam(r, "id")
 		var body struct {
 			NameEn  string `json:"name_en"`
@@ -123,16 +118,25 @@ func UpdateHotel(db *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		var h Hotel
-		err := db.QueryRow(r.Context(),
-			`UPDATE hotels
-			    SET name_en = $1, name_ru = $2, city = $3, address = $4, phone = $5, updated_at = NOW()
-			  WHERE id = $6
-			  RETURNING id, name_en, COALESCE(name_ru,''), city, COALESCE(address,''), COALESCE(phone,''), created_at, updated_at`,
-			body.NameEn, body.NameRu, body.City, body.Address, body.Phone, id,
-		).Scan(&h.ID, &h.NameEn, &h.NameRu, &h.City, &h.Address, &h.Phone, &h.CreatedAt, &h.UpdatedAt)
+		ok, err := db.UpdateHotel(r.Context(), pool, orgID, id, db.Hotel{
+			NameEn:  body.NameEn,
+			NameRu:  strPtr(body.NameRu),
+			City:    strPtr(body.City),
+			Address: strPtr(body.Address),
+			Phone:   strPtr(body.Phone),
+		})
 		if err != nil {
 			slog.Error("update hotel", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusNotFound, "hotel not found")
+			return
+		}
+		h, err := db.GetHotel(r.Context(), pool, orgID, id)
+		if err != nil || h == nil {
+			slog.Error("load updated hotel", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -141,11 +145,21 @@ func UpdateHotel(db *pgxpool.Pool) http.HandlerFunc {
 }
 
 // ListGroupHotels handles GET /api/groups/:id/hotels
-func ListGroupHotels(db *pgxpool.Pool) http.HandlerFunc {
+func ListGroupHotels(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		groupID := chi.URLParam(r, "id")
-		rows, err := db.Query(r.Context(),
-			`SELECT gh.id, gh.hotel_id, h.name_en, COALESCE(h.name_ru,''), h.city,
+
+		// Scope by verifying the group belongs to this org. If not, 404.
+		var exists bool
+		if err := pool.QueryRow(r.Context(),
+			`SELECT true FROM groups WHERE id = $1 AND org_id = $2`, groupID, orgID).Scan(&exists); err != nil {
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+
+		rows, err := pool.Query(r.Context(),
+			`SELECT gh.id, gh.hotel_id, h.name_en, COALESCE(h.name_ru,''), COALESCE(h.city,''),
 			        COALESCE(h.address,''), COALESCE(h.phone,''),
 			        gh.check_in, gh.check_out, COALESCE(gh.room_type,''), gh.sort_order
 			   FROM group_hotels gh
@@ -162,17 +176,17 @@ func ListGroupHotels(db *pgxpool.Pool) http.HandlerFunc {
 		defer rows.Close()
 
 		type groupHotelRow struct {
-			ID         string `json:"id"`
-			HotelID    string `json:"hotel_id"`
-			HotelName  string `json:"hotel_name"`
+			ID          string `json:"id"`
+			HotelID     string `json:"hotel_id"`
+			HotelName   string `json:"hotel_name"`
 			HotelNameRu string `json:"hotel_name_ru"`
-			City       string `json:"city"`
-			Address    string `json:"address"`
-			Phone      string `json:"phone"`
-			CheckIn    string `json:"check_in"`
-			CheckOut   string `json:"check_out"`
-			RoomType   string `json:"room_type"`
-			SortOrder  int    `json:"sort_order"`
+			City        string `json:"city"`
+			Address     string `json:"address"`
+			Phone       string `json:"phone"`
+			CheckIn     string `json:"check_in"`
+			CheckOut    string `json:"check_out"`
+			RoomType    string `json:"room_type"`
+			SortOrder   int    `json:"sort_order"`
 		}
 		var result []groupHotelRow
 		for rows.Next() {
@@ -195,11 +209,23 @@ func ListGroupHotels(db *pgxpool.Pool) http.HandlerFunc {
 }
 
 // ListSubgroupHotels handles GET /api/subgroups/:id/hotels
-func ListSubgroupHotels(db *pgxpool.Pool) http.HandlerFunc {
+func ListSubgroupHotels(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		subgroupID := chi.URLParam(r, "id")
-		rows, err := db.Query(r.Context(),
-			`SELECT gh.id, gh.hotel_id, h.name_en, COALESCE(h.name_ru,''), h.city,
+
+		// Scope: the subgroup's parent group must belong to this org.
+		var exists bool
+		if err := pool.QueryRow(r.Context(),
+			`SELECT true FROM subgroups s
+			   JOIN groups g ON g.id = s.group_id
+			  WHERE s.id = $1 AND g.org_id = $2`, subgroupID, orgID).Scan(&exists); err != nil {
+			writeError(w, http.StatusNotFound, "subgroup not found")
+			return
+		}
+
+		rows, err := pool.Query(r.Context(),
+			`SELECT gh.id, gh.hotel_id, h.name_en, COALESCE(h.name_ru,''), COALESCE(h.city,''),
 			        COALESCE(h.address,''), COALESCE(h.phone,''),
 			        gh.check_in::text, gh.check_out::text, COALESCE(gh.room_type,''), gh.sort_order
 			   FROM group_hotels gh
@@ -249,13 +275,16 @@ func ListSubgroupHotels(db *pgxpool.Pool) http.HandlerFunc {
 }
 
 // UpsertSubgroupHotels handles POST /api/subgroups/:id/hotels
-func UpsertSubgroupHotels(db *pgxpool.Pool) http.HandlerFunc {
+func UpsertSubgroupHotels(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		subgroupID := chi.URLParam(r, "id")
 
 		var groupID string
-		if err := db.QueryRow(r.Context(),
-			`SELECT group_id FROM subgroups WHERE id = $1`, subgroupID).Scan(&groupID); err != nil {
+		if err := pool.QueryRow(r.Context(),
+			`SELECT s.group_id FROM subgroups s
+			   JOIN groups g ON g.id = s.group_id
+			  WHERE s.id = $1 AND g.org_id = $2`, subgroupID, orgID).Scan(&groupID); err != nil {
 			writeError(w, http.StatusNotFound, "subgroup not found")
 			return
 		}
@@ -272,7 +301,20 @@ func UpsertSubgroupHotels(db *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		tx, err := db.Begin(r.Context())
+		// Validate every referenced hotel is visible to the org
+		// (global or private to this org).
+		for _, e := range entries {
+			var ok bool
+			if err := pool.QueryRow(r.Context(),
+				`SELECT true FROM hotels
+				  WHERE id = $1 AND (org_id IS NULL OR org_id = $2)`,
+				e.HotelID, orgID).Scan(&ok); err != nil {
+				writeError(w, http.StatusBadRequest, "hotel not accessible")
+				return
+			}
+		}
+
+		tx, err := pool.Begin(r.Context())
 		if err != nil {
 			slog.Error("begin tx", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
@@ -311,12 +353,15 @@ func UpsertSubgroupHotels(db *pgxpool.Pool) http.HandlerFunc {
 
 // UpsertGroupHotels handles POST /api/groups/:id/hotels
 // Body: [{hotel_id, check_in, check_out, room_type, sort_order}]
-func UpsertGroupHotels(db *pgxpool.Pool) http.HandlerFunc {
+func UpsertGroupHotels(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		groupID := chi.URLParam(r, "id")
 
 		var groupExists bool
-		if err := db.QueryRow(r.Context(), `SELECT true FROM groups WHERE id = $1`, groupID).Scan(&groupExists); err != nil {
+		if err := pool.QueryRow(r.Context(),
+			`SELECT true FROM groups WHERE id = $1 AND org_id = $2`,
+			groupID, orgID).Scan(&groupExists); err != nil {
 			writeError(w, http.StatusNotFound, "group not found")
 			return
 		}
@@ -337,7 +382,19 @@ func UpsertGroupHotels(db *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		tx, err := db.Begin(r.Context())
+		// Validate every referenced hotel is visible to the org.
+		for _, e := range entries {
+			var ok bool
+			if err := pool.QueryRow(r.Context(),
+				`SELECT true FROM hotels
+				  WHERE id = $1 AND (org_id IS NULL OR org_id = $2)`,
+				e.HotelID, orgID).Scan(&ok); err != nil {
+				writeError(w, http.StatusBadRequest, "hotel not accessible")
+				return
+			}
+		}
+
+		tx, err := pool.Begin(r.Context())
 		if err != nil {
 			slog.Error("begin tx", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
