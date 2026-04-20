@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // FlightBrief is the minimal flight info needed for the programme.
@@ -117,15 +116,7 @@ func GenerateProgramme(ctx context.Context, apiKey string, in ProgrammeInput) ([
 		return nil, fmt.Errorf("programme claude call: %w", err)
 	}
 
-	// Response is a JSON array. Strip any prose before/after.
-	s := strings.TrimSpace(raw)
-	start := strings.Index(s, "[")
-	end := strings.LastIndex(s, "]")
-	if start == -1 || end == -1 || end < start {
-		return nil, fmt.Errorf("programme decode: no JSON array in response — raw: %s", raw)
-	}
-	js := s[start : end+1]
-
+	js := extractJSON(raw)
 	var out []ProgrammeDay
 	if err := json.Unmarshal([]byte(js), &out); err != nil {
 		return nil, fmt.Errorf("programme decode: %w — raw: %s", err, raw)
