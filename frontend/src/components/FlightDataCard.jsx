@@ -12,16 +12,14 @@ function formatLeg(leg) {
   if (!leg) return null;
   const parts = [];
   if (leg.flight_number) parts.push(leg.flight_number);
-  const route = [leg.airport_from, leg.airport_to].filter(Boolean).join(' → ');
-  if (route) parts.push(route);
+  if (leg.airport) parts.push(leg.airport);
   const when = [leg.date, leg.time].filter(Boolean).join(' ');
   if (when) parts.push(when);
   return parts.length ? parts.join(' · ') : null;
 }
 
 function isEmpty(leg) {
-  return !leg || (!leg.flight_number && !leg.date && !leg.time
-    && !leg.airport_from && !leg.airport_to);
+  return !leg || (!leg.flight_number && !leg.date && !leg.time && !leg.airport);
 }
 
 export default function FlightDataCard({ tourist, onUpdated }) {
