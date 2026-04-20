@@ -1,5 +1,7 @@
 import { useState, useCallback } from 'react';
-import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { AuthProvider } from './auth/AuthContext';
+import RequireAuth from './auth/RequireAuth';
 import Sidebar from './components/Sidebar';
 import GroupsPage from './pages/GroupsPage';
 import GroupDetailPage from './pages/GroupDetailPage';
@@ -10,15 +12,9 @@ import SubmissionDetailPage from './pages/SubmissionDetailPage';
 import SubmissionFormPage from './pages/SubmissionFormPage';
 import FormThanksPage from './pages/FormThanksPage';
 import ConsentPage from './pages/ConsentPage';
-
-// Routes that should render standalone (no admin chrome / sidebar).
-const PUBLIC_ROUTE_PREFIXES = ['/form', '/consent'];
-
-function isPublicPath(pathname) {
-  return PUBLIC_ROUTE_PREFIXES.some(
-    (p) => pathname === p || pathname.startsWith(`${p}/`)
-  );
-}
+import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
+import PublicFormFallbackPage from './pages/PublicFormFallbackPage';
 
 function AdminShell({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -47,37 +43,45 @@ function AdminShell({ children }) {
   );
 }
 
-function RootLayout() {
-  const { pathname } = useLocation();
-  const publicRoute = isPublicPath(pathname);
-
-  const routes = (
-    <Routes>
-      {/* Public routes (standalone layout) */}
-      <Route path="/form" element={<SubmissionFormPage />} />
-      <Route path="/form/thanks" element={<FormThanksPage />} />
-      <Route path="/consent" element={<ConsentPage />} />
-
-      {/* Admin routes */}
-      <Route path="/" element={<GroupsPage />} />
-      <Route path="/groups/:id" element={<GroupDetailPage />} />
-      <Route path="/hotels" element={<HotelsPage />} />
-      <Route path="/hotels/:id" element={<HotelEditPage />} />
-      <Route path="/submissions" element={<SubmissionsListPage />} />
-      <Route path="/submissions/:id" element={<SubmissionDetailPage />} />
-    </Routes>
+function AdminRoutes() {
+  return (
+    <AdminShell>
+      <Routes>
+        <Route path="/" element={<GroupsPage />} />
+        <Route path="/groups/:id" element={<GroupDetailPage />} />
+        <Route path="/hotels" element={<HotelsPage />} />
+        <Route path="/hotels/:id" element={<HotelEditPage />} />
+        <Route path="/submissions" element={<SubmissionsListPage />} />
+        <Route path="/submissions/:id" element={<SubmissionDetailPage />} />
+      </Routes>
+    </AdminShell>
   );
-
-  if (publicRoute) {
-    return <main className="public-shell">{routes}</main>;
-  }
-  return <AdminShell>{routes}</AdminShell>;
 }
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <RootLayout />
-    </BrowserRouter>
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* Public */}
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+          <Route path="/form/thanks" element={<FormThanksPage />} />
+          <Route path="/form/:slug" element={<SubmissionFormPage />} />
+          <Route path="/form" element={<PublicFormFallbackPage />} />
+          <Route path="/consent" element={<ConsentPage />} />
+
+          {/* Protected admin */}
+          <Route
+            path="/*"
+            element={
+              <RequireAuth>
+                <AdminRoutes />
+              </RequireAuth>
+            }
+          />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   );
 }
