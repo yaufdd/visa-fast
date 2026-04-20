@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getConsentText } from '../api/client';
-import { latToCyr } from '../utils/translit';
+import { ruToLatICAO } from '../utils/translit';
 import { dmyToIso, isoToDmy } from '../utils/dates';
 import { normalizePhone, phoneOnInput } from '../utils/phone';
 
@@ -103,23 +103,23 @@ export default function SubmissionForm({
     clearError(name);
   };
 
-  // Latin → Cyrillic one-way auto-fill. Typing in the Latin field
-  // auto-fills the Cyrillic field via naive reverse transliteration.
-  // Typing in Cyrillic is free-form (no auto-fill back to Latin) — the
-  // tourist can still correct the Cyrillic result manually.
+  // Cyrillic → Latin one-way auto-fill via ICAO Doc 9303 (the МВД
+  // standard used on Russian foreign passports — deterministic,
+  // matches what the passport shows exactly). Typing in the Latin
+  // field is free-form for the rare case of a non-standard passport
+  // spelling the tourist wants to override (e.g. "YULIA" vs "IULIIA").
   const handleCyrChange = (value) => {
-    setField('name_cyr', value);
-  };
-
-  const handleLatChange = (value) => {
-    const cleaned = sanitizeLatin(value);
     setPayload((p) => ({
       ...p,
-      name_lat: cleaned,
-      name_cyr: latToCyr(cleaned),
+      name_cyr: value,
+      name_lat: ruToLatICAO(value),
     }));
     clearError('name_cyr');
     clearError('name_lat');
+  };
+
+  const handleLatChange = (value) => {
+    setField('name_lat', sanitizeLatin(value));
   };
 
   const handleDateChange = (name) => (e) => {
