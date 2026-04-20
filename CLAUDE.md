@@ -15,13 +15,13 @@ fujitravel-admin/
 ├── backend/
 │   ├── cmd/server/main.go
 │   ├── internal/
-│   │   ├── api/        — HTTP handlers (groups, subgroups, hotels, parse, generate)
-│   │   ├── sheets/     — Google Sheets client
-│   │   ├── ai/         — Claude API (Pass 1 + Pass 2)
-│   │   ├── matcher/    — fuzzy matching
+│   │   ├── api/        — HTTP handlers (groups, subgroups, hotels, submissions, tourists, flight_data, generate, uploads)
+│   │   ├── ai/         — Claude API (translate.go, programme.go, assembler.go, ticket_parser.go, voucher_parser.go)
+│   │   ├── consent/    — consent / form-submission helpers
 │   │   ├── docgen/     — document generation (calls Python)
-│   │   └── storage/    — file uploads
-│   ├── migrations/     — golang-migrate SQL files (000001 … 000012)
+│   │   ├── storage/    — file uploads
+│   │   └── translit/   — Cyrillic transliteration helpers
+│   ├── migrations/     — golang-migrate SQL files
 │   └── go.mod
 ├── frontend/
 │   ├── src/
@@ -55,8 +55,7 @@ fujitravel-admin/
 | Database | PostgreSQL 16 (Docker) |
 | Migrations | golang-migrate |
 | Frontend | React + Vite |
-| AI | Anthropic Claude API (claude-opus-4-6) |
-| Sheets | Google Sheets API v4 |
+| AI | Anthropic Claude API — Haiku 4.5 for `translate.go`, Opus 4.7 for `programme.go`, Opus 4.6 for scan parsers (`ticket_parser.go`, `voucher_parser.go`) |
 | Doc generation | python-docx + fillpdf (Python subprocess) |
 
 ---
@@ -67,8 +66,6 @@ fujitravel-admin/
 # Local dev
 DATABASE_URL=postgres://fuji:fuji123@localhost:5435/fujitravel?sslmode=disable
 ANTHROPIC_API_KEY=...
-GOOGLE_CREDENTIALS_PATH=/Users/yaufdd/Desktop/FUJIT TRAVEL/google-credentials.json
-GOOGLE_SHEET_ID=1UH-MK_KsTPbghaAKrx6ous8jFACeL6uEQccsewLcrnM
 UPLOADS_DIR=./uploads
 PORT=8080
 DOCGEN_SCRIPT=../../docgen/generate.py
@@ -84,10 +81,9 @@ DOCGEN_PDF_TEMPLATE=./templates/anketa_template.pdf
 
 | Agent | Role | Files it touches |
 |---|---|---|
-| db-agent | Schema + migrations + seed | migrations/*.sql |
-| backend-agent | Go API + business logic | backend/ |
-| frontend-agent | React UI | frontend/ |
-| prompt-engineer | Claude API prompts | backend/internal/ai/ |
+| db-agent | Schema + migrations + seed | `backend/migrations/*` |
+| backend-agent | Go API + business logic + AI prompts | `backend/internal/ai/*`, `backend/internal/api/*` |
+| frontend-agent | React UI | `frontend/*` |
 | code-reviewer | Review only, no edits | reads everything |
 
 **Agents must not edit files outside their zone.**
@@ -97,24 +93,28 @@ DOCGEN_PDF_TEMPLATE=./templates/anketa_template.pdf
 ## Data Flow
 
 ```
-1. Create group (optional: split into subgroups for logistics)
-2. Add tourists from Google Sheets (select by name)
-3. Per tourist: upload files (passport, ticket, voucher) → click Parse
-   - Pass 1: Claude extracts structured data from documents (all fields in English)
-   - Per-tourist flights: arrival flight + return/departure flight
-   - Hotels auto-created from voucher if not in DB yet (name only, city blank)
-   - Retries on Claude API errors
-4. Hotels auto-populated from vouchers into group_hotels (or added manually).
-   Dates (check-in/check-out) are inline-editable on the group page and
-   autosaved via POST /api/subgroups/:id/hotels.
-5. Click "Сгенерировать документы туристов":
-   - Pass 2: Claude merges Pass 1 data + Sheets row → final JSON (pass2.json saved)
-   - Python generates per-tourist docs: программа.docx, доверенность.docx, анкета.pdf
-   - Download output.zip
-6. After whole group is processed → click "Сформировать финальные документы":
-   - Python generates group-level docs: для Инны в ВЦ.docx, заявка ВЦ.docx
-   - Download final.zip
+1. Tourist (or manager) submits form at /form → POST /api/submissions → tourist_submissions row.
+2. Manager creates a group, picks submissions from the pool via AddFromDBModal
+   → POST /api/submissions/:id/attach → tourists row with submission_snapshot.
+3. Manager optionally:
+   - Uploads ticket scan → auto-parsed by ticket_parser.go → tourists.flight_data.
+   - Uploads voucher scan → auto-parsed by voucher_parser.go → group_hotels rows.
+   - Or enters flight data manually via FlightDataForm (PUT /api/tourists/:id/flight_data).
+4. Manager clicks "Сгенерировать документы":
+   - Backend translates free-text fields in one batched Haiku call (translate.go)
+   - Opus generates the programme from dates + hotels + flights (programme.go)
+   - Go code (assembler.go) composes the final pass2.json deterministically
+   - Python docgen builds .docx and .pdf files
+5. "Сформировать финальные документы" generates group-level docs.
 ```
+
+### AI Privacy
+Passport data, full names, and full addresses never reach the AI. The AI only sees:
+- anonymised free-text fragments (mini-translate via `translate.go`)
+- dates, hotels, and flights (programme generation via `programme.go`)
+
+Scan parsers (`ticket_parser.go`, `voucher_parser.go`) receive only the uploaded
+image/PDF of the ticket/voucher — no linked tourist PII.
 
 ### Hotels CRUD
 - `/hotels` — list all hotels (city tags normalized to Title Case + RU translation for known Japanese cities).
@@ -161,6 +161,9 @@ with the name from the voucher (city left empty). Manager can edit later.
 
 ## Running locally
 
+Required env vars: `DATABASE_URL`, `ANTHROPIC_API_KEY`. Optional: `UPLOADS_DIR`,
+`PORT`, `DOCGEN_SCRIPT`, `DOCGEN_PDF_TEMPLATE`. No Google credentials are needed.
+
 ```bash
 # Start DB
 docker compose up -d db
@@ -199,7 +202,6 @@ after pulling if a new `backend/migrations/*.sql` was added.
 ### Data NOT in git
 After `git clone` on a fresh server, these must be placed manually:
 - `.env` (prod secrets)
-- `google-credentials.json`
 
 The anketa PDF template **is** whitelisted in `.gitignore`
 (`!templates/anketa_template.pdf`), so docgen works out of the box.
