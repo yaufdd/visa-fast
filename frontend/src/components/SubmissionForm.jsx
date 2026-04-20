@@ -1,102 +1,35 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getConsentText } from '../api/client';
+import { ruToLatICAO } from '../utils/translit';
+import { dmyToIso, isoToDmy } from '../utils/dates';
+import { normalizePhone } from '../utils/phone';
 
-// Field definitions grouped into blocks. Each field has a name, label, and optional type/hint.
-// Field names match the backend "payload" contract (see backend/internal/api/submissions.go
-// and backend/internal/ai/assembler.go). All enum values are the Russian strings expected
-// by MapGender / MapMaritalStatus / MapPassportType / MapYesNo / CountryISO helpers.
-const BLOCKS = [
-  {
-    id: 'persons',
-    title: 'Блок 1 · Личные данные',
-    fields: [
-      { name: 'name_cyr', label: 'ФИО кириллицей' },
-      { name: 'name_lat', label: 'ФИО латиницей', latin: true, hint: 'Только A–Z и пробелы' },
-      { name: 'gender_ru', label: 'Пол', type: 'select', options: [
-        { value: '', label: '—' },
-        { value: 'Мужской', label: 'Мужской' },
-        { value: 'Женский', label: 'Женский' },
-      ] },
-      { name: 'birth_date', label: 'Дата рождения', hint: 'ДД.ММ.ГГГГ' },
-      { name: 'marital_status_ru', label: 'Семейное положение', type: 'select', options: [
-        { value: '', label: '—' },
-        { value: 'Холост/не замужем', label: 'Холост / не замужем' },
-        { value: 'Женат/замужем', label: 'Женат / замужем' },
-        { value: 'Вдовец/вдова', label: 'Вдовец / вдова' },
-        { value: 'Разведен(а)', label: 'Разведён(а)' },
-      ] },
-      { name: 'place_of_birth_ru', label: 'Место рождения' },
-      { name: 'nationality_ru', label: 'Гражданство', placeholder: 'Россия' },
-      { name: 'former_nationality_ru', label: 'Прежнее гражданство (опционально)', placeholder: 'USSR / NO' },
-      { name: 'maiden_name_ru', label: 'Девичья фамилия (опционально)' },
-    ],
-  },
-  {
-    id: 'passport',
-    title: 'Блок 2 · Загранпаспорт',
-    fields: [
-      { name: 'passport_number', label: 'Номер загранпаспорта', hint: '9 символов' },
-      { name: 'passport_type_ru', label: 'Тип паспорта', type: 'select', options: [
-        { value: 'Обычный', label: 'Обычный' },
-        { value: 'Дипломатический', label: 'Дипломатический' },
-        { value: 'Служебный', label: 'Служебный' },
-      ] },
-      { name: 'issue_date', label: 'Дата выдачи', hint: 'ДД.ММ.ГГГГ' },
-      { name: 'expiry_date', label: 'Дата окончания', hint: 'ДД.ММ.ГГГГ' },
-      { name: 'issued_by_ru', label: 'Кем выдан' },
-    ],
-  },
-  {
-    id: 'internal',
-    title: 'Блок 3 · Внутренний паспорт РФ',
-    fields: [
-      { name: 'internal_series', label: 'Серия', hint: '4 цифры' },
-      { name: 'internal_number', label: 'Номер', hint: '6 цифр' },
-      { name: 'internal_issued_ru', label: 'Дата выдачи', hint: 'ДД.ММ.ГГГГ' },
-      { name: 'internal_issued_by_ru', label: 'Кем выдан' },
-      { name: 'reg_address_ru', label: 'Адрес регистрации', type: 'textarea' },
-    ],
-  },
-  {
-    id: 'contacts',
-    title: 'Блок 4 · Контакты',
-    fields: [
-      { name: 'home_address_ru', label: 'Домашний адрес', type: 'textarea' },
-      { name: 'phone', label: 'Телефон', placeholder: '+7...' },
-    ],
-  },
-  {
-    id: 'work',
-    title: 'Блок 5 · Работа',
-    fields: [
-      { name: 'occupation_ru', label: 'Должность' },
-      { name: 'employer_ru', label: 'Название организации' },
-      { name: 'employer_address_ru', label: 'Адрес организации', type: 'textarea' },
-    ],
-  },
-  {
-    id: 'history',
-    title: 'Блок 6 · История',
-    fields: [
-      { name: 'been_to_japan_ru', label: 'Был ли в Японии', type: 'select', options: [
-        { value: 'Нет', label: 'Нет' },
-        { value: 'Да', label: 'Да' },
-      ] },
-      { name: 'previous_visits_ru', label: 'Даты прошлых визитов', type: 'textarea' },
-      { name: 'criminal_record_ru', label: 'Была ли судимость', type: 'select', options: [
-        { value: 'Нет', label: 'Нет' },
-        { value: 'Да', label: 'Да' },
-      ] },
-    ],
-  },
-];
+// Flat submission form. Field names MUST match the backend "payload"
+// contract (see backend/internal/api/submissions.go and
+// backend/internal/ai/assembler.go). All enum values are the Russian
+// strings expected by MapGender / MapMaritalStatus / MapPassportType /
+// MapYesNo / CountryISO helpers.
 
 // Defaults for selects that should not start empty.
 const SELECT_DEFAULTS = {
   passport_type_ru: 'Обычный',
   been_to_japan_ru: 'Нет',
   criminal_record_ru: 'Нет',
+  gender_ru: '',
+  marital_status_ru: '',
 };
+
+// All fields the form touches. Phone fields aren't yet in the backend
+// assembler but are part of the payload JSONB we POST.
+const ALL_FIELDS = [
+  'name_cyr', 'name_lat', 'gender_ru', 'birth_date', 'marital_status_ru',
+  'place_of_birth_ru', 'nationality_ru', 'former_nationality_ru', 'maiden_name_ru',
+  'passport_number', 'passport_type_ru', 'issue_date', 'expiry_date', 'issued_by_ru',
+  'internal_series', 'internal_number', 'internal_issued_ru', 'internal_issued_by_ru',
+  'reg_address_ru', 'home_address_ru', 'phone',
+  'occupation_ru', 'employer_ru', 'employer_address_ru', 'employer_phone',
+  'been_to_japan_ru', 'previous_visits_ru', 'criminal_record_ru',
+];
 
 function sanitizeLatin(value) {
   return value.toUpperCase().replace(/[^A-Z\s]/g, '');
@@ -131,16 +64,16 @@ export default function SubmissionForm({
 }) {
   const initialState = useMemo(() => {
     const base = {};
-    for (const block of BLOCKS) {
-      for (const f of block.fields) {
-        base[f.name] = SELECT_DEFAULTS[f.name] ?? '';
-      }
+    for (const name of ALL_FIELDS) {
+      base[name] = SELECT_DEFAULTS[name] ?? '';
     }
     return { ...base, ...initialPayload };
   }, [initialPayload]);
 
   const [payload, setPayload] = useState(initialState);
-  const [openBlock, setOpenBlock] = useState('persons');
+  const [latManuallyEdited, setLatManuallyEdited] = useState(
+    Boolean(initialPayload.name_lat)
+  );
   const [consentChecked, setConsentChecked] = useState(false);
   const [consent, setConsent] = useState(null);
   const [consentLoading, setConsentLoading] = useState(showConsent);
@@ -158,10 +91,7 @@ export default function SubmissionForm({
       .finally(() => setConsentLoading(false));
   }, [showConsent]);
 
-  const onFieldChange = (name, latin) => (e) => {
-    const raw = e.target.value;
-    const v = latin ? sanitizeLatin(raw) : raw;
-    setPayload((p) => ({ ...p, [name]: v }));
+  const clearError = (name) => {
     if (errors[name]) {
       setErrors((prev) => {
         const n = { ...prev };
@@ -171,19 +101,46 @@ export default function SubmissionForm({
     }
   };
 
+  const setField = (name, value) => {
+    setPayload((p) => ({ ...p, [name]: value }));
+    clearError(name);
+  };
+
+  // Cyrillic name → auto-derived Latin, unless user has edited Latin.
+  const handleCyrChange = (value) => {
+    setPayload((p) => ({
+      ...p,
+      name_cyr: value,
+      name_lat: latManuallyEdited ? p.name_lat : ruToLatICAO(value),
+    }));
+    clearError('name_cyr');
+    if (!latManuallyEdited) clearError('name_lat');
+  };
+
+  const handleLatChange = (value) => {
+    setLatManuallyEdited(true);
+    setField('name_lat', sanitizeLatin(value));
+  };
+
+  const handleDateChange = (name) => (e) => {
+    setField(name, isoToDmy(e.target.value));
+  };
+
+  const handlePhoneBlur = (name) => (e) => {
+    const normalized = normalizePhone(e.target.value);
+    if (normalized !== e.target.value) setField(name, normalized);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setApiError('');
     const errs = validate(payload);
     setErrors(errs);
     if (Object.keys(errs).length > 0) {
-      // Open the first block that has an error
-      for (const block of BLOCKS) {
-        if (block.fields.some((f) => errs[f.name])) {
-          setOpenBlock(block.id);
-          break;
-        }
-      }
+      // Scroll the first errored field into view
+      const firstErr = Object.keys(errs)[0];
+      const el = document.querySelector(`[data-field="${firstErr}"]`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
     if (showConsent && !consentChecked) {
@@ -202,61 +159,189 @@ export default function SubmissionForm({
 
   const canSubmit = !submitting && (!showConsent || consentChecked);
 
+  const showPreviousVisits = payload.been_to_japan_ru === 'Да';
+
+  // Small helpers for common field types
+  const textField = (name, label, extra = {}) => {
+    const err = errors[name];
+    return (
+      <label className={`sf-field${err ? ' has-error' : ''}`} data-field={name}>
+        <span className="sf-label">{label}</span>
+        <input
+          type="text"
+          value={payload[name] ?? ''}
+          onChange={(e) => setField(name, e.target.value)}
+          placeholder={extra.placeholder || ''}
+          autoComplete="off"
+        />
+        {extra.hint && !err && <span className="sf-hint">{extra.hint}</span>}
+        {err && <span className="sf-error">{err}</span>}
+      </label>
+    );
+  };
+
+  const textareaField = (name, label) => {
+    const err = errors[name];
+    return (
+      <label className={`sf-field${err ? ' has-error' : ''}`} data-field={name}>
+        <span className="sf-label">{label}</span>
+        <textarea
+          value={payload[name] ?? ''}
+          onChange={(e) => setField(name, e.target.value)}
+          rows={3}
+        />
+        {err && <span className="sf-error">{err}</span>}
+      </label>
+    );
+  };
+
+  const selectField = (name, label, options) => {
+    const err = errors[name];
+    return (
+      <label className={`sf-field${err ? ' has-error' : ''}`} data-field={name}>
+        <span className="sf-label">{label}</span>
+        <select
+          value={payload[name] ?? ''}
+          onChange={(e) => setField(name, e.target.value)}
+        >
+          {options.map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
+        {err && <span className="sf-error">{err}</span>}
+      </label>
+    );
+  };
+
+  const dateField = (name, label) => {
+    const err = errors[name];
+    return (
+      <label className={`sf-field${err ? ' has-error' : ''}`} data-field={name}>
+        <span className="sf-label">{label}</span>
+        <input
+          type="date"
+          value={dmyToIso(payload[name] ?? '')}
+          onChange={handleDateChange(name)}
+        />
+        {err && <span className="sf-error">{err}</span>}
+      </label>
+    );
+  };
+
+  const phoneField = (name, label) => {
+    const err = errors[name];
+    return (
+      <label className={`sf-field${err ? ' has-error' : ''}`} data-field={name}>
+        <span className="sf-label">{label}</span>
+        <input
+          type="tel"
+          value={payload[name] ?? ''}
+          onChange={(e) => setField(name, e.target.value)}
+          onBlur={handlePhoneBlur(name)}
+          placeholder="+7 (999) 123-45-67"
+          autoComplete="off"
+        />
+        {err && <span className="sf-error">{err}</span>}
+      </label>
+    );
+  };
+
   return (
     <form className="submission-form" onSubmit={handleSubmit} noValidate>
-      {BLOCKS.map((block) => {
-        const isOpen = openBlock === block.id;
-        return (
-          <section key={block.id} className={`sf-block${isOpen ? ' open' : ''}`}>
-            <button
-              type="button"
-              className="sf-block-header"
-              onClick={() => setOpenBlock(isOpen ? null : block.id)}
-              aria-expanded={isOpen}
-            >
-              <span>{block.title}</span>
-              <span className="sf-chevron">{isOpen ? '−' : '+'}</span>
-            </button>
-            {isOpen && (
-              <div className="sf-block-body">
-                {block.fields.map((f) => {
-                  const val = payload[f.name] ?? '';
-                  const err = errors[f.name];
-                  return (
-                    <label key={f.name} className={`sf-field${err ? ' has-error' : ''}`}>
-                      <span className="sf-label">{f.label}</span>
-                      {f.type === 'textarea' ? (
-                        <textarea
-                          value={val}
-                          onChange={onFieldChange(f.name, f.latin)}
-                          placeholder={f.placeholder || ''}
-                          rows={3}
-                        />
-                      ) : f.type === 'select' ? (
-                        <select value={val} onChange={onFieldChange(f.name, false)}>
-                          {f.options.map((opt) => (
-                            <option key={opt.value} value={opt.value}>{opt.label}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <input
-                          type={f.type === 'email' ? 'email' : 'text'}
-                          value={val}
-                          onChange={onFieldChange(f.name, f.latin)}
-                          placeholder={f.placeholder || ''}
-                          autoComplete="off"
-                        />
-                      )}
-                      {f.hint && !err && <span className="sf-hint">{f.hint}</span>}
-                      {err && <span className="sf-error">{err}</span>}
-                    </label>
-                  );
-                })}
-              </div>
-            )}
-          </section>
-        );
-      })}
+      <h2 className="sf-heading">Личные данные</h2>
+
+      <label className="sf-field" data-field="name_cyr">
+        <span className="sf-label">ФИО кириллицей</span>
+        <input
+          type="text"
+          value={payload.name_cyr ?? ''}
+          onChange={(e) => handleCyrChange(e.target.value)}
+          autoComplete="off"
+        />
+      </label>
+
+      <label className={`sf-field${errors.name_lat ? ' has-error' : ''}`} data-field="name_lat">
+        <span className="sf-label">ФИО латиницей</span>
+        <input
+          type="text"
+          value={payload.name_lat ?? ''}
+          onChange={(e) => handleLatChange(e.target.value)}
+          autoComplete="off"
+        />
+        {!errors.name_lat && (
+          <span className="sf-hint">
+            Заполняется автоматически из кириллицы (ICAO). Если в загранпаспорте другой вариант — отредактируйте.
+          </span>
+        )}
+        {errors.name_lat && <span className="sf-error">{errors.name_lat}</span>}
+      </label>
+
+      {selectField('gender_ru', 'Пол', [
+        { value: '', label: '—' },
+        { value: 'Мужской', label: 'Мужской' },
+        { value: 'Женский', label: 'Женский' },
+      ])}
+
+      {dateField('birth_date', 'Дата рождения')}
+
+      {selectField('marital_status_ru', 'Семейное положение', [
+        { value: '', label: '—' },
+        { value: 'Холост/не замужем', label: 'Холост / не замужем' },
+        { value: 'Женат/замужем', label: 'Женат / замужем' },
+        { value: 'Вдовец/вдова', label: 'Вдовец / вдова' },
+        { value: 'Разведен(а)', label: 'Разведён(а)' },
+      ])}
+
+      {textField('place_of_birth_ru', 'Место рождения')}
+      {textField('nationality_ru', 'Гражданство')}
+      {textField('former_nationality_ru', 'Прежнее гражданство')}
+      {textField('maiden_name_ru', 'Была ли другая фамилия? Какая?')}
+
+      <h2 className="sf-heading">Загранпаспорт</h2>
+
+      {textField('passport_number', 'Номер загранпаспорта', { hint: '9 символов' })}
+      {selectField('passport_type_ru', 'Тип паспорта', [
+        { value: 'Обычный', label: 'Обычный' },
+        { value: 'Дипломатический', label: 'Дипломатический' },
+        { value: 'Служебный', label: 'Служебный' },
+      ])}
+      {dateField('issue_date', 'Дата выдачи')}
+      {dateField('expiry_date', 'Дата окончания')}
+      {textField('issued_by_ru', 'Кем выдан')}
+
+      <h2 className="sf-heading">Внутренний паспорт РФ</h2>
+
+      {textField('internal_series', 'Серия', { hint: '4 цифры' })}
+      {textField('internal_number', 'Номер', { hint: '6 цифр' })}
+      {dateField('internal_issued_ru', 'Дата выдачи')}
+      {textField('internal_issued_by_ru', 'Кем выдан')}
+      {textareaField('reg_address_ru', 'Адрес регистрации')}
+
+      <h2 className="sf-heading">Контакты</h2>
+
+      {textareaField('home_address_ru', 'Домашний адрес')}
+      {phoneField('phone', 'Телефон')}
+
+      <h2 className="sf-heading">Работа</h2>
+
+      {textField('occupation_ru', 'Должность')}
+      {textField('employer_ru', 'Название организации')}
+      {textareaField('employer_address_ru', 'Адрес организации')}
+      {phoneField('employer_phone', 'Телефон организации')}
+
+      <h2 className="sf-heading">История</h2>
+
+      {selectField('been_to_japan_ru', 'Был ли в Японии', [
+        { value: 'Нет', label: 'Нет' },
+        { value: 'Да', label: 'Да' },
+      ])}
+
+      {showPreviousVisits && textareaField('previous_visits_ru', 'Даты прошлых визитов')}
+
+      {selectField('criminal_record_ru', 'Была ли судимость', [
+        { value: 'Нет', label: 'Нет' },
+        { value: 'Да', label: 'Да' },
+      ])}
 
       {showConsent && (
         <section className="sf-consent">
@@ -289,60 +374,25 @@ export default function SubmissionForm({
         .submission-form {
           display: flex;
           flex-direction: column;
-          gap: 12px;
-          max-width: 760px;
+          gap: 14px;
+          max-width: 560px;
           margin: 0 auto;
         }
 
-        .sf-block {
-          background: var(--graphite);
-          border: 1px solid var(--border);
-          border-radius: 10px;
-          overflow: hidden;
-        }
-
-        .sf-block-header {
-          width: 100%;
-          background: transparent;
-          color: var(--white);
-          padding: 14px 18px;
-          font-size: 14px;
+        .sf-heading {
+          margin: 18px 0 2px;
+          font-size: 13px;
           font-weight: 600;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          cursor: pointer;
-          border: none;
-          text-align: left;
-        }
-
-        .sf-block-header:hover {
-          background: var(--gray-dark);
-        }
-
-        .sf-chevron {
-          font-family: var(--font-mono);
-          color: var(--white-dim);
-          font-size: 16px;
-          line-height: 1;
-          width: 16px;
-          text-align: center;
-        }
-
-        .sf-block.open .sf-chevron {
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
           color: var(--accent);
+          font-family: var(--font-mono);
+          border-bottom: 1px solid var(--border);
+          padding-bottom: 6px;
         }
 
-        .sf-block-body {
-          padding: 16px 18px 20px;
-          border-top: 1px solid var(--border);
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 14px;
-        }
-
-        @media (max-width: 600px) {
-          .sf-block-body { grid-template-columns: 1fr; }
+        .sf-heading:first-child {
+          margin-top: 0;
         }
 
         .sf-field {
@@ -394,6 +444,7 @@ export default function SubmissionForm({
           font-size: 11px;
           color: var(--white-dim);
           font-family: var(--font-mono);
+          line-height: 1.4;
         }
 
         .sf-error {
@@ -409,6 +460,7 @@ export default function SubmissionForm({
           display: flex;
           flex-direction: column;
           gap: 12px;
+          margin-top: 10px;
         }
 
         .sf-consent details > summary {
@@ -475,6 +527,7 @@ export default function SubmissionForm({
         .sf-actions {
           display: flex;
           justify-content: flex-end;
+          margin-top: 8px;
         }
 
         .sf-submit {
