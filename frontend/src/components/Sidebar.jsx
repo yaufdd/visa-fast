@@ -3,6 +3,7 @@ import { useTheme } from '../theme';
 
 const navItems = [
   { to: '/', label: 'Подачи', icon: '◫', end: true },
+  { to: '/submissions', label: 'Анкеты', icon: '⌬', end: false },
   { to: '/hotels', label: 'Отели', icon: '⊞', end: true },
 ];
 
