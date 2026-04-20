@@ -15,6 +15,7 @@ import (
 
 	"fujitravel-admin/backend/internal/auth"
 	"fujitravel-admin/backend/internal/db"
+	"fujitravel-admin/backend/internal/middleware"
 )
 
 type authUserResp struct {
@@ -176,6 +177,48 @@ func Login(pool *pgxpool.Pool) http.HandlerFunc {
 		setSessionCookie(w, token)
 
 		org, _ := db.GetOrganizationByID(r.Context(), pool, user.OrgID)
+		writeJSON(w, 200, authMeResp{
+			User: authUserResp{ID: user.ID, Email: user.Email, DisplayName: user.DisplayName, Role: user.Role},
+			Org:  authOrgResp{ID: org.ID, Name: org.Name, Slug: org.Slug},
+		})
+	}
+}
+
+// Logout handles POST /api/auth/logout. Deletes current session.
+func Logout(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if cookie, err := r.Cookie(sessionCookieName); err == nil {
+			_ = db.DeleteSession(r.Context(), pool, cookie.Value)
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     sessionCookieName,
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: true,
+			Secure:   os.Getenv("APP_ENV") == "production",
+			SameSite: http.SameSiteLaxMode,
+		})
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	}
+}
+
+// Me returns the currently authenticated user + org.
+// Requires middleware.RequireAuth in the chain.
+func Me(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := middleware.UserID(r.Context())
+		orgID := middleware.OrgID(r.Context())
+		user, err := db.GetUserByID(r.Context(), pool, userID)
+		if err != nil || user == nil {
+			writeError(w, 500, "user not found")
+			return
+		}
+		org, err := db.GetOrganizationByID(r.Context(), pool, orgID)
+		if err != nil || org == nil {
+			writeError(w, 500, "org not found")
+			return
+		}
 		writeJSON(w, 200, authMeResp{
 			User: authUserResp{ID: user.ID, Email: user.Email, DisplayName: user.DisplayName, Role: user.Role},
 			Org:  authOrgResp{ID: org.ID, Name: org.Name, Slug: org.Slug},
