@@ -390,7 +390,7 @@ email:
 	userMsg := fmt.Sprintf("Here is the trip data:\n\n```json\n%s\n```\n\nProduce the final document JSON.", string(inputJSON))
 
 	reqBody := anthropicRequest{
-		Model:       claudeModel,
+		Model:       ModelOpusParser,
 		MaxTokens:   8192,
 		Temperature: 0.3, // slight creativity for sightseeing suggestions
 		System:      system,

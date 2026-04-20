@@ -1,21 +1,12 @@
 package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"path/filepath"
 	"strings"
-	"time"
-)
-
-const (
-	claudeModel  = "claude-opus-4-6"
-	anthropicAPI = "https://api.anthropic.com/v1/messages"
 )
 
 // Pass1Result holds structured data extracted from travel documents.
@@ -69,51 +60,6 @@ type VoucherHotel struct {
 	Address  string `json:"address"`
 	Phone    string `json:"phone"`
 	City     string `json:"city"`
-}
-
-type anthropicRequest struct {
-	Model       string             `json:"model"`
-	MaxTokens   int                `json:"max_tokens"`
-	Temperature float64            `json:"temperature,omitempty"`
-	System      string             `json:"system"`
-	Messages    []anthropicMessage `json:"messages"`
-}
-
-type anthropicMessage struct {
-	Role    string            `json:"role"`
-	Content []anthropicContent `json:"content"`
-}
-
-type anthropicContent struct {
-	Type   string          `json:"type"`
-	Text   string          `json:"text,omitempty"`
-	Source *contentSource  `json:"source,omitempty"`
-}
-
-type contentSource struct {
-	Type      string `json:"type"`
-	MediaType string `json:"media_type,omitempty"`
-	Data      string `json:"data,omitempty"`
-	FileID    string `json:"file_id,omitempty"` // Anthropic Files API reference
-}
-
-type anthropicResponse struct {
-	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"content"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}
-
-// FileInput represents a single file to send to Claude.
-// If AnthropicFileID is set, it is used directly (Files API reference).
-// Otherwise, Name + Data are base64-encoded inline.
-type FileInput struct {
-	AnthropicFileID string // preferred: Anthropic Files API file_id
-	Name            string // filename (used to determine MIME type for inline)
-	Data            []byte // raw bytes (used when AnthropicFileID is empty)
 }
 
 // ParseDocuments sends the provided files to Claude Pass 1 and returns
@@ -311,7 +257,7 @@ hotels_from_vouchers:
 	})
 
 	reqBody := anthropicRequest{
-		Model:       claudeModel,
+		Model:       ModelOpusParser,
 		MaxTokens:   8192,
 		Temperature: 0, // deterministic extraction
 		System:      system,
@@ -344,144 +290,4 @@ hotels_from_vouchers:
 		return nil, fmt.Errorf("unmarshal pass1 array: %w — raw: %s", err, raw)
 	}
 	return results, nil
-}
-
-// extractJSON finds the first '{' ... last '}' in s, stripping any surrounding
-// prose that Claude sometimes emits before or after the JSON object.
-func extractJSON(s string) string {
-	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start == -1 || end == -1 || end < start {
-		return s
-	}
-	return s[start : end+1]
-}
-
-// callClaude performs the HTTP request to the Anthropic API and returns the
-// first text content block from the response. It retries transient failures
-// (network errors and 5xx responses, including Cloudflare 502/503/504 that
-// arrive as HTML instead of JSON) with exponential backoff.
-func callClaude(ctx context.Context, apiKey string, reqBody anthropicRequest) (string, error) {
-	bodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", fmt.Errorf("marshal claude request: %w", err)
-	}
-
-	client := &http.Client{Timeout: 300 * time.Second}
-	backoff := 1 * time.Second
-	const maxAttempts = 4
-
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		req, rerr := http.NewRequestWithContext(ctx, http.MethodPost, anthropicAPI, bytes.NewReader(bodyBytes))
-		if rerr != nil {
-			return "", fmt.Errorf("build claude request: %w", rerr)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("x-api-key", apiKey)
-		req.Header.Set("anthropic-version", "2023-06-01")
-		req.Header.Set("anthropic-beta", "files-api-2025-04-14")
-
-		resp, derr := client.Do(req)
-		if derr != nil {
-			lastErr = fmt.Errorf("claude http (attempt %d/%d): %w", attempt, maxAttempts, derr)
-			if !isTransientHTTP(derr) || attempt == maxAttempts {
-				return "", lastErr
-			}
-			if err := sleepCtx(ctx, backoff); err != nil {
-				return "", err
-			}
-			backoff *= 2
-			continue
-		}
-
-		body, rerr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if rerr != nil {
-			lastErr = fmt.Errorf("read claude response (attempt %d/%d): %w", attempt, maxAttempts, rerr)
-			if attempt == maxAttempts {
-				return "", lastErr
-			}
-			if err := sleepCtx(ctx, backoff); err != nil {
-				return "", err
-			}
-			backoff *= 2
-			continue
-		}
-
-		// Retry 5xx (Anthropic overloaded or Cloudflare upstream error). These
-		// often arrive with Content-Type text/html and a Cloudflare error page
-		// rather than a JSON error body.
-		if resp.StatusCode >= 500 {
-			lastErr = fmt.Errorf("claude upstream %d (attempt %d/%d): %s", resp.StatusCode, attempt, maxAttempts, summarizeUpstreamBody(resp, body))
-			if attempt == maxAttempts {
-				return "", lastErr
-			}
-			if err := sleepCtx(ctx, backoff); err != nil {
-				return "", err
-			}
-			backoff *= 2
-			continue
-		}
-
-		// Non-5xx, non-JSON body: fail fast with a clear message instead of a
-		// cryptic "invalid character '<'" unmarshal error.
-		if !isJSONResponse(resp, body) {
-			return "", fmt.Errorf("claude returned non-JSON response (status %d, content-type %q): %s",
-				resp.StatusCode, resp.Header.Get("Content-Type"), summarizeUpstreamBody(resp, body))
-		}
-
-		var ar anthropicResponse
-		if err := json.Unmarshal(body, &ar); err != nil {
-			return "", fmt.Errorf("unmarshal claude response (status %d): %w — body: %s", resp.StatusCode, err, body)
-		}
-		if ar.Error != nil {
-			return "", fmt.Errorf("claude API error: %s", ar.Error.Message)
-		}
-		if len(ar.Content) == 0 {
-			return "", fmt.Errorf("claude returned empty content")
-		}
-		return ar.Content[0].Text, nil
-	}
-	return "", lastErr
-}
-
-// isJSONResponse returns true if the response looks like JSON — either the
-// Content-Type advertises JSON, or the body starts with '{' / '['.
-func isJSONResponse(resp *http.Response, body []byte) bool {
-	ct := strings.ToLower(resp.Header.Get("Content-Type"))
-	if strings.Contains(ct, "json") {
-		return true
-	}
-	trimmed := bytes.TrimLeft(body, " \t\r\n")
-	return len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[')
-}
-
-// summarizeUpstreamBody extracts a short, log-friendly snippet of the upstream
-// response body. For Cloudflare HTML error pages it returns a canned summary,
-// otherwise it returns the first 300 bytes of the body.
-func summarizeUpstreamBody(resp *http.Response, body []byte) string {
-	ct := strings.ToLower(resp.Header.Get("Content-Type"))
-	lower := strings.ToLower(string(body))
-	if strings.Contains(ct, "html") || strings.Contains(lower, "<html") {
-		if strings.Contains(lower, "cloudflare") {
-			return fmt.Sprintf("cloudflare HTML error page (status %d) — likely Anthropic upstream outage", resp.StatusCode)
-		}
-		return fmt.Sprintf("HTML error page (status %d)", resp.StatusCode)
-	}
-	const maxLen = 300
-	if len(body) > maxLen {
-		return string(body[:maxLen]) + "…"
-	}
-	return string(body)
-}
-
-// sleepCtx sleeps for d, or returns early if ctx is cancelled.
-func sleepCtx(ctx context.Context, d time.Duration) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(d):
-		return nil
-	}
 }
