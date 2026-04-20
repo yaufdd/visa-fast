@@ -1,75 +1,92 @@
-const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8081';
+const API = '/api'
+
+async function apiFetch(path, opts = {}) {
+  const hasBody = opts.body !== undefined
+  const res = await fetch(API + path, {
+    credentials: 'include',
+    ...opts,
+    headers: {
+      ...(hasBody && typeof opts.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
+      ...(opts.headers || {}),
+    },
+  })
+  if (res.status === 401 && !path.startsWith('/auth/') && !path.startsWith('/public/')) {
+    window.location.href = '/login'
+    throw new Error('unauthenticated')
+  }
+  return res
+}
+
+async function errFromRes(res) {
+  try {
+    const data = await res.json()
+    return new Error(data.error || 'request failed')
+  } catch {
+    return new Error(`${res.status} ${res.statusText}`)
+  }
+}
 
 // Groups
 export async function getGroups() {
-  const res = await fetch(`${API}/api/groups`);
-  if (!res.ok) throw new Error('Failed to fetch groups');
+  const res = await apiFetch('/groups');
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function createGroup(name) {
-  const res = await fetch(`${API}/api/groups`, {
+  const res = await apiFetch('/groups', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   });
-  if (!res.ok) throw new Error('Failed to create group');
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function getGroup(id) {
-  const res = await fetch(`${API}/api/groups/${id}`);
-  if (!res.ok) throw new Error('Failed to fetch group');
+  const res = await apiFetch(`/groups/${id}`);
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function updateGroupStatus(groupId, status) {
-  const res = await fetch(`${API}/api/groups/${groupId}/status`, {
+  const res = await apiFetch(`/groups/${groupId}/status`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status }),
   });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Failed to update status');
-  }
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function updateGroupNotes(groupId, notes) {
-  const res = await fetch(`${API}/api/groups/${groupId}/notes`, {
+  const res = await apiFetch(`/groups/${groupId}/notes`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ notes }),
   });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Failed to update notes');
-  }
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function deleteGroup(id) {
-  const res = await fetch(`${API}/api/groups/${id}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error('Failed to delete group');
+  const res = await apiFetch(`/groups/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw await errFromRes(res);
 }
 
 // Tourists
 export async function getTourists(groupId) {
-  const res = await fetch(`${API}/api/groups/${groupId}/tourists`);
-  if (!res.ok) throw new Error('Failed to fetch tourists');
+  const res = await apiFetch(`/groups/${groupId}/tourists`);
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function deleteTourist(touristId) {
-  const res = await fetch(`${API}/api/tourists/${touristId}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error('Failed to delete tourist');
+  const res = await apiFetch(`/tourists/${touristId}`, { method: 'DELETE' });
+  if (!res.ok) throw await errFromRes(res);
 }
 
 // Per-tourist uploads (ticket | voucher). Backend auto-parses on upload.
 export async function getTouristUploads(touristId) {
-  const res = await fetch(`${API}/api/tourists/${touristId}/uploads`);
-  if (!res.ok) throw new Error('Failed to fetch tourist uploads');
+  const res = await apiFetch(`/tourists/${touristId}/uploads`);
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
@@ -77,179 +94,168 @@ export async function uploadTouristFile(touristId, file, fileType) {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('file_type', fileType);
-  const res = await fetch(`${API}/api/tourists/${touristId}/uploads`, {
+  const res = await apiFetch(`/tourists/${touristId}/uploads`, {
     method: 'POST',
     body: formData,
   });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Failed to upload tourist file');
-  }
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 // Hotels
 export async function getHotels() {
-  const res = await fetch(`${API}/api/hotels`);
-  if (!res.ok) throw new Error('Failed to fetch hotels');
+  const res = await apiFetch('/hotels');
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function createHotel(data) {
-  const res = await fetch(`${API}/api/hotels`, {
+  const res = await apiFetch('/hotels', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  if (!res.ok) throw new Error('Failed to create hotel');
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function getHotel(id) {
-  const res = await fetch(`${API}/api/hotels/${id}`);
-  if (!res.ok) throw new Error('Failed to fetch hotel');
+  const res = await apiFetch(`/hotels/${id}`);
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function updateHotel(id, data) {
-  const res = await fetch(`${API}/api/hotels/${id}`, {
+  const res = await apiFetch(`/hotels/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  if (!res.ok) throw new Error('Failed to update hotel');
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function getGroupHotels(groupId) {
-  const res = await fetch(`${API}/api/groups/${groupId}/hotels`);
-  if (!res.ok) throw new Error('Failed to fetch group hotels');
+  const res = await apiFetch(`/groups/${groupId}/hotels`);
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function saveGroupHotels(groupId, hotels) {
-  const res = await fetch(`${API}/api/groups/${groupId}/hotels`, {
+  const res = await apiFetch(`/groups/${groupId}/hotels`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(hotels),
   });
-  if (!res.ok) throw new Error('Failed to save group hotels');
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 // Subgroups
 export async function getSubgroups(groupId) {
-  const res = await fetch(`${API}/api/groups/${groupId}/subgroups`);
-  if (!res.ok) throw new Error('Failed to fetch subgroups');
+  const res = await apiFetch(`/groups/${groupId}/subgroups`);
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function createSubgroup(groupId, name) {
-  const res = await fetch(`${API}/api/groups/${groupId}/subgroups`, {
+  const res = await apiFetch(`/groups/${groupId}/subgroups`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   });
-  if (!res.ok) throw new Error('Failed to create subgroup');
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function updateSubgroup(subgroupId, name) {
-  const res = await fetch(`${API}/api/subgroups/${subgroupId}`, {
+  const res = await apiFetch(`/subgroups/${subgroupId}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   });
-  if (!res.ok) throw new Error('Failed to update subgroup');
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function deleteSubgroup(subgroupId) {
-  const res = await fetch(`${API}/api/subgroups/${subgroupId}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error('Failed to delete subgroup');
+  const res = await apiFetch(`/subgroups/${subgroupId}`, { method: 'DELETE' });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
 }
 
 export async function assignTouristSubgroup(touristId, subgroupId) {
-  const res = await fetch(`${API}/api/tourists/${touristId}/subgroup`, {
+  const res = await apiFetch(`/tourists/${touristId}/subgroup`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ subgroup_id: subgroupId || null }),
   });
-  if (!res.ok) throw new Error('Failed to assign subgroup');
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function getSubgroupHotels(subgroupId) {
-  const res = await fetch(`${API}/api/subgroups/${subgroupId}/hotels`);
-  if (!res.ok) throw new Error('Failed to fetch subgroup hotels');
+  const res = await apiFetch(`/subgroups/${subgroupId}/hotels`);
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function saveSubgroupHotels(subgroupId, hotels) {
-  const res = await fetch(`${API}/api/subgroups/${subgroupId}/hotels`, {
+  const res = await apiFetch(`/subgroups/${subgroupId}/hotels`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(hotels),
   });
-  if (!res.ok) throw new Error('Failed to save subgroup hotels');
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function generateSubgroupDocuments(subgroupId) {
-  const res = await fetch(`${API}/api/subgroups/${subgroupId}/generate`, { method: 'POST' });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Failed to generate subgroup documents');
-  }
+  const res = await apiFetch(`/subgroups/${subgroupId}/generate`, { method: 'POST' });
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export function getSubgroupDownloadUrl(subgroupId) {
-  return `${API}/api/subgroups/${subgroupId}/download`;
+  return `${API}/subgroups/${subgroupId}/download`;
 }
 
 // Documents
 export async function generateDocuments(groupId, guidePhone = '') {
-  const url = new URL(`${API}/api/groups/${groupId}/generate`, window.location.origin);
-  if (guidePhone) url.searchParams.set('guide_phone', guidePhone);
-  const res = await fetch(url.toString(), { method: 'POST' });
-  if (!res.ok) throw new Error('Failed to generate documents');
+  const qs = guidePhone ? `?guide_phone=${encodeURIComponent(guidePhone)}` : '';
+  const res = await apiFetch(`/groups/${groupId}/generate${qs}`, { method: 'POST' });
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export function getDownloadUrl(groupId) {
-  return `${API}/api/groups/${groupId}/download`;
+  return `${API}/groups/${groupId}/download`;
 }
 
 export async function finalizeGroup(groupId, submissionDate = '') {
-  const url = new URL(`${API}/api/groups/${groupId}/finalize`, window.location.origin);
-  if (submissionDate) url.searchParams.set('submission_date', submissionDate);
-  const res = await fetch(url.toString(), { method: 'POST' });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Failed to finalize group');
-  }
+  const qs = submissionDate ? `?submission_date=${encodeURIComponent(submissionDate)}` : '';
+  const res = await apiFetch(`/groups/${groupId}/finalize${qs}`, { method: 'POST' });
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export function getFinalDownloadUrl(groupId) {
-  return `${API}/api/groups/${groupId}/download/final`;
+  return `${API}/groups/${groupId}/download/final`;
 }
 
 export async function getFinalStatus(groupId) {
-  const res = await fetch(`${API}/api/groups/${groupId}/final/status`);
-  if (!res.ok) throw new Error('Failed to fetch final status');
+  const res = await apiFetch(`/groups/${groupId}/final/status`);
+  if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 // Submissions (form-workflow)
-async function errFromRes(res) {
-  const data = await res.json().catch(() => ({}));
-  return new Error(data.error || `Request failed (${res.status})`);
+export async function apiCreateSubmission(payload, consentAccepted) {
+  const res = await apiFetch('/submissions', {
+    method: 'POST',
+    body: JSON.stringify({ payload, consent_accepted: consentAccepted, source: 'manager' }),
+  });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
 }
 
+// Legacy compatibility shim — kept until Task 28 migrates public form callers
+// to publicCreateSubmission(slug, ...). Do not use for new code.
 export async function createSubmission(payload, consentAccepted, source = 'tourist') {
-  const res = await fetch(`${API}/api/submissions`, {
+  const res = await fetch(`${API}/submissions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ payload, consent_accepted: consentAccepted, source }),
@@ -263,22 +269,20 @@ export async function listSubmissions(q = '', status = '') {
   if (q) params.set('q', q);
   if (status) params.set('status', status);
   const qs = params.toString();
-  const url = qs ? `${API}/api/submissions?${qs}` : `${API}/api/submissions`;
-  const res = await fetch(url);
+  const res = await apiFetch(qs ? `/submissions?${qs}` : '/submissions');
   if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function getSubmission(id) {
-  const res = await fetch(`${API}/api/submissions/${id}`);
+  const res = await apiFetch(`/submissions/${id}`);
   if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function updateSubmission(id, payload) {
-  const res = await fetch(`${API}/api/submissions/${id}`, {
+  const res = await apiFetch(`/submissions/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ payload }),
   });
   if (!res.ok) throw await errFromRes(res);
@@ -286,15 +290,14 @@ export async function updateSubmission(id, payload) {
 }
 
 export async function archiveSubmission(id) {
-  const res = await fetch(`${API}/api/submissions/${id}`, { method: 'DELETE' });
+  const res = await apiFetch(`/submissions/${id}`, { method: 'DELETE' });
   if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function attachSubmission(id, groupId, subgroupId = null) {
-  const res = await fetch(`${API}/api/submissions/${id}/attach`, {
+  const res = await apiFetch(`/submissions/${id}/attach`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ group_id: groupId, subgroup_id: subgroupId }),
   });
   if (!res.ok) throw await errFromRes(res);
@@ -302,17 +305,65 @@ export async function attachSubmission(id, groupId, subgroupId = null) {
 }
 
 export async function getConsentText() {
-  const res = await fetch(`${API}/api/consent/text`);
+  const res = await apiFetch('/consent/text');
   if (!res.ok) throw await errFromRes(res);
   return res.json();
 }
 
 export async function updateFlightData(touristId, data) {
-  const res = await fetch(`${API}/api/tourists/${touristId}/flight_data`, {
+  const res = await apiFetch(`/tourists/${touristId}/flight_data`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!res.ok) throw await errFromRes(res);
   return res.json();
+}
+
+// ── Auth ──
+export async function apiRegister(orgName, email, password) {
+  const res = await apiFetch('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ org_name: orgName, email, password }),
+  })
+  if (!res.ok) throw await errFromRes(res)
+  return res.json()
+}
+
+export async function apiLogin(email, password) {
+  const res = await apiFetch('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  })
+  if (!res.ok) throw await errFromRes(res)
+  return res.json()
+}
+
+export async function apiLogout() {
+  const res = await apiFetch('/auth/logout', { method: 'POST' })
+  if (!res.ok) throw await errFromRes(res)
+  return res.json()
+}
+
+export async function apiMe() {
+  const res = await apiFetch('/auth/me')
+  if (res.status === 401) return null
+  if (!res.ok) throw await errFromRes(res)
+  return res.json()
+}
+
+// ── Public (no session) ──
+export async function publicGetOrg(slug) {
+  const res = await fetch(`${API}/public/org/${slug}`)
+  if (!res.ok) throw await errFromRes(res)
+  return res.json()
+}
+
+export async function publicCreateSubmission(slug, payload, consentAccepted) {
+  const res = await fetch(`${API}/public/submissions/${slug}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ payload, consent_accepted: consentAccepted }),
+  })
+  if (!res.ok) throw await errFromRes(res)
+  return res.json()
 }

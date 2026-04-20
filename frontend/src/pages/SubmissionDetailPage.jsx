@@ -3,9 +3,9 @@ import { useNavigate, useParams } from 'react-router-dom';
 import SubmissionForm from '../components/SubmissionForm';
 import AttachGroupModal from '../components/AttachGroupModal';
 import {
+  apiCreateSubmission,
   archiveSubmission,
   attachSubmission,
-  createSubmission,
   getSubmission,
   updateSubmission,
 } from '../api/client';
@@ -60,7 +60,7 @@ export default function SubmissionDetailPage() {
   const handleSubmit = useCallback(async (payload, consent) => {
     setActionError(null);
     if (isNew) {
-      const res = await createSubmission(payload, consent, 'manager');
+      const res = await apiCreateSubmission(payload, consent);
       navigate(`/submissions/${res.id}`);
       return;
     }
