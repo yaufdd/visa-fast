@@ -40,6 +40,7 @@ ALTER TABLE tourists
 -- migration without a proper data-migration plan.
 DELETE FROM uploads WHERE file_type NOT IN ('ticket', 'voucher');
 
+ALTER TABLE uploads DROP CONSTRAINT IF EXISTS uploads_file_type_check;
 ALTER TABLE uploads
   ADD CONSTRAINT uploads_file_type_check
   CHECK (file_type IN ('ticket', 'voucher'));
