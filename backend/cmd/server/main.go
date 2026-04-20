@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"fujitravel-admin/backend/internal/api"
-	"fujitravel-admin/backend/internal/sheets"
 )
 
 func main() {
@@ -21,8 +20,6 @@ func main() {
 	// ── Environment ───────────────────────────────────────────────────────────
 	dbURL := mustEnv("DATABASE_URL")
 	anthropicKey := mustEnv("ANTHROPIC_API_KEY")
-	googleCredsPath := mustEnv("GOOGLE_CREDENTIALS_PATH")
-	sheetID := mustEnv("GOOGLE_SHEET_ID")
 	uploadsDir := envOrDefault("UPLOADS_DIR", "./uploads")
 	port := envOrDefault("PORT", "8080")
 
@@ -65,14 +62,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ── Google Sheets ─────────────────────────────────────────────────────────
-	sheetsClient, err := sheets.New(ctx, googleCredsPath, sheetID)
-	if err != nil {
-		// Non-fatal: sheets search will fail with a clear error at request time.
-		slog.Warn("sheets client init failed", "err", err)
-		sheetsClient = nil
-	}
-
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
@@ -109,20 +98,12 @@ func main() {
 		r.Put("/groups/{id}/status", api.UpdateGroupStatus(pool))
 		r.Put("/groups/{id}/notes", api.UpdateGroupNotes(pool))
 
-		// Parse (AI Pass 1 + auto-match)
-		if sheetsClient != nil {
-			r.Post("/groups/{id}/parse", api.ParseGroup(pool, anthropicKey, sheetsClient))
-		} else {
-			r.Post("/groups/{id}/parse", api.ParseGroup(pool, anthropicKey))
-		}
-
 		// Subgroups
 		r.Get("/groups/{id}/subgroups", api.ListSubgroups(pool, uploadsDir))
 		r.Post("/groups/{id}/subgroups", api.CreateSubgroup(pool))
 		r.Put("/subgroups/{id}", api.UpdateSubgroup(pool))
 		r.Delete("/subgroups/{id}", api.DeleteSubgroup(pool))
 		r.Put("/tourists/{id}/subgroup", api.AssignTouristSubgroup(pool))
-		r.Post("/subgroups/{id}/parse", api.ParseSubgroup(pool, anthropicKey))
 		r.Get("/subgroups/{id}/hotels", api.ListSubgroupHotels(pool))
 		r.Post("/subgroups/{id}/hotels", api.UpsertSubgroupHotels(pool))
 		r.Post("/subgroups/{id}/generate", api.GenerateSubgroupDocuments(pool, anthropicKey, uploadsDir, pythonScript))
@@ -132,10 +113,9 @@ func main() {
 		r.Get("/groups/{id}/tourists", api.ListTourists(pool))
 		r.Delete("/tourists/{id}", api.DeleteTourist(pool))
 
-		// Per-tourist uploads & parse
+		// Per-tourist uploads
 		r.Get("/tourists/{id}/uploads", api.ListTouristUploads(pool))
 		r.Post("/tourists/{id}/uploads", api.UploadTouristFile(pool, uploadsDir, anthropicKey))
-		r.Post("/tourists/{id}/parse", api.ParseTourist(pool, anthropicKey))
 
 		// Group hotels
 		r.Get("/groups/{id}/hotels", api.ListGroupHotels(pool))
@@ -149,17 +129,18 @@ func main() {
 		r.Get("/groups/{id}/download/final", api.DownloadFinalZIP(uploadsDir))
 		r.Get("/groups/{id}/final/status", api.FinalStatus(uploadsDir))
 
-		// Google Sheets
-		if sheetsClient != nil {
-			r.Get("/sheets/search", api.SearchSheets(sheetsClient))
-			r.Get("/sheets/rows", api.ListSheetRows(sheetsClient))
-		} else {
-			noSheets := func(w http.ResponseWriter, req *http.Request) {
-				http.Error(w, `{"error":"Google Sheets client not configured"}`, http.StatusServiceUnavailable)
-			}
-			r.Get("/sheets/search", noSheets)
-			r.Get("/sheets/rows", noSheets)
-		}
+		// Submissions (form-based workflow)
+		r.Post("/submissions", api.CreateSubmission(pool))
+		r.Get("/submissions", api.ListSubmissions(pool))
+		r.Get("/submissions/{id}", api.GetSubmission(pool))
+		r.Put("/submissions/{id}", api.UpdateSubmission(pool))
+		r.Delete("/submissions/{id}", api.ArchiveSubmission(pool))
+		r.Delete("/submissions/{id}/erase", api.EraseSubmission(pool))
+		r.Post("/submissions/{id}/attach", api.AttachSubmission(pool))
+		r.Get("/consent/text", api.GetConsentText())
+
+		// Flight data
+		r.Put("/tourists/{id}/flight_data", api.UpdateFlightData(pool))
 	})
 
 	slog.Info("starting server", "port", port)

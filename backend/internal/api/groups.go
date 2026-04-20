@@ -116,7 +116,7 @@ func GetGroup(db *pgxpool.Pool) http.HandlerFunc {
 
 		// Tourists.
 		tRows, err := db.Query(r.Context(),
-			`SELECT id, group_id, raw_json, matched_sheet_row, match_confirmed, created_at, updated_at
+			`SELECT id, group_id, subgroup_id, submission_id, submission_snapshot, flight_data, created_at, updated_at
 			   FROM tourists WHERE group_id = $1 ORDER BY created_at`, id)
 		if err != nil {
 			slog.Error("fetch tourists", "err", err)
@@ -126,29 +126,30 @@ func GetGroup(db *pgxpool.Pool) http.HandlerFunc {
 		defer tRows.Close()
 
 		type Tourist struct {
-			ID              string          `json:"id"`
-			GroupID         string          `json:"group_id"`
-			RawJSON         json.RawMessage `json:"raw_json"`
-			MatchedSheetRow json.RawMessage `json:"matched_sheet_row"`
-			MatchConfirmed  bool            `json:"match_confirmed"`
-			CreatedAt       time.Time       `json:"created_at"`
-			UpdatedAt       time.Time       `json:"updated_at"`
+			ID                 string          `json:"id"`
+			GroupID            string          `json:"group_id"`
+			SubgroupID         *string         `json:"subgroup_id"`
+			SubmissionID       *string         `json:"submission_id"`
+			SubmissionSnapshot json.RawMessage `json:"submission_snapshot"`
+			FlightData         json.RawMessage `json:"flight_data"`
+			CreatedAt          time.Time       `json:"created_at"`
+			UpdatedAt          time.Time       `json:"updated_at"`
 		}
 
 		var tourists []Tourist
 		for tRows.Next() {
 			var t Tourist
-			var rawJSON, matchedRow []byte
-			if err := tRows.Scan(&t.ID, &t.GroupID, &rawJSON, &matchedRow, &t.MatchConfirmed, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			var snap, flight []byte
+			if err := tRows.Scan(&t.ID, &t.GroupID, &t.SubgroupID, &t.SubmissionID, &snap, &flight, &t.CreatedAt, &t.UpdatedAt); err != nil {
 				slog.Error("scan tourist", "err", err)
 				writeError(w, http.StatusInternalServerError, "scan error")
 				return
 			}
-			if rawJSON != nil {
-				t.RawJSON = json.RawMessage(rawJSON)
+			if snap != nil {
+				t.SubmissionSnapshot = json.RawMessage(snap)
 			}
-			if matchedRow != nil {
-				t.MatchedSheetRow = json.RawMessage(matchedRow)
+			if flight != nil {
+				t.FlightData = json.RawMessage(flight)
 			}
 			tourists = append(tourists, t)
 		}

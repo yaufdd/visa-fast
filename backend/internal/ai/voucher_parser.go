@@ -7,13 +7,7 @@ import (
 )
 
 // VoucherHotel is one hotel extracted from a voucher.
-// NOTE: a type `VoucherHotel` already exists in pass1.go. If there's a
-// conflict, RENAME this one to `ParsedVoucherHotel` AND report the
-// conflict so we can reconcile later. Do not silently delete the one in
-// pass1.go (pass1.go is scheduled for deletion in Task 30 but is still
-// live now).
-
-type ParsedVoucherHotel struct {
+type VoucherHotel struct {
 	Name     string `json:"name"`
 	City     string `json:"city"`
 	Address  string `json:"address"`
@@ -36,7 +30,7 @@ RULES:
 - Do not invent names or dates. Only addresses/phones may be filled from general knowledge.`
 
 // ParseVouchers returns the hotels found across all voucher files.
-func ParseVouchers(ctx context.Context, apiKey string, files []FileInput) ([]ParsedVoucherHotel, error) {
+func ParseVouchers(ctx context.Context, apiKey string, files []FileInput) ([]VoucherHotel, error) {
 	contents, err := buildFileContents(files)
 	if err != nil {
 		return nil, err
@@ -57,7 +51,7 @@ func ParseVouchers(ctx context.Context, apiKey string, files []FileInput) ([]Par
 	if err != nil {
 		return nil, fmt.Errorf("voucher parse call: %w", err)
 	}
-	var out []ParsedVoucherHotel
+	var out []VoucherHotel
 	if err := json.Unmarshal([]byte(extractJSON(raw)), &out); err != nil {
 		return nil, fmt.Errorf("voucher parse decode: %w — raw: %s", err, raw)
 	}

@@ -150,6 +150,14 @@ func parseTicketAndPersist(r *http.Request, db *pgxpool.Pool, apiKey, touristID 
 	return nil
 }
 
+// convertDate converts DD.MM.YYYY → YYYY-MM-DD for PostgreSQL date fields.
+func convertDate(s string) string {
+	if len(s) == 10 && s[2] == '.' && s[5] == '.' {
+		return s[6:10] + "-" + s[3:5] + "-" + s[0:2]
+	}
+	return s
+}
+
 // parseVoucherAndPersist calls the voucher parser and, for each hotel,
 // looks up (or creates) the hotels row and inserts a group_hotels row
 // scoped to the tourist's group_id/subgroup_id.
