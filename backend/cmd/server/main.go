@@ -126,8 +126,8 @@ func main() {
 		r.Post("/groups/{id}/finalize", api.FinalizeGroup(pool, anthropicKey, uploadsDir, pythonScript))
 		r.Get("/groups/{id}/documents", api.GetDocuments(pool))
 		r.Get("/groups/{id}/download", api.DownloadZIP(pool))
-		r.Get("/groups/{id}/download/final", api.DownloadFinalZIP(uploadsDir))
-		r.Get("/groups/{id}/final/status", api.FinalStatus(uploadsDir))
+		r.Get("/groups/{id}/download/final", api.DownloadFinalZIP(pool, uploadsDir))
+		r.Get("/groups/{id}/final/status", api.FinalStatus(pool, uploadsDir))
 
 		// Submissions (form-based workflow)
 		r.Post("/submissions", api.CreateSubmissionByManager(pool))

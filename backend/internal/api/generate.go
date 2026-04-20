@@ -17,7 +17,9 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"fujitravel-admin/backend/internal/ai"
+	dbrepo "fujitravel-admin/backend/internal/db"
 	"fujitravel-admin/backend/internal/docgen"
+	"fujitravel-admin/backend/internal/middleware"
 )
 
 // Sentinel errors returned by runPipeline so callers can translate them into
@@ -53,8 +55,8 @@ type touristRow struct {
 
 // loadTouristRowsForSubgroup loads all tourists for a subgroup (or the whole
 // group when subgroupID == "") returning their submission_snapshot, flight_data
-// and cached translations.
-func loadTouristRowsForSubgroup(ctx context.Context, db *pgxpool.Pool, groupID, subgroupID string) ([]touristRow, error) {
+// and cached translations. Scoped to the calling org.
+func loadTouristRowsForSubgroup(ctx context.Context, pool *pgxpool.Pool, orgID, groupID, subgroupID string) ([]touristRow, error) {
 	var rows interface {
 		Next() bool
 		Scan(...any) error
@@ -62,17 +64,17 @@ func loadTouristRowsForSubgroup(ctx context.Context, db *pgxpool.Pool, groupID, 
 	}
 	var err error
 	if subgroupID != "" {
-		rows, err = db.Query(ctx,
+		rows, err = pool.Query(ctx,
 			`SELECT id, group_id, subgroup_id, submission_snapshot, flight_data, translations
 			   FROM tourists
-			  WHERE group_id = $1 AND subgroup_id = $2
-			  ORDER BY created_at`, groupID, subgroupID)
+			  WHERE group_id = $1 AND subgroup_id = $2 AND org_id = $3
+			  ORDER BY created_at`, groupID, subgroupID, orgID)
 	} else {
-		rows, err = db.Query(ctx,
+		rows, err = pool.Query(ctx,
 			`SELECT id, group_id, subgroup_id, submission_snapshot, flight_data, translations
 			   FROM tourists
-			  WHERE group_id = $1 AND subgroup_id IS NULL
-			  ORDER BY created_at`, groupID)
+			  WHERE group_id = $1 AND subgroup_id IS NULL AND org_id = $2
+			  ORDER BY created_at`, groupID, orgID)
 	}
 	if err != nil {
 		return nil, err
@@ -99,7 +101,8 @@ func loadTouristRowsForSubgroup(ctx context.Context, db *pgxpool.Pool, groupID, 
 // loadHotelBriefsForSubgroup loads hotels for a specific subgroup as ai.HotelBrief
 // entries (the shape consumed by the new pipeline). If subgroupID is "",
 // it falls back to all hotels for the group (legacy/no-subgroup mode).
-func loadHotelBriefsForSubgroup(ctx context.Context, db *pgxpool.Pool, groupID, subgroupID string) ([]ai.HotelBrief, error) {
+// Scoped to the calling org via group_hotels.org_id.
+func loadHotelBriefsForSubgroup(ctx context.Context, pool *pgxpool.Pool, orgID, groupID, subgroupID string) ([]ai.HotelBrief, error) {
 	var hRows interface {
 		Next() bool
 		Scan(...any) error
@@ -107,21 +110,21 @@ func loadHotelBriefsForSubgroup(ctx context.Context, db *pgxpool.Pool, groupID, 
 	}
 	var err error
 	if subgroupID != "" {
-		hRows, err = db.Query(ctx,
+		hRows, err = pool.Query(ctx,
 			`SELECT h.name_en, h.city, COALESCE(h.address,''), COALESCE(h.phone,''),
 			        gh.check_in::text, gh.check_out::text
 			   FROM group_hotels gh
 			   JOIN hotels h ON h.id = gh.hotel_id
-			  WHERE gh.subgroup_id = $1
-			  ORDER BY gh.sort_order`, subgroupID)
+			  WHERE gh.subgroup_id = $1 AND gh.org_id = $2
+			  ORDER BY gh.sort_order`, subgroupID, orgID)
 	} else {
-		hRows, err = db.Query(ctx,
+		hRows, err = pool.Query(ctx,
 			`SELECT h.name_en, h.city, COALESCE(h.address,''), COALESCE(h.phone,''),
 			        gh.check_in::text, gh.check_out::text
 			   FROM group_hotels gh
 			   JOIN hotels h ON h.id = gh.hotel_id
-			  WHERE gh.group_id = $1 AND gh.subgroup_id IS NULL
-			  ORDER BY gh.sort_order`, groupID)
+			  WHERE gh.group_id = $1 AND gh.subgroup_id IS NULL AND gh.org_id = $2
+			  ORDER BY gh.sort_order`, groupID, orgID)
 	}
 	if err != nil {
 		return nil, err
@@ -262,8 +265,8 @@ func buildProgrammeInput(payloads []map[string]any, flights []map[string]any, ho
 
 // runPipeline executes the NEW AI pipeline for one subgroup (or whole group if
 // subgroupID=="") and returns the marshaled pass2 JSON bytes.
-func runPipeline(ctx context.Context, db *pgxpool.Pool, apiKey, groupID, subgroupID, guidePhone string, now time.Time) ([]byte, error) {
-	rows, err := loadTouristRowsForSubgroup(ctx, db, groupID, subgroupID)
+func runPipeline(ctx context.Context, pool *pgxpool.Pool, apiKey, orgID, groupID, subgroupID, guidePhone string, now time.Time) ([]byte, error) {
+	rows, err := loadTouristRowsForSubgroup(ctx, pool, orgID, groupID, subgroupID)
 	if err != nil {
 		return nil, fmt.Errorf("load tourists: %w", err)
 	}
@@ -271,7 +274,7 @@ func runPipeline(ctx context.Context, db *pgxpool.Pool, apiKey, groupID, subgrou
 		return nil, errNoTourists
 	}
 
-	hotels, err := loadHotelBriefsForSubgroup(ctx, db, groupID, subgroupID)
+	hotels, err := loadHotelBriefsForSubgroup(ctx, pool, orgID, groupID, subgroupID)
 	if err != nil {
 		return nil, fmt.Errorf("load hotels: %w", err)
 	}
@@ -321,9 +324,10 @@ func runPipeline(ctx context.Context, db *pgxpool.Pool, apiKey, groupID, subgrou
 		if mErr != nil {
 			continue
 		}
-		if _, err := db.Exec(ctx,
-			`UPDATE tourists SET translations = $1, updated_at = NOW() WHERE id = $2`,
-			buf, row.ID); err != nil {
+		if _, err := pool.Exec(ctx,
+			`UPDATE tourists SET translations = $1, updated_at = NOW()
+			  WHERE id = $2 AND org_id = $3`,
+			buf, row.ID, orgID); err != nil {
 			slog.Warn("cache tourist translations", "tourist_id", row.ID, "err", err)
 		}
 	}
@@ -346,19 +350,28 @@ func runPipeline(ctx context.Context, db *pgxpool.Pool, apiKey, groupID, subgrou
 
 // GenerateDocuments handles POST /api/groups/:id/generate
 // Supports subgroups: each subgroup gets its own folder in output.zip.
-func GenerateDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) http.HandlerFunc {
+func GenerateDocuments(pool *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		groupID := chi.URLParam(r, "id")
 
-		var groupName string
-		if err := db.QueryRow(r.Context(), `SELECT name FROM groups WHERE id = $1`, groupID).Scan(&groupName); err != nil {
+		g, err := dbrepo.GetGroup(r.Context(), pool, orgID, groupID)
+		if err != nil {
+			slog.Error("get group", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if g == nil {
 			writeError(w, http.StatusNotFound, "group not found")
 			return
 		}
+		groupName := g.Name
 
-		// Load subgroups.
-		sgRows, err := db.Query(r.Context(),
-			`SELECT id, name FROM subgroups WHERE group_id = $1 ORDER BY sort_order, created_at`, groupID)
+		// Load subgroups scoped to the org.
+		sgRows, err := pool.Query(r.Context(),
+			`SELECT id, name FROM subgroups
+			   WHERE group_id = $1 AND org_id = $2
+			   ORDER BY sort_order, created_at`, groupID, orgID)
 		if err != nil {
 			slog.Error("fetch subgroups", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
@@ -389,7 +402,7 @@ func GenerateDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string
 		var lastPass2JSON []byte
 
 		for _, sg := range subgroups {
-			pass2JSON, err := runPipeline(r.Context(), db, apiKey, groupID, sg.id, guidePhone, now)
+			pass2JSON, err := runPipeline(r.Context(), pool, apiKey, orgID, groupID, sg.id, guidePhone, now)
 			if err != nil {
 				if errors.Is(err, errNoTourists) {
 					slog.Warn("subgroup has no tourists, skipping", "subgroup", sg.name)
@@ -426,12 +439,7 @@ func GenerateDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string
 		}
 
 		// Save last pass2_json (for finalize step).
-		var docID string
-		err = db.QueryRow(r.Context(),
-			`INSERT INTO documents (group_id, pass2_json, zip_path, generated_at)
-			 VALUES ($1, $2, $3, $4) RETURNING id`,
-			groupID, lastPass2JSON, zipPath, now,
-		).Scan(&docID)
+		docID, err := dbrepo.CreateDocument(r.Context(), pool, orgID, groupID, zipPath, lastPass2JSON, now)
 		if err != nil {
 			slog.Error("insert document", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
@@ -448,13 +456,16 @@ func GenerateDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string
 
 // GenerateSubgroupDocuments handles POST /api/subgroups/:id/generate
 // Generates docs for a single subgroup and returns a per-subgroup ZIP.
-func GenerateSubgroupDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) http.HandlerFunc {
+func GenerateSubgroupDocuments(pool *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		subgroupID := chi.URLParam(r, "id")
 
 		var groupID, subgroupName string
-		if err := db.QueryRow(r.Context(),
-			`SELECT group_id, name FROM subgroups WHERE id = $1`, subgroupID).Scan(&groupID, &subgroupName); err != nil {
+		if err := pool.QueryRow(r.Context(),
+			`SELECT group_id, name FROM subgroups WHERE id = $1 AND org_id = $2`,
+			subgroupID, orgID,
+		).Scan(&groupID, &subgroupName); err != nil {
 			writeError(w, http.StatusNotFound, "subgroup not found")
 			return
 		}
@@ -472,7 +483,7 @@ func GenerateSubgroupDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScrip
 		subDocsDir := filepath.Join(uploadsDir, groupID, "docs", subgroupName)
 		_ = os.RemoveAll(subDocsDir)
 
-		pass2JSON, err := runPipeline(r.Context(), db, apiKey, groupID, subgroupID, guidePhone, now)
+		pass2JSON, err := runPipeline(r.Context(), pool, apiKey, orgID, groupID, subgroupID, guidePhone, now)
 		if err != nil {
 			if errors.Is(err, errNoTourists) {
 				writeError(w, http.StatusBadRequest, "no tourists in this subgroup")
@@ -502,11 +513,7 @@ func GenerateSubgroupDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScrip
 		}
 
 		// Save pass2_json so finalize can use it later.
-		if _, err := db.Exec(r.Context(),
-			`INSERT INTO documents (group_id, pass2_json, zip_path, generated_at)
-			 VALUES ($1, $2, $3, $4)`,
-			groupID, pass2JSON, zipPath, now,
-		); err != nil {
+		if _, err := dbrepo.CreateDocument(r.Context(), pool, orgID, groupID, zipPath, pass2JSON, now); err != nil {
 			slog.Warn("insert document record", "err", err)
 		}
 
@@ -519,12 +526,15 @@ func GenerateSubgroupDocuments(db *pgxpool.Pool, apiKey, uploadsDir, pythonScrip
 }
 
 // DownloadSubgroupZIP handles GET /api/subgroups/:id/download
-func DownloadSubgroupZIP(db *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
+func DownloadSubgroupZIP(pool *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		subgroupID := chi.URLParam(r, "id")
 		var groupID, subgroupName string
-		if err := db.QueryRow(r.Context(),
-			`SELECT group_id, name FROM subgroups WHERE id = $1`, subgroupID).Scan(&groupID, &subgroupName); err != nil {
+		if err := pool.QueryRow(r.Context(),
+			`SELECT group_id, name FROM subgroups WHERE id = $1 AND org_id = $2`,
+			subgroupID, orgID,
+		).Scan(&groupID, &subgroupName); err != nil {
 			writeError(w, http.StatusNotFound, "subgroup not found")
 			return
 		}
@@ -662,31 +672,38 @@ func translitLatToCyr(s string) string {
 // Generates group-level docs (для Инны в ВЦ, заявка ВЦ) for ALL tourists across
 // ALL subgroups in the подача. Skips AI — builds the list from DB directly
 // and reuses the latest subgroup's pass2_json as a template for trip-level fields.
-func FinalizeGroup(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) http.HandlerFunc {
+func FinalizeGroup(pool *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		groupID := chi.URLParam(r, "id")
 
-		// Load the last saved pass2_json for this group — used as a template.
-		var templateJSON []byte
-		if err := db.QueryRow(r.Context(),
-			`SELECT pass2_json FROM documents WHERE group_id = $1 ORDER BY generated_at DESC LIMIT 1`,
-			groupID,
-		).Scan(&templateJSON); err != nil {
-			writeError(w, http.StatusBadRequest, "no generated documents found — сначала сгенерируйте документы хотя бы для одной группы")
+		// Ensure the group belongs to this org before doing anything else.
+		g, err := dbrepo.GetGroup(r.Context(), pool, orgID, groupID)
+		if err != nil {
+			slog.Error("get group", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if g == nil {
+			writeError(w, http.StatusNotFound, "group not found")
 			return
 		}
 
+		// Load the last saved pass2_json for this group — used as a template.
+		latest, err := dbrepo.LatestDocumentForGroup(r.Context(), pool, orgID, groupID)
+		if err != nil || latest == nil {
+			writeError(w, http.StatusBadRequest, "no generated documents found — сначала сгенерируйте документы хотя бы для одной группы")
+			return
+		}
+		templateJSON := []byte(latest.Pass2JSON)
+
 		// Collect Russian names of ALL tourists across ALL subgroups from submission_snapshot.
-		rows, err := db.Query(r.Context(),
-			`SELECT submission_snapshot FROM tourists
-			  WHERE group_id = $1
-			  ORDER BY created_at`, groupID)
+		tourists, err := dbrepo.ListTouristsByGroup(r.Context(), pool, orgID, groupID)
 		if err != nil {
 			slog.Error("fetch tourists for finalize", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
-		defer rows.Close()
 
 		// Two-pass: collect candidates with a "reliability score".
 		// 2 = name_cyr from submission (reliable), 0 = transliterated from name_lat.
@@ -695,11 +712,8 @@ func FinalizeGroup(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) ht
 			score int
 		}
 		var candidates []candidate
-		for rows.Next() {
-			var snapshot []byte
-			if err := rows.Scan(&snapshot); err != nil {
-				continue
-			}
+		for _, t := range tourists {
+			snapshot := []byte(t.SubmissionSnapshot)
 			if len(snapshot) == 0 {
 				continue
 			}
@@ -724,7 +738,6 @@ func FinalizeGroup(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) ht
 			}
 			candidates = append(candidates, candidate{name: name, score: score})
 		}
-		rows.Close()
 
 		// Fuzzy dedupe preserving creation order. When a duplicate is found (edit
 		// distance ≤ 2 on normalized key), keep the version with the higher score.
@@ -831,45 +844,16 @@ func FinalizeGroup(db *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) ht
 }
 
 // GetDocuments handles GET /api/groups/:id/documents
-func GetDocuments(db *pgxpool.Pool) http.HandlerFunc {
+func GetDocuments(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		groupID := chi.URLParam(r, "id")
 
-		rows, err := db.Query(r.Context(),
-			`SELECT id, group_id, pass2_json, zip_path, generated_at, created_at
-			   FROM documents WHERE group_id = $1 ORDER BY created_at DESC`, groupID)
+		docs, err := dbrepo.ListDocumentsForGroup(r.Context(), pool, orgID, groupID)
 		if err != nil {
 			slog.Error("fetch documents", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
-		}
-		defer rows.Close()
-
-		type Doc struct {
-			ID          string          `json:"id"`
-			GroupID     string          `json:"group_id"`
-			Pass2JSON   json.RawMessage `json:"pass2_json"`
-			ZipPath     string          `json:"zip_path"`
-			GeneratedAt *time.Time      `json:"generated_at"`
-			CreatedAt   time.Time       `json:"created_at"`
-		}
-
-		var docs []Doc
-		for rows.Next() {
-			var d Doc
-			var pass2JSON []byte
-			if err := rows.Scan(&d.ID, &d.GroupID, &pass2JSON, &d.ZipPath, &d.GeneratedAt, &d.CreatedAt); err != nil {
-				slog.Error("scan document", "err", err)
-				writeError(w, http.StatusInternalServerError, "scan error")
-				return
-			}
-			if pass2JSON != nil {
-				d.Pass2JSON = json.RawMessage(pass2JSON)
-			}
-			docs = append(docs, d)
-		}
-		if docs == nil {
-			docs = []Doc{}
 		}
 		writeJSON(w, http.StatusOK, docs)
 	}
@@ -877,11 +861,21 @@ func GetDocuments(db *pgxpool.Pool) http.HandlerFunc {
 
 // FinalStatus handles GET /api/groups/:id/final/status
 // Returns whether the final.zip exists on disk and when it was generated.
-func FinalStatus(uploadsDir string) http.HandlerFunc {
+// Scoped to org: groups from other tenants return has_zip=false even if a
+// file happens to exist on disk under that UUID.
+func FinalStatus(pool *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		groupID := chi.URLParam(r, "id")
-		zipPath := filepath.Join(uploadsDir, groupID, "final.zip")
 		resp := map[string]any{"has_zip": false}
+
+		g, err := dbrepo.GetGroup(r.Context(), pool, orgID, groupID)
+		if err != nil || g == nil {
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+
+		zipPath := filepath.Join(uploadsDir, groupID, "final.zip")
 		if info, err := os.Stat(zipPath); err == nil && !info.IsDir() {
 			resp["has_zip"] = true
 			resp["generated_at"] = info.ModTime()
@@ -891,9 +885,17 @@ func FinalStatus(uploadsDir string) http.HandlerFunc {
 }
 
 // DownloadFinalZIP handles GET /api/groups/:id/download/final
-func DownloadFinalZIP(uploadsDir string) http.HandlerFunc {
+func DownloadFinalZIP(pool *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		groupID := chi.URLParam(r, "id")
+
+		g, err := dbrepo.GetGroup(r.Context(), pool, orgID, groupID)
+		if err != nil || g == nil {
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+
 		finalPath := filepath.Join(uploadsDir, groupID, "final.zip")
 		if _, err := os.Stat(finalPath); err != nil {
 			writeError(w, http.StatusNotFound, "final.zip not found — run finalize first")
@@ -906,19 +908,17 @@ func DownloadFinalZIP(uploadsDir string) http.HandlerFunc {
 }
 
 // DownloadZIP handles GET /api/groups/:id/download
-func DownloadZIP(db *pgxpool.Pool) http.HandlerFunc {
+func DownloadZIP(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		groupID := chi.URLParam(r, "id")
 
-		var zipPath string
-		err := db.QueryRow(r.Context(),
-			`SELECT zip_path FROM documents WHERE group_id = $1 ORDER BY generated_at DESC LIMIT 1`,
-			groupID,
-		).Scan(&zipPath)
-		if err != nil {
+		latest, err := dbrepo.LatestDocumentForGroup(r.Context(), pool, orgID, groupID)
+		if err != nil || latest == nil {
 			writeError(w, http.StatusNotFound, "no documents found for this group")
 			return
 		}
+		zipPath := latest.ZipPath
 
 		w.Header().Set("Content-Type", "application/zip")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+filepath.Base(zipPath)+`"`)

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"fujitravel-admin/backend/internal/ai"
+	"fujitravel-admin/backend/internal/db"
+	"fujitravel-admin/backend/internal/middleware"
 	"fujitravel-admin/backend/internal/storage"
 )
 
@@ -31,14 +34,16 @@ var allowedTouristFileTypes = map[string]bool{
 //
 // If the parser fails we still return 200 with a "parse_error" field — the
 // raw scan is already saved and the operator can retry later.
-func UploadTouristFile(db *pgxpool.Pool, uploadsDir, apiKey string) http.HandlerFunc {
+func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		touristID := chi.URLParam(r, "id")
 
 		var groupID string
 		var subgroupID *string
-		if err := db.QueryRow(r.Context(),
-			`SELECT group_id, subgroup_id FROM tourists WHERE id = $1`, touristID,
+		if err := pool.QueryRow(r.Context(),
+			`SELECT group_id, subgroup_id FROM tourists WHERE id = $1 AND org_id = $2`,
+			touristID, orgID,
 		).Scan(&groupID, &subgroupID); err != nil {
 			writeError(w, http.StatusNotFound, "tourist not found")
 			return
@@ -83,18 +88,19 @@ func UploadTouristFile(db *pgxpool.Pool, uploadsDir, apiKey string) http.Handler
 			anthropicFileID = fid
 		}
 
-		var uploadID string
-		var createdAt time.Time
-		err = db.QueryRow(r.Context(),
-			`INSERT INTO uploads (group_id, tourist_id, file_type, file_path, anthropic_file_id)
-			 VALUES ($1, $2, $3, $4, NULLIF($5,'')) RETURNING id, created_at`,
-			groupID, touristID, fileType, savedPath, anthropicFileID,
-		).Scan(&uploadID, &createdAt)
+		tid := touristID
+		uploadID, err := db.InsertUpload(r.Context(), pool, orgID, groupID, &tid, fileType, savedPath)
 		if err != nil {
 			slog.Error("insert tourist upload", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
+		if anthropicFileID != "" {
+			if err := db.SetUploadAnthropicID(r.Context(), pool, orgID, uploadID, anthropicFileID); err != nil {
+				slog.Warn("set upload anthropic id", "err", err)
+			}
+		}
+		createdAt := time.Now()
 
 		// Run the matching parser synchronously.
 		resp := map[string]any{
@@ -115,12 +121,12 @@ func UploadTouristFile(db *pgxpool.Pool, uploadsDir, apiKey string) http.Handler
 
 		switch fileType {
 		case "ticket":
-			if parseErr := parseTicketAndPersist(r, db, apiKey, touristID, fileInput); parseErr != nil {
+			if parseErr := parseTicketAndPersist(r.Context(), pool, apiKey, orgID, touristID, fileInput); parseErr != nil {
 				slog.Warn("ticket parse failed", "tourist_id", touristID, "err", parseErr)
 				resp["parse_error"] = parseErr.Error()
 			}
 		case "voucher":
-			if parseErr := parseVoucherAndPersist(r, db, apiKey, touristID, fileInput); parseErr != nil {
+			if parseErr := parseVoucherAndPersist(r.Context(), pool, apiKey, orgID, groupID, subgroupID, fileInput); parseErr != nil {
 				slog.Warn("voucher parse failed", "tourist_id", touristID, "err", parseErr)
 				resp["parse_error"] = parseErr.Error()
 			}
@@ -131,9 +137,9 @@ func UploadTouristFile(db *pgxpool.Pool, uploadsDir, apiKey string) http.Handler
 }
 
 // parseTicketAndPersist calls the ticket parser and writes the result into
-// tourists.flight_data.
-func parseTicketAndPersist(r *http.Request, db *pgxpool.Pool, apiKey, touristID string, input ai.FileInput) error {
-	flights, err := ai.ParseTicket(r.Context(), apiKey, []ai.FileInput{input})
+// tourists.flight_data (scoped to org).
+func parseTicketAndPersist(ctx context.Context, pool *pgxpool.Pool, apiKey, orgID, touristID string, input ai.FileInput) error {
+	flights, err := ai.ParseTicket(ctx, apiKey, []ai.FileInput{input})
 	if err != nil {
 		return err
 	}
@@ -141,10 +147,7 @@ func parseTicketAndPersist(r *http.Request, db *pgxpool.Pool, apiKey, touristID 
 		"arrival":   flights.Arrival,
 		"departure": flights.Departure,
 	})
-	if _, err := db.Exec(r.Context(),
-		`UPDATE tourists SET flight_data = $1, updated_at = NOW() WHERE id = $2`,
-		buf, touristID,
-	); err != nil {
+	if _, err := db.UpdateFlightData(ctx, pool, orgID, touristID, buf); err != nil {
 		return err
 	}
 	return nil
@@ -158,23 +161,41 @@ func convertDate(s string) string {
 	return s
 }
 
+// parseDate parses "YYYY-MM-DD" or "DD.MM.YYYY" into time.Time.
+// Returns zero time on parse failure.
+func parseDate(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	s = convertDate(s)
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
 // parseVoucherAndPersist calls the voucher parser and, for each hotel,
-// looks up (or creates) the hotels row and inserts a group_hotels row
-// scoped to the tourist's group_id/subgroup_id.
-func parseVoucherAndPersist(r *http.Request, db *pgxpool.Pool, apiKey, touristID string, input ai.FileInput) error {
-	hotels, err := ai.ParseVouchers(r.Context(), apiKey, []ai.FileInput{input})
+// looks up (or creates, scoped to this org) the hotels row and inserts a
+// group_hotels row scoped to the tourist's group_id/subgroup_id and org.
+func parseVoucherAndPersist(ctx context.Context, pool *pgxpool.Pool, apiKey, orgID, groupID string, subgroupID *string, input ai.FileInput) error {
+	hotels, err := ai.ParseVouchers(ctx, apiKey, []ai.FileInput{input})
 	if err != nil {
 		return err
 	}
 	for _, h := range hotels {
 		var hotelID string
-		err := db.QueryRow(r.Context(),
-			`SELECT id FROM hotels WHERE LOWER(name_en) = LOWER($1) LIMIT 1`, h.Name,
+		// Look up in org-visible hotels (global or private to this org).
+		err := pool.QueryRow(ctx,
+			`SELECT id FROM hotels
+			  WHERE LOWER(name_en) = LOWER($1) AND (org_id IS NULL OR org_id = $2)
+			  LIMIT 1`, h.Name, orgID,
 		).Scan(&hotelID)
 		if err != nil && errors.Is(err, pgx.ErrNoRows) {
-			err = db.QueryRow(r.Context(),
-				`INSERT INTO hotels (name_en, city, address, phone) VALUES ($1, $2, $3, $4) RETURNING id`,
-				h.Name, h.City, h.Address, h.Phone,
+			// Create a new hotel private to this org.
+			err = pool.QueryRow(ctx,
+				`INSERT INTO hotels (org_id, name_en, city, address, phone) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+				orgID, h.Name, h.City, h.Address, h.Phone,
 			).Scan(&hotelID)
 		}
 		if err != nil {
@@ -182,16 +203,17 @@ func parseVoucherAndPersist(r *http.Request, db *pgxpool.Pool, apiKey, touristID
 			continue
 		}
 
-		checkIn := convertDate(h.CheckIn)
-		checkOut := convertDate(h.CheckOut)
+		checkIn := parseDate(h.CheckIn)
+		checkOut := parseDate(h.CheckOut)
 
-		if _, err := db.Exec(r.Context(),
-			`INSERT INTO group_hotels (group_id, subgroup_id, hotel_id, check_in, check_out, sort_order)
-			 SELECT t.group_id, t.subgroup_id, $1, NULLIF($2,'')::date, NULLIF($3,'')::date,
-			        COALESCE((SELECT MAX(sort_order) + 1 FROM group_hotels gh WHERE gh.group_id = t.group_id), 1)
-			   FROM tourists t WHERE t.id = $4`,
-			hotelID, checkIn, checkOut, touristID,
-		); err != nil {
+		gh := db.GroupHotel{
+			GroupID:    groupID,
+			SubgroupID: subgroupID,
+			HotelID:    hotelID,
+			CheckIn:    checkIn,
+			CheckOut:   checkOut,
+		}
+		if err := db.AppendGroupHotel(ctx, pool, orgID, groupID, gh); err != nil {
 			slog.Warn("insert group_hotels from voucher", "hotel_id", hotelID, "err", err)
 		}
 	}
@@ -199,40 +221,15 @@ func parseVoucherAndPersist(r *http.Request, db *pgxpool.Pool, apiKey, touristID
 }
 
 // ListTouristUploads handles GET /api/tourists/:id/uploads
-func ListTouristUploads(db *pgxpool.Pool) http.HandlerFunc {
+func ListTouristUploads(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
 		touristID := chi.URLParam(r, "id")
-		rows, err := db.Query(r.Context(),
-			`SELECT id, group_id, COALESCE(tourist_id::text,''), file_type, file_path, created_at
-			   FROM uploads WHERE tourist_id = $1 ORDER BY created_at`,
-			touristID,
-		)
+		uploads, err := db.ListTouristUploads(r.Context(), pool, orgID, touristID)
 		if err != nil {
 			slog.Error("list tourist uploads", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
-		}
-		defer rows.Close()
-
-		type uploadRow struct {
-			ID        string    `json:"id"`
-			GroupID   string    `json:"group_id"`
-			TouristID string    `json:"tourist_id"`
-			FileType  string    `json:"file_type"`
-			FilePath  string    `json:"file_path"`
-			CreatedAt time.Time `json:"created_at"`
-		}
-		var uploads []uploadRow
-		for rows.Next() {
-			var u uploadRow
-			if err := rows.Scan(&u.ID, &u.GroupID, &u.TouristID, &u.FileType, &u.FilePath, &u.CreatedAt); err != nil {
-				writeError(w, http.StatusInternalServerError, "scan error")
-				return
-			}
-			uploads = append(uploads, u)
-		}
-		if uploads == nil {
-			uploads = []uploadRow{}
 		}
 		writeJSON(w, http.StatusOK, uploads)
 	}

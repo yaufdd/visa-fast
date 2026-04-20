@@ -164,9 +164,9 @@ func ListGroupHotels(pool *pgxpool.Pool) http.HandlerFunc {
 			        gh.check_in, gh.check_out, COALESCE(gh.room_type,''), gh.sort_order
 			   FROM group_hotels gh
 			   JOIN hotels h ON h.id = gh.hotel_id
-			  WHERE gh.group_id = $1
+			  WHERE gh.group_id = $1 AND gh.org_id = $2
 			  ORDER BY gh.sort_order`,
-			groupID,
+			groupID, orgID,
 		)
 		if err != nil {
 			slog.Error("list group hotels", "err", err)
@@ -230,9 +230,9 @@ func ListSubgroupHotels(pool *pgxpool.Pool) http.HandlerFunc {
 			        gh.check_in::text, gh.check_out::text, COALESCE(gh.room_type,''), gh.sort_order
 			   FROM group_hotels gh
 			   JOIN hotels h ON h.id = gh.hotel_id
-			  WHERE gh.subgroup_id = $1
+			  WHERE gh.subgroup_id = $1 AND gh.org_id = $2
 			  ORDER BY gh.sort_order`,
-			subgroupID,
+			subgroupID, orgID,
 		)
 		if err != nil {
 			slog.Error("list subgroup hotels", "err", err)
@@ -323,7 +323,10 @@ func UpsertSubgroupHotels(pool *pgxpool.Pool) http.HandlerFunc {
 		defer tx.Rollback(r.Context())
 
 		// Replace all existing entries for this subgroup.
-		if _, err := tx.Exec(r.Context(), `DELETE FROM group_hotels WHERE subgroup_id = $1`, subgroupID); err != nil {
+		if _, err := tx.Exec(r.Context(),
+			`DELETE FROM group_hotels WHERE subgroup_id = $1 AND org_id = $2`,
+			subgroupID, orgID,
+		); err != nil {
 			slog.Error("delete subgroup hotels", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -331,9 +334,9 @@ func UpsertSubgroupHotels(pool *pgxpool.Pool) http.HandlerFunc {
 
 		for _, e := range entries {
 			if _, err := tx.Exec(r.Context(),
-				`INSERT INTO group_hotels (group_id, subgroup_id, hotel_id, check_in, check_out, room_type, sort_order)
-				 VALUES ($1, $2, $3, $4::date, $5::date, $6, $7)`,
-				groupID, subgroupID, e.HotelID, e.CheckIn, e.CheckOut, e.RoomType, e.SortOrder,
+				`INSERT INTO group_hotels (org_id, group_id, subgroup_id, hotel_id, check_in, check_out, room_type, sort_order)
+				 VALUES ($1, $2, $3, $4, $5::date, $6::date, $7, $8)`,
+				orgID, groupID, subgroupID, e.HotelID, e.CheckIn, e.CheckOut, e.RoomType, e.SortOrder,
 			); err != nil {
 				slog.Error("insert subgroup hotel", "err", err)
 				writeError(w, http.StatusInternalServerError, "database error")
@@ -403,7 +406,10 @@ func UpsertGroupHotels(pool *pgxpool.Pool) http.HandlerFunc {
 		defer tx.Rollback(r.Context())
 
 		// Replace all existing entries for this group.
-		if _, err := tx.Exec(r.Context(), `DELETE FROM group_hotels WHERE group_id = $1`, groupID); err != nil {
+		if _, err := tx.Exec(r.Context(),
+			`DELETE FROM group_hotels WHERE group_id = $1 AND org_id = $2`,
+			groupID, orgID,
+		); err != nil {
 			slog.Error("delete group hotels", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -411,9 +417,9 @@ func UpsertGroupHotels(pool *pgxpool.Pool) http.HandlerFunc {
 
 		for _, e := range entries {
 			if _, err := tx.Exec(r.Context(),
-				`INSERT INTO group_hotels (group_id, hotel_id, check_in, check_out, room_type, sort_order)
-				 VALUES ($1, $2, $3::date, $4::date, $5, $6)`,
-				groupID, e.HotelID, e.CheckIn, e.CheckOut, e.RoomType, e.SortOrder,
+				`INSERT INTO group_hotels (org_id, group_id, hotel_id, check_in, check_out, room_type, sort_order)
+				 VALUES ($1, $2, $3, $4::date, $5::date, $6, $7)`,
+				orgID, groupID, e.HotelID, e.CheckIn, e.CheckOut, e.RoomType, e.SortOrder,
 			); err != nil {
 				slog.Error("insert group hotel", "err", err)
 				writeError(w, http.StatusInternalServerError, "database error")
