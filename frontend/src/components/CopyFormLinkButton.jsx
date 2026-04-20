@@ -18,7 +18,7 @@ export default function CopyFormLinkButton() {
   }
 
   return (
-    <button onClick={copy} className="btn-outline copy-form-link-btn">
+    <button onClick={copy} className="btn btn-secondary btn-sm copy-form-link-btn">
       {copied ? '✓ Скопировано' : '📎 Ссылка на анкету'}
     </button>
   )

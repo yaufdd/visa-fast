@@ -31,18 +31,22 @@ export default function LoginPage() {
     <main className="auth-page">
       <h1>Вход в систему</h1>
       <form onSubmit={submit} className="auth-form">
-        <label>
-          <span>Email</span>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+        <label className="form-group">
+          <span className="form-label">Email</span>
+          <input className="form-input" type="email" value={email}
+                 onChange={(e) => setEmail(e.target.value)}
                  required autoFocus autoComplete="email" />
         </label>
-        <label>
-          <span>Пароль</span>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+        <label className="form-group">
+          <span className="form-label">Пароль</span>
+          <input className="form-input" type="password" value={password}
+                 onChange={(e) => setPassword(e.target.value)}
                  required autoComplete="current-password" />
         </label>
         {err && <div className="auth-error">{err}</div>}
-        <button type="submit" disabled={busy}>{busy ? 'Проверка…' : 'Войти'}</button>
+        <button type="submit" className="btn btn-primary" disabled={busy}>
+          {busy ? 'Проверка…' : 'Войти'}
+        </button>
       </form>
       <p className="auth-link">Нет аккаунта? <Link to="/register">Зарегистрировать турфирму</Link></p>
       <p className="auth-hint">

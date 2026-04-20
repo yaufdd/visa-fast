@@ -37,28 +37,33 @@ export default function RegisterPage() {
     <main className="auth-page">
       <h1>Регистрация турфирмы</h1>
       <form onSubmit={submit} className="auth-form">
-        <label>
-          <span>Название турфирмы</span>
-          <input value={orgName} onChange={(e) => setOrgName(e.target.value)} required autoFocus />
+        <label className="form-group">
+          <span className="form-label">Название турфирмы</span>
+          <input className="form-input" value={orgName}
+                 onChange={(e) => setOrgName(e.target.value)}
+                 required autoFocus />
         </label>
-        <label>
-          <span>Email</span>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+        <label className="form-group">
+          <span className="form-label">Email</span>
+          <input className="form-input" type="email" value={email}
+                 onChange={(e) => setEmail(e.target.value)}
                  required autoComplete="email" />
         </label>
-        <label>
-          <span>Пароль (минимум 8 символов)</span>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+        <label className="form-group">
+          <span className="form-label">Пароль (минимум 8 символов)</span>
+          <input className="form-input" type="password" value={password}
+                 onChange={(e) => setPassword(e.target.value)}
                  required minLength={8} autoComplete="new-password" />
         </label>
-        <label>
-          <span>Подтверждение пароля</span>
-          <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
+        <label className="form-group">
+          <span className="form-label">Подтверждение пароля</span>
+          <input className="form-input" type="password" value={confirm}
+                 onChange={(e) => setConfirm(e.target.value)}
                  required minLength={8} autoComplete="new-password" />
           {confirm && confirm !== password && <span className="auth-error">Пароли не совпадают</span>}
         </label>
         {err && <div className="auth-error">{err}</div>}
-        <button type="submit" disabled={!valid || busy}>
+        <button type="submit" className="btn btn-primary" disabled={!valid || busy}>
           {busy ? 'Создаём аккаунт…' : 'Зарегистрировать'}
         </button>
       </form>

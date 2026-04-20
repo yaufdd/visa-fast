@@ -28,7 +28,7 @@ function AdminShellHeader() {
       <div className="shell-actions">
         <CopyFormLinkButton />
         <span className="user-email">{user?.email}</span>
-        <button onClick={logout} className="btn-outline">Выйти</button>
+        <button onClick={logout} className="btn btn-ghost btn-sm">Выйти</button>
       </div>
     </header>
   );
