@@ -79,6 +79,7 @@ UPLOADS_DIR=./uploads
 PORT=8080
 DOCGEN_SCRIPT=../../docgen/generate.py
 DOCGEN_PDF_TEMPLATE=./templates/anketa_template.pdf
+AI_LOG_RETENTION_DAYS=30  # ai_call_logs auto-cleanup; 0 disables
 ```
 
 Backend **refuses to start** without `APP_SECRET` set.
@@ -192,7 +193,10 @@ section on the Documents tab of each group (UI component
 `frontend/src/components/AILogsSection.jsx`). `GET /api/groups/{id}/ai_logs`
 returns up to the latest 500 rows, newest first, grouped by `generation_id`.
 
-Retention policy (auto-cleanup after N days) is tracked as a follow-up task.
+**Retention:** a background goroutine in `cmd/server/main.go` deletes
+`ai_call_logs` rows older than `AI_LOG_RETENTION_DAYS` (default `30`) once
+a day. Set `AI_LOG_RETENTION_DAYS=0` to disable auto-cleanup; any positive
+integer overrides the default.
 
 ### Hotels CRUD
 - `/hotels` — list all hotels (city tags normalized to Title Case + RU translation for known Japanese cities).

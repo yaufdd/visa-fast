@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	dbrepo "fujitravel-admin/backend/internal/db"
 	"fujitravel-admin/backend/internal/server"
 )
 
@@ -67,6 +70,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ── Retention: auto-purge old ai_call_logs rows ───────────────────────────
+	// AI_LOG_RETENTION_DAYS controls how long we keep the audit trail. Default
+	// 30 days is a pragmatic trade-off — long enough for post-hoc debugging
+	// and 152-ФЗ incident investigation, short enough to limit the amount of
+	// PII-adjacent content sitting in the table.
+	retentionDays := parseRetentionDays(os.Getenv("AI_LOG_RETENTION_DAYS"), 30)
+	if retentionDays > 0 {
+		go startAILogRetention(ctx, pool, retentionDays)
+	} else {
+		slog.Warn("AI_LOG_RETENTION_DAYS=0 — ai_call_logs will NOT be auto-purged")
+	}
+
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := server.NewRouter(pool, anthropicKey, uploadsDir, pythonScript)
 
@@ -74,6 +89,57 @@ func main() {
 	if err := http.ListenAndServe(":"+port, r); err != nil {
 		slog.Error("server error", "err", err)
 		os.Exit(1)
+	}
+}
+
+// parseRetentionDays returns a safe positive integer; on parse failure or
+// non-positive values it falls back to the default. Zero / negative in env
+// means "retention disabled".
+func parseRetentionDays(raw string, def int) int {
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		slog.Warn("AI_LOG_RETENTION_DAYS is not an integer, using default",
+			"value", raw, "default", def)
+		return def
+	}
+	if n < 0 {
+		return 0 // explicit 0 / negative → disable
+	}
+	return n
+}
+
+// startAILogRetention runs a background loop that purges ai_call_logs rows
+// older than `days` days. Runs once at startup (so a container restart
+// doesn't skip a tick), then every 24h thereafter.
+func startAILogRetention(ctx context.Context, pool *pgxpool.Pool, days int) {
+	slog.Info("ai_call_logs retention enabled", "days", days)
+
+	purgeOnce := func() {
+		purgeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+		n, err := dbrepo.PurgeOldAICallLogs(purgeCtx, pool, days)
+		if err != nil {
+			slog.Warn("ai_call_logs purge failed", "err", err)
+			return
+		}
+		if n > 0 {
+			slog.Info("ai_call_logs purged", "rows", n, "days", days)
+		}
+	}
+
+	purgeOnce()
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			purgeOnce()
+		}
 	}
 }
 

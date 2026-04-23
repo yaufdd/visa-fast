@@ -150,6 +150,22 @@ func (r AICallLogRow) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
+// PurgeOldAICallLogs deletes every ai_call_logs row older than `days` days.
+// Called once a day by the retention goroutine in cmd/server/main.go.
+// Returns the number of rows deleted.
+func PurgeOldAICallLogs(ctx context.Context, pool *pgxpool.Pool, days int) (int64, error) {
+	if days <= 0 {
+		return 0, nil
+	}
+	tag, err := pool.Exec(ctx,
+		`DELETE FROM ai_call_logs WHERE started_at < NOW() - ($1::int || ' days')::INTERVAL`,
+		days)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // ListAICallLogsForGroup returns every log row associated with this org+group,
 // newest first. Use for the GroupDetailPage audit viewer.
 func ListAICallLogsForGroup(ctx context.Context, pool *pgxpool.Pool, orgID, groupID string) ([]AICallLogRow, error) {
