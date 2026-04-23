@@ -14,7 +14,7 @@ import (
 
 // NewRouter builds the full chi router with public + protected groups.
 // Used by both main.go and integration tests.
-func NewRouter(pool *pgxpool.Pool, anthropicKey, uploadsDir, pythonScript string) http.Handler {
+func NewRouter(pool *pgxpool.Pool, anthropicKey, uploadsDir, pythonScript, redactScript string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.RealIP)
 	r.Use(chimw.RequestID)
@@ -102,7 +102,7 @@ func NewRouter(pool *pgxpool.Pool, anthropicKey, uploadsDir, pythonScript string
 
 			// Per-tourist uploads
 			r.Get("/tourists/{id}/uploads", api.ListTouristUploads(pool))
-			r.Post("/tourists/{id}/uploads", api.UploadTouristFile(pool, uploadsDir, anthropicKey))
+			r.Post("/tourists/{id}/uploads", api.UploadTouristFile(pool, uploadsDir, anthropicKey, redactScript))
 			r.Delete("/tourists/{id}/uploads/{uploadId}", api.DeleteTouristUpload(pool))
 
 			// Group hotels

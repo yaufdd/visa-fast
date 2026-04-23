@@ -79,6 +79,7 @@ UPLOADS_DIR=./uploads
 PORT=8080
 DOCGEN_SCRIPT=../../docgen/generate.py
 DOCGEN_PDF_TEMPLATE=./templates/anketa_template.pdf
+REDACT_SCAN_SCRIPT=../../docgen/redact_scan.py  # Python OCR redactor for ticket/voucher scans
 AI_LOG_RETENTION_DAYS=30  # ai_call_logs auto-cleanup; 0 disables
 ```
 
@@ -170,13 +171,25 @@ individual.
   locally (same package).
 - Phone numbers.
 
-**Known gap (tracked as open task):** `ticket_parser.go` and
-`voucher_parser.go` currently send the full scan image to Claude Opus. These
-scans visibly contain the passenger/guest name. Planned fix: local-OCR to
-locate the name region and black-box it via OpenCV before uploading to
-Anthropic (fails loudly if the name cannot be located). Passport scans
-(`docgen/passport_parser.py`, planned) are parsed fully locally and never
-reach Claude.
+**Ticket / voucher scan redaction:** `UploadTouristFile` calls
+`backend/internal/privacy.RedactScan` which shells to
+`docgen/redact_scan.py` — local Tesseract OCR finds name labels
+("Passenger", "Пассажир", "Имя пассажира", "Гость", "ФИО", ...) and black-boxes
+the label + the next several tokens on that text line via OpenCV. The
+original scan stays on disk for the manager's reference, but only the
+redacted copy is uploaded to Anthropic and used for `ticket_parser` /
+`voucher_parser`. Multi-page PDFs are processed page-by-page; the output
+is a multi-page PDF when the input was. **Fail-loud policy**: if any page
+has no detectable name label, redaction fails and the HTTP response
+returns 422 with `redact_error` — we refuse to send a partially-redacted
+scan to AI.
+
+Configured via `REDACT_SCAN_SCRIPT` env var (default
+`../../docgen/redact_scan.py`).
+
+Passport scans (`docgen/passport_parser.py`, planned — see
+`docs/superpowers/plans/2026-04-22-passport-scan-parser.md`) are parsed
+fully locally and never reach Claude.
 
 ### AI Audit Log
 

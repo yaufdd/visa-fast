@@ -45,6 +45,11 @@ func main() {
 	// Adjust this path if the project layout changes.
 	pythonScript := envOrDefault("DOCGEN_SCRIPT", filepath.Join(uploadsDir, "../../docgen/generate.py"))
 
+	// Python redactor used to black-out the passenger/guest name on ticket
+	// and voucher scans BEFORE the file is uploaded to Anthropic. Must never
+	// be unset in production — see server.NewRouter for the fail-loud guard.
+	redactScript := envOrDefault("REDACT_SCAN_SCRIPT", filepath.Join(uploadsDir, "../../docgen/redact_scan.py"))
+
 	// ── Database ──────────────────────────────────────────────────────────────
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
@@ -83,7 +88,7 @@ func main() {
 	}
 
 	// ── Router ────────────────────────────────────────────────────────────────
-	r := server.NewRouter(pool, anthropicKey, uploadsDir, pythonScript)
+	r := server.NewRouter(pool, anthropicKey, uploadsDir, pythonScript, redactScript)
 
 	slog.Info("starting server", "port", port)
 	if err := http.ListenAndServe(":"+port, r); err != nil {

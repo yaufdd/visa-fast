@@ -17,6 +17,7 @@ import (
 	"fujitravel-admin/backend/internal/ai"
 	"fujitravel-admin/backend/internal/db"
 	"fujitravel-admin/backend/internal/middleware"
+	"fujitravel-admin/backend/internal/privacy"
 	"fujitravel-admin/backend/internal/storage"
 )
 
@@ -35,7 +36,7 @@ var allowedTouristFileTypes = map[string]bool{
 //
 // If the parser fails we still return 200 with a "parse_error" field — the
 // raw scan is already saved and the operator can retry later.
-func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey string) http.HandlerFunc {
+func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := middleware.OrgID(r.Context())
 		touristID := chi.URLParam(r, "id")
@@ -81,9 +82,34 @@ func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey string) http.Handl
 			return
 		}
 
-		// Upload to Anthropic Files API (non-fatal if it fails — inline fallback).
+		// Redact passenger/guest name locally BEFORE anything touches
+		// Anthropic. The original stays on disk (savedPath) but never leaves
+		// the server; only the redacted copy is used for the AI path.
+		//
+		// Fail-loud policy: if the redactor can't find a name label we refuse
+		// to ship the scan to AI and surface an error to the manager so they
+		// can redact manually or enter fields by hand.
+		redacted, redactErr := privacy.RedactScan(r.Context(), redactScript, header.Filename, fileData)
+		if redactErr != nil {
+			msg := redactErr.Error()
+			if errors.Is(redactErr, privacy.ErrNoLabelsFound) {
+				msg = "не удалось определить область имени на скане — загрузите более чёткое изображение или заполните поля вручную"
+			}
+			slog.Warn("scan redact failed", "tourist_id", touristID, "err", redactErr)
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"id":         "",
+				"tourist_id": touristID,
+				"file_path":  savedPath,
+				"redact_error": msg,
+			})
+			return
+		}
+		uploadBytes := redacted.RedactedBytes
+		uploadName := privacy.OutputFilename(header.Filename, redacted.OutputPath)
+
+		// Upload the REDACTED copy to Anthropic (non-fatal — inline fallback).
 		var anthropicFileID string
-		if fid, err := ai.UploadFileToAnthropic(apiKey, header.Filename, fileData); err != nil {
+		if fid, err := ai.UploadFileToAnthropic(apiKey, uploadName, uploadBytes); err != nil {
 			slog.Warn("anthropic file upload failed, will use inline fallback", "err", err)
 		} else {
 			anthropicFileID = fid
@@ -116,8 +142,9 @@ func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey string) http.Handl
 
 		fileInput := ai.FileInput{
 			AnthropicFileID: anthropicFileID,
-			Name:            header.Filename,
-			Data:            fileData,
+			// Redacted name + redacted bytes — originals never reach AI.
+			Name: uploadName,
+			Data: uploadBytes,
 		}
 
 		// Each scan upload is its own auditable generation — a new UUID per
