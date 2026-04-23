@@ -32,10 +32,13 @@ var (
 // freeTextKeys lists the submission_snapshot fields that are free-text Russian
 // strings requiring translation before they land in the final pass2 JSON.
 // The set mirrors what ai.AssembleTourist feeds through the translations map.
+//
+// Note: home_address_ru is intentionally NOT here — it is PII and must not
+// leave the server. AssembleTourist formats it locally via
+// backend/internal/format + translit.RuToLatICAO.
 var freeTextKeys = []string{
 	"place_of_birth_ru",
 	"issued_by_ru",
-	"home_address_ru",
 	"occupation_ru",
 	"employer_ru",
 	"employer_address_ru",
@@ -220,10 +223,11 @@ func buildTranslationMaps(perTourist []map[string]int, translations []string) []
 // buildProgrammeInput picks the first tourist with a populated outbound flight
 // as the "lead ticket" (programme shows one shared activity cell) and packages
 // the non-PII trip data needed by ai.GenerateProgramme.
-func buildProgrammeInput(payloads []map[string]any, flights []map[string]any, hotels []ai.HotelBrief, contactPhone string) ai.ProgrammeInput {
+func buildProgrammeInput(payloads []map[string]any, flights []map[string]any, hotels []ai.HotelBrief, contactPhone, managerNotes string) ai.ProgrammeInput {
 	var in ai.ProgrammeInput
 	in.Hotels = hotels
 	in.ContactPhone = contactPhone
+	in.ManagerNotes = managerNotes
 
 	for i, fl := range flights {
 		arr := subMapAny(fl, "arrival")
@@ -285,8 +289,28 @@ func runPipeline(ctx context.Context, pool *pgxpool.Pool, apiKey, orgID, groupID
 	payloads := touristPayloads(rows)
 	flights := touristFlights(rows)
 
+	// Manager-authored programme hints. Subgroup-level notes take priority
+	// (each subgroup typically has its own itinerary); the group-level
+	// field is kept as a legacy fallback for cases without subgroups.
+	var programmeNotes string
+	if subgroupID != "" {
+		if sgNotes, err := dbrepo.GetSubgroupProgrammeNotes(ctx, pool, orgID, subgroupID); err == nil && sgNotes != nil {
+			programmeNotes = *sgNotes
+		}
+	}
+	if programmeNotes == "" {
+		if g, err := dbrepo.GetGroup(ctx, pool, orgID, groupID); err == nil && g != nil && g.ProgrammeNotes != nil {
+			programmeNotes = *g.ProgrammeNotes
+		}
+	}
+
 	uniques, perTourist := collectFreeText(payloads, freeTextKeys)
-	programmeInput := buildProgrammeInput(payloads, flights, hotels, guidePhone)
+	programmeInput := buildProgrammeInput(payloads, flights, hotels, guidePhone, programmeNotes)
+
+	// Doverenost free-text fields (internal_issued_by_ru, reg_address_ru) are
+	// formatted LOCALLY by ai.AssembleDoverenost via backend/internal/format.
+	// They used to go through Claude Haiku (CleanDoverenostFields) — removed
+	// because these fields are PII-adjacent and must not leave the server.
 
 	var (
 		translations []string
@@ -418,7 +442,7 @@ func GenerateDocuments(pool *pgxpool.Pool, apiKey, uploadsDir, pythonScript stri
 			}
 			lastPass2JSON = pass2JSON
 
-			if err := docgen.GenerateWithSubgroup(r.Context(), pythonScript, uploadsDir, groupID, sg.name, pass2JSON); err != nil {
+			if err := docgen.GenerateWithSubgroup(r.Context(), pythonScript, uploadsDir, orgID, groupID, sg.name, pass2JSON); err != nil {
 				slog.Error("docgen subgroup", "subgroup", sg.name, "err", err)
 				writeError(w, http.StatusInternalServerError, "document generation failed for "+sg.name+": "+err.Error())
 				return
@@ -498,7 +522,7 @@ func GenerateSubgroupDocuments(pool *pgxpool.Pool, apiKey, uploadsDir, pythonScr
 			return
 		}
 
-		if err := docgen.GenerateWithSubgroup(r.Context(), pythonScript, uploadsDir, groupID, subgroupName, pass2JSON); err != nil {
+		if err := docgen.GenerateWithSubgroup(r.Context(), pythonScript, uploadsDir, orgID, groupID, subgroupName, pass2JSON); err != nil {
 			slog.Error("docgen subgroup", "err", err)
 			writeError(w, http.StatusInternalServerError, "document generation failed: "+err.Error())
 			return
@@ -832,7 +856,7 @@ func FinalizeGroup(pool *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) 
 			return
 		}
 
-		zipPath, err := docgen.GenerateFinal(r.Context(), pythonScript, uploadsDir, groupID, mergedJSON)
+		zipPath, err := docgen.GenerateFinal(r.Context(), pythonScript, uploadsDir, orgID, groupID, mergedJSON)
 		if err != nil {
 			slog.Error("docgen final", "err", err)
 			writeError(w, http.StatusInternalServerError, "final document generation failed: "+err.Error())

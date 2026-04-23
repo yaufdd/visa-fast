@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"fujitravel-admin/backend/internal/format"
 	"fujitravel-admin/backend/internal/translit"
 )
 
@@ -38,6 +39,15 @@ func AssembleTourist(payload map[string]any, translations map[string]string, fli
 	marital := MapMaritalStatus(get("marital_status_ru"))
 	passportType := MapPassportType(get("passport_type_ru"))
 
+	// "ИП" is a self-employment marker entered via the form checkbox — the
+	// anketa PDF expects the full English term in caps, and we don't want
+	// to hand this deterministic phrase to the translator (which may
+	// produce "IE", "Individual Entrepreneur", etc.).
+	occupation := tr("occupation_ru")
+	if strings.EqualFold(strings.TrimSpace(get("occupation_ru")), "ИП") {
+		occupation = "INDIVIDUAL ENTREPRENEUR"
+	}
+
 	arrival := subMap(flight, "arrival")
 	departure := subMap(flight, "departure")
 
@@ -57,11 +67,14 @@ func AssembleTourist(payload map[string]any, translations map[string]string, fli
 		MaritalStatus:         marital,
 		PassportType:          passportType,
 		IssuedBy:              tr("issued_by_ru"),
-		HomeAddress:           tr("home_address_ru"),
+		HomeAddress:           translit.RuToLatICAO(format.FormatAddress(get("home_address_ru"))),
 		Phone:                 get("phone"),
-		Occupation:            tr("occupation_ru"),
+		Occupation:            occupation,
 		Employer:              tr("employer_ru"),
 		EmployerAddress:       tr("employer_address_ru"),
+		// home_address_ru is PII — we never send it to Claude. Format it
+		// locally (canonical Russian) then transliterate via ICAO for the
+		// anketa PDF. `HomeAddress` below overrides the default set earlier.
 		BeenToJapan:           MapYesNo(get("been_to_japan_ru")),
 		PreviousVisits:        tr("previous_visits_ru"),
 		CriminalRecord:        MapYesNo(get("criminal_record_ru")),
@@ -102,31 +115,35 @@ func AssembleDoverenost(tourists []Pass2Tourist, payloads []map[string]any, depa
 		minor := refs[i].IsMinor
 		payload := payloads[i]
 		dov := Pass2Dov{
-			NameRu:         t.NameCyr,
+			NameRu:         TitleCaseRuName(t.NameCyr),
 			DOB:            t.BirthDate,
 			PassportSeries: strGet(payload, "internal_series"),
 			PassportNumber: strGet(payload, "internal_number"),
 			IssuedDate:     russianIssuedDate(strGet(payload, "internal_issued_ru")),
-			IssuedBy:       strGet(payload, "internal_issued_by_ru"),
-			RegAddress:     strGet(payload, "reg_address_ru"),
-			IsMinor:        minor,
+			// IssuedBy + RegAddress are PII-adjacent free-text fields. They
+			// are formatted locally (no AI) per the доверенность rules —
+			// see backend/internal/format/russian_address.go.
+			IssuedBy:   format.FormatIssuingAuthority(strGet(payload, "internal_issued_by_ru")),
+			RegAddress: format.FormatAddress(strGet(payload, "reg_address_ru")),
+			IsMinor:    minor,
 		}
 		if minor {
 			parent := FindParent(refs[i], refs)
 			if parent != nil {
 				pIdx := indexOf(refs, parent.ID)
 				pp := payloads[pIdx]
-				dov.NameRu = tourists[pIdx].NameCyr
+				dov.NameRu = TitleCaseRuName(tourists[pIdx].NameCyr)
 				dov.DOB = tourists[pIdx].BirthDate
 				dov.PassportSeries = strGet(pp, "internal_series")
 				dov.PassportNumber = strGet(pp, "internal_number")
 				dov.IssuedDate = russianIssuedDate(strGet(pp, "internal_issued_ru"))
-				dov.IssuedBy = strGet(pp, "internal_issued_by_ru")
-				dov.RegAddress = strGet(pp, "reg_address_ru")
+				dov.IssuedBy = format.FormatIssuingAuthority(strGet(pp, "internal_issued_by_ru"))
+				dov.RegAddress = format.FormatAddress(strGet(pp, "reg_address_ru"))
 			}
-			// Child name in genitive case
-			surname := FirstWord(t.NameCyr)
-			firstName := strings.TrimSpace(strings.TrimPrefix(t.NameCyr, surname))
+			// Child name in genitive case — title-case surname/first before
+			// building the genitive so "ИВАНОВ Петя" stays proper-cased.
+			surname := TitleCaseRuName(FirstWord(t.NameCyr))
+			firstName := TitleCaseRuName(strings.TrimSpace(strings.TrimPrefix(t.NameCyr, FirstWord(t.NameCyr))))
 			childName, _ := GenitiveFullName(surname, firstName, t.Gender)
 			dov.ChildNameRu = childName
 			if t.Gender == "Male" {

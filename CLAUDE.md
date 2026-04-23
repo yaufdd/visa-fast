@@ -141,12 +141,41 @@ that agency.
 ```
 
 ### AI Privacy
-Passport data, full names, and full addresses never reach the AI. The AI only sees:
-- anonymised free-text fragments (mini-translate via `translate.go`)
-- dates, hotels, and flights (programme generation via `programme.go`)
 
-Scan parsers (`ticket_parser.go`, `voucher_parser.go`) receive only the uploaded
-image/PDF of the ticket/voucher — no linked tourist PII.
+FujiTravel is a Russian legal entity → 152-ФЗ compliance is mandatory. The
+principle: **PII never goes to Claude API.** "Dry" (non-identifying) fields
+may, batched across multiple tourists so no single entry can be linked to an
+individual.
+
+**What Claude (Anthropic) sees today:**
+
+- `translate.go` (Haiku 4.5) — batch of Russian→English strings for these
+  non-PII fields: `place_of_birth_ru`, `issued_by_ru` (foreign passport
+  authority), `occupation_ru`, `employer_ru`, `employer_address_ru`,
+  `previous_visits_ru`, `nationality_ru`. Strings are de-duplicated across
+  all tourists in the batch, so there is no stable per-tourist index.
+- `programme.go` (Opus 4.7) — dates, flights, hotels, single contact phone,
+  manager notes. No tourist names. No passport data.
+
+**What Claude does NOT see (PII-protected):**
+
+- Full name (`name_cyr`, `name_lat`, `maiden_name_ru`)
+- Passport numbers (internal series/number, foreign passport number)
+- Date of birth
+- Home address (`home_address_ru`) — formatted locally via
+  `backend/internal/format` + `translit.RuToLatICAO`.
+- Registration address (`reg_address_ru`) — formatted locally (same package).
+- Internal-passport issuing authority (`internal_issued_by_ru`) — formatted
+  locally (same package).
+- Phone numbers.
+
+**Known gap (tracked as open task):** `ticket_parser.go` and
+`voucher_parser.go` currently send the full scan image to Claude Opus. These
+scans visibly contain the passenger/guest name. Planned fix: local-OCR to
+locate the name region and black-box it via OpenCV before uploading to
+Anthropic (fails loudly if the name cannot be located). Passport scans
+(`docgen/passport_parser.py`, planned) are parsed fully locally and never
+reach Claude.
 
 ### Hotels CRUD
 - `/hotels` — list all hotels (city tags normalized to Title Case + RU translation for known Japanese cities).
