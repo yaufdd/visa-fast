@@ -2,7 +2,10 @@ backend/uploads/
 backend/.env
 backend/server
 .env
+.env.local
+.env.*.local
 google-credentials.json
+docgen/tessdata/
 frontend/node_modules/
 frontend/dist/
 *.zip

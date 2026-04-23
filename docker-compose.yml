@@ -1,0 +1,33 @@
+# Local dev setup — ONLY Postgres runs in Docker. Backend and frontend
+# run natively on the host for fast iteration (no Dockerfile.backend
+# rebuild needed for code changes).
+#
+# Usage:
+#   docker compose up -d           # start Postgres on localhost:5435
+#   cd backend && go run cmd/server/main.go
+#   cd frontend && npm run dev
+#
+# For a full containerised production build use:
+#   docker compose -f docker-compose.prod.yml build
+#   docker compose -f docker-compose.prod.yml up -d
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fuji
+      POSTGRES_PASSWORD: fuji123
+      POSTGRES_DB: fujitravel
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5435:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fuji -d fujitravel"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
