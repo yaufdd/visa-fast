@@ -28,22 +28,79 @@ const ticketSystemPrompt = `You are a flight-ticket parser for a Japanese visa a
 
 OUTPUT SCHEMA:
 {
-  "arrival":   { "flight_number": "...", "date": "DD.MM.YYYY", "time": "HH:MM", "airport": "CITY AIRPORT" },
-  "departure": { "flight_number": "...", "date": "DD.MM.YYYY", "time": "HH:MM", "airport": "CITY AIRPORT" }
+  "arrival":   { "flight_number": "...", "date": "DD.MM.YYYY", "time": "HH:MM", "airport": "..." },
+  "departure": { "flight_number": "...", "date": "DD.MM.YYYY", "time": "HH:MM", "airport": "..." }
 }
 
 RULES:
 - arrival: the LAST leg that lands in Japan (for multi-leg itineraries, the final leg; date is Japan local).
 - departure: the FIRST leg leaving Japan (takeoff from Japan; date is Japan local).
 - If the ticket is strictly ONE-WAY (no return), leave all departure.* fields "".
-- Airport format: "CITY AIRPORTNAME" in CAPS (e.g. "TOKYO NARITA", "OSAKA KANSAI").
-- Flight number: include space, e.g. "SU 262", "CZ 8101".
+- Airport: use the OFFICIAL full English name. For Japanese airports use EXACTLY one of these canonical names:
+    "Narita International Airport"
+    "Haneda Airport"
+    "Kansai International Airport"
+    "Chubu Centrair International Airport"
+    "Fukuoka Airport"
+    "New Chitose Airport"
+    "Naha Airport"
+  For non-Japanese airports use the standard official English name (e.g. "Sheremetyevo International Airport").
+- Flight number: uppercase, no spaces, e.g. "SU262", "CZ8101".
 - All dates DD.MM.YYYY.
 - Never invent data. Missing → "".`
+
+// canonicalJPAirports maps uppercase keywords found in ticket scans to the
+// canonical official English airport name that the form dropdown expects.
+// Order matters: more specific keys should win over generic ones (we pick the
+// longest matching key).
+var canonicalJPAirports = map[string]string{
+	"NARITA":                "Narita International Airport",
+	"NRT":                   "Narita International Airport",
+	"HANEDA":                "Haneda Airport",
+	"HND":                   "Haneda Airport",
+	"TOKYO INTERNATIONAL":   "Haneda Airport",
+	"KANSAI":                "Kansai International Airport",
+	"KIX":                   "Kansai International Airport",
+	"CHUBU":                 "Chubu Centrair International Airport",
+	"CENTRAIR":              "Chubu Centrair International Airport",
+	"NGO":                   "Chubu Centrair International Airport",
+	"FUKUOKA":               "Fukuoka Airport",
+	"FUK":                   "Fukuoka Airport",
+	"NEW CHITOSE":           "New Chitose Airport",
+	"CHITOSE":               "New Chitose Airport",
+	"SAPPORO":               "New Chitose Airport",
+	"CTS":                   "New Chitose Airport",
+	"NAHA":                  "Naha Airport",
+	"OKINAWA":               "Naha Airport",
+	"OKA":                   "Naha Airport",
+}
+
+// NormalizeJapaneseAirport maps free-form airport strings (e.g. "TOKYO NARITA",
+// "NRT", "Narita Intl") to the canonical official name used by the form
+// dropdown. Unknown airports are returned unchanged so non-Japanese entries
+// (Sheremetyevo etc.) are preserved.
+func NormalizeJapaneseAirport(s string) string {
+	up := strings.ToUpper(strings.TrimSpace(s))
+	if up == "" {
+		return ""
+	}
+	// Longest-match wins so "NEW CHITOSE" is preferred over "CHITOSE".
+	var best, bestKey string
+	for key, canon := range canonicalJPAirports {
+		if strings.Contains(up, key) && len(key) > len(bestKey) {
+			best, bestKey = canon, key
+		}
+	}
+	if best != "" {
+		return best
+	}
+	return s
+}
 
 // ParseTicket sends the given ticket files (PDF/JPG/PNG) to Claude and
 // returns the extracted flight data.
 func ParseTicket(ctx context.Context, apiKey string, files []FileInput) (TicketFlights, error) {
+	ctx = WithFunctionName(ctx, "ticket_parser")
 	contents, err := buildFileContents(files)
 	if err != nil {
 		return TicketFlights{}, err

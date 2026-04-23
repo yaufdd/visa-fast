@@ -6,19 +6,30 @@ import {
   finalizeGroup, getFinalDownloadUrl, getFinalStatus,
   generateSubgroupDocuments, getSubgroupDownloadUrl,
   getTourists, deleteTourist,
-  uploadTouristFile, getTouristUploads,
+  uploadTouristFile, getTouristUploads, deleteTouristUpload,
   getSubgroups, createSubgroup, updateSubgroup, deleteSubgroup,
   assignTouristSubgroup,
-  updateGroupStatus, deleteGroup,
+  updateGroupStatus, deleteGroup, updateGroupName,
+  updateSubgroupProgrammeNotes,
 } from '../api/client';
 import StatusSection from '../components/StatusSection';
 import AddFromDBModal from '../components/AddFromDBModal';
 import FlightDataCard from '../components/FlightDataCard';
+import AILogsSection from '../components/AILogsSection';
+import { normalizeCity } from '../constants/cities';
 
 // Folder-download icon.
 const FolderIcon = () => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
     <path d="M1.5 3.5a1 1 0 0 1 1-1h3.586a1 1 0 0 1 .707.293l1.414 1.414a1 1 0 0 0 .707.293H13.5a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V3.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+  </svg>
+);
+
+// Trash (delete) icon — used in place of the old ✕ button.
+const TrashIcon = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, display: 'block' }}>
+    <path d="M3 4h10M6.5 4V2.5a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1V4M4 4l.5 8.5a1.5 1.5 0 0 0 1.5 1.4h4a1.5 1.5 0 0 0 1.5-1.4L12 4M6.5 7v4M9.5 7v4"
+      stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
   </svg>
 );
 import StatusBadge from '../components/StatusBadge';
@@ -46,11 +57,31 @@ function getTouristName(tourist) {
 
 // ── TouristUploadsBar — per-tourist ticket/voucher uploads ───────────────────
 
+const FILE_TYPE_LABEL = { ticket: 'Билет', voucher: 'Ваучер' };
+const FILE_TYPE_ICON = { ticket: '✈', voucher: '🏨' };
+
+function uploadDisplayName(u) {
+  const raw = u.file_path || '';
+  const base = raw.split(/[\\/]/).pop() || '';
+  const prefix = `${u.file_type}_`;
+  return base.startsWith(prefix) ? base.slice(prefix.length) : base;
+}
+
+function formatUploadDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('ru-RU', {
+    day: '2-digit', month: '2-digit', year: '2-digit',
+  });
+}
+
 function TouristUploadsBar({ touristId, onChanged }) {
   const [uploads, setUploads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [uploadingType, setUploadingType] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
   const ticketRef = useRef(null);
   const voucherRef = useRef(null);
 
@@ -85,69 +116,177 @@ function TouristUploadsBar({ touristId, onChanged }) {
     }
   };
 
-  const counts = uploads.reduce((acc, u) => {
-    acc[u.file_type] = (acc[u.file_type] || 0) + 1;
-    return acc;
-  }, {});
+  const handleDelete = async (u) => {
+    const label = uploadDisplayName(u) || FILE_TYPE_LABEL[u.file_type] || 'файл';
+    if (!window.confirm(`Удалить «${label}»?`)) return;
+    setDeletingId(u.id);
+    setError(null);
+    try {
+      await deleteTouristUpload(touristId, u.id);
+      await load();
+      onChanged?.();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: 8,
-        marginTop: 10,
-      }}
-    >
-      <span
+    <div style={{ marginTop: 10 }}>
+      <div
         style={{
-          fontSize: 11,
-          color: 'var(--white-dim)',
-          textTransform: 'uppercase',
-          letterSpacing: '0.05em',
+          display: 'flex',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 8,
         }}
       >
-        Сканы:
-      </span>
-      <button
-        type="button"
-        className="btn btn-secondary btn-sm"
-        onClick={() => ticketRef.current?.click()}
-        disabled={loading || uploadingType === 'ticket'}
-      >
-        {uploadingType === 'ticket'
-          ? <><span className="spinner" /> Билет...</>
-          : `+ Билет${counts.ticket ? ` (${counts.ticket})` : ''}`}
-      </button>
-      <button
-        type="button"
-        className="btn btn-secondary btn-sm"
-        onClick={() => voucherRef.current?.click()}
-        disabled={loading || uploadingType === 'voucher'}
-      >
-        {uploadingType === 'voucher'
-          ? <><span className="spinner" /> Ваучер...</>
-          : `+ Ваучер${counts.voucher ? ` (${counts.voucher})` : ''}`}
-      </button>
-      <input
-        ref={ticketRef}
-        type="file"
-        accept=".pdf,.jpg,.jpeg,.png"
-        style={{ display: 'none' }}
-        onChange={(e) => { handleUpload(e.target.files?.[0], 'ticket'); e.target.value = ''; }}
-      />
-      <input
-        ref={voucherRef}
-        type="file"
-        accept=".pdf,.jpg,.jpeg,.png"
-        style={{ display: 'none' }}
-        onChange={(e) => { handleUpload(e.target.files?.[0], 'voucher'); e.target.value = ''; }}
-      />
-      {error && (
-        <span style={{ fontSize: 11, color: 'var(--danger)', width: '100%' }}>
-          {error}
+        <span
+          style={{
+            fontSize: 11,
+            color: 'var(--white-dim)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+          }}
+        >
+          Сканы:
         </span>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => ticketRef.current?.click()}
+          disabled={loading || uploadingType === 'ticket'}
+        >
+          {uploadingType === 'ticket'
+            ? <><span className="spinner" /> Билет...</>
+            : '+ Билет'}
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => voucherRef.current?.click()}
+          disabled={loading || uploadingType === 'voucher'}
+        >
+          {uploadingType === 'voucher'
+            ? <><span className="spinner" /> Ваучер...</>
+            : '+ Ваучер'}
+        </button>
+        <input
+          ref={ticketRef}
+          type="file"
+          accept=".pdf,.jpg,.jpeg,.png"
+          style={{ display: 'none' }}
+          onChange={(e) => { handleUpload(e.target.files?.[0], 'ticket'); e.target.value = ''; }}
+        />
+        <input
+          ref={voucherRef}
+          type="file"
+          accept=".pdf,.jpg,.jpeg,.png"
+          style={{ display: 'none' }}
+          onChange={(e) => { handleUpload(e.target.files?.[0], 'voucher'); e.target.value = ''; }}
+        />
+      </div>
+
+      {error && (
+        <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>
+          {error}
+        </div>
+      )}
+
+      {uploads.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            marginTop: 8,
+          }}
+        >
+          {uploads.map((u) => {
+            const name = uploadDisplayName(u);
+            const typeLabel = FILE_TYPE_LABEL[u.file_type] || u.file_type;
+            const date = formatUploadDate(u.created_at);
+            const isDeleting = deletingId === u.id;
+            return (
+              <div
+                key={u.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '6px 8px',
+                  background: 'var(--graphite)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  fontSize: 12,
+                }}
+              >
+                <span style={{ fontSize: 13, flexShrink: 0 }}>
+                  {FILE_TYPE_ICON[u.file_type] || '📄'}
+                </span>
+                <span
+                  style={{
+                    fontSize: 10,
+                    padding: '1px 6px',
+                    borderRadius: 3,
+                    background: 'var(--accent-dim)',
+                    color: 'var(--accent)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    flexShrink: 0,
+                  }}
+                >
+                  {typeLabel}
+                </span>
+                <span
+                  style={{
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    color: 'var(--white)',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 11,
+                  }}
+                  title={name}
+                >
+                  {name || '—'}
+                </span>
+                {date && (
+                  <span
+                    style={{
+                      color: 'var(--white-dim)',
+                      fontSize: 10,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {date}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleDelete(u)}
+                  disabled={isDeleting}
+                  title="Удалить"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: isDeleting ? 'var(--white-dim)' : 'var(--danger, #ff6b6b)',
+                    cursor: isDeleting ? 'default' : 'pointer',
+                    padding: '2px 6px',
+                    fontSize: 13,
+                    lineHeight: 1,
+                    opacity: isDeleting ? 0.5 : 1,
+                    flexShrink: 0,
+                  }}
+                >
+                  {isDeleting ? <span className="spinner" /> : <TrashIcon size={13} />}
+                </button>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -178,15 +317,6 @@ function TouristCard({ tourist, onDelete, subgroups, onAssign, onUpdated }) {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
-          <div
-            style={{
-              width: 28, height: 28, borderRadius: '50%', background: 'var(--gray)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 11, fontWeight: 700, color: 'var(--white-dim)', flexShrink: 0,
-            }}
-          >
-            {name.charAt(0) || '?'}
-          </div>
           <div style={{ minWidth: 0 }}>
             <div
               style={{
@@ -250,12 +380,14 @@ function TouristCard({ tourist, onDelete, subgroups, onAssign, onUpdated }) {
               border: 'none',
               cursor: 'pointer',
               color: 'var(--white-dim)',
-              fontSize: 14,
               lineHeight: 1,
               padding: '4px 6px',
               borderRadius: 4,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
             }}
-          >✕</button>
+          ><TrashIcon /></button>
         </div>
       </div>
 
@@ -275,6 +407,10 @@ function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, on
   const [editName, setEditName] = useState(group.name);
   const [cardError, setCardError] = useState(null);
   const [hotelsExpanded, setHotelsExpanded] = useState(false);
+  const [touristsExpanded, setTouristsExpanded] = useState(true);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
 
   const tourists = allTourists.filter(t => t.subgroup_id === group.id);
 
@@ -289,13 +425,24 @@ function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, on
     }
   };
 
-  const handleDelete = async () => {
-    if (!confirm(`Удалить группу "${group.name}"? Туристы останутся в подаче без группы.`)) return;
+  // Triggered by the trash button — opens the confirmation modal instead of
+  // the native browser confirm() so the UX matches the rest of the app.
+  const requestDelete = () => {
+    setDeleteError(null);
+    setConfirmDeleteOpen(true);
+  };
+
+  const handleDeleteConfirmed = async () => {
+    setDeleting(true);
+    setDeleteError(null);
     try {
       await deleteSubgroup(group.id);
+      setConfirmDeleteOpen(false);
       onDeleted(group.id);
     } catch (e) {
-      setCardError(e.message);
+      setDeleteError(e.message);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -326,10 +473,6 @@ function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, on
           <span style={{ flex: 1, fontSize: 14, fontWeight: 600, color: 'var(--white)' }}>{group.name}</span>
         )}
 
-        <span style={{ fontSize: 12, color: 'var(--white-dim)', background: 'var(--gray)', padding: '2px 8px', borderRadius: 100 }}>
-          {tourists.length} туристов
-        </span>
-
         {editing ? (
           <>
             <button className="btn btn-primary btn-sm" onClick={e => { e.stopPropagation(); handleRename(); }}>OK</button>
@@ -349,18 +492,20 @@ function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, on
                 border: 'none',
                 cursor: 'pointer',
                 color: 'var(--white-dim)',
-                fontSize: 14,
                 lineHeight: 1,
                 padding: '4px 6px',
                 borderRadius: 4,
                 transition: 'color 0.15s, background 0.15s',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
-              onClick={e => { e.stopPropagation(); handleDelete(); }}
+              onClick={e => { e.stopPropagation(); requestDelete(); }}
               onMouseEnter={e => { e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
               onMouseLeave={e => { e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
               title="Удалить группу"
               aria-label="Удалить группу"
-            >✕</button>
+            ><TrashIcon /></button>
           </>
         )}
       </div>
@@ -370,19 +515,48 @@ function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, on
         <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
           {cardError && <div className="error-message">{cardError}</div>}
 
-          {/* Tourist list */}
+          {/* Tourist list — collapsible */}
           <div>
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                marginBottom: 8,
+                marginBottom: touristsExpanded ? 8 : 0,
               }}
             >
-              <span style={{ fontSize: 12, color: 'var(--white-dim)', fontWeight: 500 }}>
-                Туристы
-              </span>
+              <div
+                onClick={() => setTouristsExpanded(e => !e)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  flex: 1,
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 10,
+                    color: 'var(--white-dim)',
+                    transition: 'transform 0.2s',
+                    display: 'inline-block',
+                    transform: touristsExpanded ? 'rotate(90deg)' : 'none',
+                  }}
+                >▶</span>
+                <span
+                  style={{
+                    fontSize: 12,
+                    color: 'var(--white-dim)',
+                    fontWeight: 500,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                  }}
+                >
+                  Туристы{tourists.length > 0 ? ` (${tourists.length})` : ''}
+                </span>
+              </div>
               <button
                 className="btn btn-secondary btn-sm"
                 style={{ fontSize: 11 }}
@@ -391,20 +565,7 @@ function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, on
                 + Добавить туриста
               </button>
             </div>
-            {tourists.length === 0 ? (
-              <div
-                style={{
-                  padding: '10px 14px',
-                  border: '1px dashed var(--border)',
-                  borderRadius: 7,
-                  fontSize: 12,
-                  color: 'var(--white-dim)',
-                  textAlign: 'center',
-                }}
-              >
-                Нет туристов — добавьте из пула анкет
-              </div>
-            ) : (
+            {touristsExpanded && tourists.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {tourists.map((t) => (
                   <TouristCard
@@ -475,6 +636,36 @@ function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, on
           onClose={() => setShowAddModal(false)}
         />
       </Modal>
+
+      <Modal
+        open={confirmDeleteOpen}
+        onClose={() => !deleting && setConfirmDeleteOpen(false)}
+        title="Удалить группу?"
+        width={440}
+      >
+        <div style={{ fontSize: 13, color: 'var(--white)', marginBottom: 16, lineHeight: 1.5 }}>
+          Удалить группу <strong>«{group.name}»</strong>? Туристы останутся в подаче без группы.
+        </div>
+        {deleteError && <div className="error-message" style={{ marginBottom: 12 }}>{deleteError}</div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setConfirmDeleteOpen(false)}
+            disabled={deleting}
+          >
+            Отмена
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={handleDeleteConfirmed}
+            disabled={deleting}
+          >
+            {deleting ? <><span className="spinner" /> Удаление…</> : 'Удалить'}
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -523,7 +714,12 @@ function GroupsTab({ groupId }) {
   };
 
   const handleRenamed = (sgId, name) => setSubgroups(prev => prev.map(sg => sg.id === sgId ? { ...sg, name } : sg));
-  const handleDeleted = (sgId) => setSubgroups(prev => prev.filter(sg => sg.id !== sgId));
+  const handleDeleted = (sgId) => {
+    // Backend FK is ON DELETE SET NULL — tourists survive but lose their
+    // subgroup_id. Mirror that in local state so they re-appear in "Без группы".
+    setSubgroups(prev => prev.filter(sg => sg.id !== sgId));
+    setTourists(prev => prev.map(t => t.subgroup_id === sgId ? { ...t, subgroup_id: null } : t));
+  };
   const handleTouristDeleted = (tid) => setTourists(prev => prev.filter(t => t.id !== tid));
 
   // Unassigned tourists
@@ -676,7 +872,7 @@ function SubgroupHotelsSection({ subgroupId }) {
     if (!hotel) return;
     const prev = groupHotels;
     const next = [...prev, {
-      hotel_id: hotel.id, hotel_name: hotel.name_en, hotel_name_ru: hotel.name_ru,
+      hotel_id: hotel.id, hotel_name: hotel.name_en,
       city: hotel.city, address: hotel.address, phone: hotel.phone,
       check_in: form.check_in, check_out: form.check_out, sort_order: prev.length,
     }];
@@ -743,11 +939,7 @@ function SubgroupHotelsSection({ subgroupId }) {
       {error && <div className="error-message">{error}</div>}
 
       {/* Hotel list (from AI / manually added) */}
-      {groupHotels.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--white-dim)', fontSize: 12 }}>
-          Нет отелей — добавьте кнопкой ниже
-        </div>
-      ) : (
+      {groupHotels.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
           {groupHotels.map((h, idx) => (
             <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'var(--gray-dark)', border: '1px solid var(--border)', borderRadius: 8 }}>
@@ -758,8 +950,7 @@ function SubgroupHotelsSection({ subgroupId }) {
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 500, marginBottom: 3, fontSize: 13 }}>
                   {h.hotel_name}
-                  {h.hotel_name_ru && <span style={{ color: 'var(--white-dim)', marginLeft: 8, fontSize: 12 }}>/ {h.hotel_name_ru}</span>}
-                  {h.city && <span style={{ color: 'var(--accent)', marginLeft: 8, fontSize: 11, fontWeight: 500 }}>{h.city}</span>}
+                  {h.city && <span style={{ color: 'var(--accent)', marginLeft: 8, fontSize: 11, fontWeight: 500 }}>{normalizeCity(h.city)}</span>}
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--white-dim)', display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)' }}>
@@ -796,15 +987,17 @@ function SubgroupHotelsSection({ subgroupId }) {
                   border: 'none',
                   cursor: saving ? 'default' : 'pointer',
                   color: saving ? 'var(--border)' : 'var(--white-dim)',
-                  fontSize: 14,
                   lineHeight: 1,
                   padding: '4px 6px',
                   borderRadius: 4,
                   transition: 'color 0.15s, background 0.15s',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
                 onMouseEnter={e => { if (saving) return; e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
                 onMouseLeave={e => { if (saving) return; e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
-              >✕</button>
+              ><TrashIcon /></button>
             </div>
           ))}
         </div>
@@ -831,7 +1024,7 @@ function SubgroupHotelsSection({ subgroupId }) {
             <label className="form-label">Отель</label>
             <select className="form-input" value={form.hotel_id} onChange={e => setForm(f => ({ ...f, hotel_id: e.target.value }))}>
               <option value="">— выберите отель —</option>
-              {allHotels.map(h => <option key={h.id} value={h.id}>{h.name_en} ({h.city})</option>)}
+              {allHotels.map(h => <option key={h.id} value={h.id}>{h.name_en} ({normalizeCity(h.city)})</option>)}
             </select>
           </div>
 
@@ -871,6 +1064,57 @@ function SubgroupHotelsSection({ subgroupId }) {
 }
 
 // ── DocumentsTab ──────────────────────────────────────────────────────────────
+
+// Per-subgroup free-text hints that feed into programme generation.
+// Autosaves on blur. Lives inside SubgroupDocsRow so each subgroup can
+// describe its own itinerary preferences independently.
+function SubgroupProgrammeNotes({ subgroupId, initial }) {
+  const [value, setValue] = useState(initial || '');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState(null);
+  const [lastSaved, setLastSaved] = useState(initial || '');
+
+  const handleBlur = async () => {
+    if (lastSaved === value) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await updateSubgroupProgrammeNotes(subgroupId, value);
+      setLastSaved(value);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1800);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <div style={{ fontSize: 12, color: 'var(--white-dim)', fontWeight: 500 }}>
+          Пожелания по программе
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--white-dim)', minHeight: 14 }}>
+          {saving && 'Сохранение…'}
+          {!saving && saved && 'Сохранено'}
+          {!saving && error && <span style={{ color: 'var(--danger)' }}>{error}</span>}
+        </div>
+      </div>
+      <textarea
+        className="form-input"
+        rows={3}
+        value={value}
+        onChange={e => setValue(e.target.value)}
+        onBlur={handleBlur}
+        placeholder="Например: 3 день — чайная церемония, без экскурсий в трансферные дни"
+        style={{ width: '100%', resize: 'vertical', minHeight: 64, fontFamily: 'var(--font-body)' }}
+      />
+    </div>
+  );
+}
 
 function SubgroupDocsRow({ subgroup }) {
   // Start with server-persisted state: if a ZIP exists on disk, show it.
@@ -931,6 +1175,10 @@ function SubgroupDocsRow({ subgroup }) {
           )}
         </div>
       </div>
+      <SubgroupProgrammeNotes
+        subgroupId={subgroup.id}
+        initial={subgroup.programme_notes || ''}
+      />
     </div>
   );
 }
@@ -1159,10 +1407,36 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
 
 // ── SettingsTab ───────────────────────────────────────────────────────────────
 
-function SettingsTab({ group, onDeleted }) {
+function SettingsTab({ group, onDeleted, onGroupUpdated }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState(null);
+
+  // Rename state
+  const [name, setName] = useState(group?.name || '');
+  const [renaming, setRenaming] = useState(false);
+  const [renameError, setRenameError] = useState(null);
+  const [renameSaved, setRenameSaved] = useState(false);
+
+  useEffect(() => { setName(group?.name || ''); }, [group?.id, group?.name]);
+
+  const handleRename = async () => {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === group?.name) return;
+    setRenaming(true);
+    setRenameError(null);
+    setRenameSaved(false);
+    try {
+      const updated = await updateGroupName(group.id, trimmed);
+      onGroupUpdated?.(updated);
+      setRenameSaved(true);
+      setTimeout(() => setRenameSaved(false), 1800);
+    } catch (e) {
+      setRenameError(e.message);
+    } finally {
+      setRenaming(false);
+    }
+  };
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -1177,8 +1451,86 @@ function SettingsTab({ group, onDeleted }) {
     }
   };
 
+  const nameDirty = name.trim() !== (group?.name || '');
+
   return (
     <div>
+      <div style={{
+        marginBottom: 18,
+        padding: '14px 16px',
+        background: 'var(--graphite)',
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+      }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: 8,
+        }}>
+          <div style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10,
+            letterSpacing: '0.05em',
+            textTransform: 'uppercase',
+            color: 'var(--white-dim)',
+          }}>
+            Название подачи
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--white-dim)', minHeight: 14 }}>
+            {renaming && 'Сохранение…'}
+            {!renaming && renameSaved && 'Сохранено'}
+            {!renaming && renameError && (
+              <span style={{ color: 'var(--danger)' }}>{renameError}</span>
+            )}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            className="form-input"
+            type="text"
+            value={name}
+            onChange={e => setName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleRename(); }}
+            disabled={renaming}
+            style={{ flex: 1, fontSize: 13 }}
+          />
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={handleRename}
+            disabled={renaming || !nameDirty || !name.trim()}
+          >
+            {renaming ? <span className="spinner" /> : 'Сохранить'}
+          </button>
+        </div>
+      </div>
+
+      <div style={{
+        marginBottom: 18,
+        padding: '12px 14px',
+        background: 'var(--graphite)',
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        fontSize: 12,
+        color: 'var(--white-dim)',
+        display: 'flex',
+        gap: 8,
+        alignItems: 'baseline',
+      }}>
+        <span style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 10,
+          letterSpacing: '0.05em',
+          textTransform: 'uppercase',
+        }}>
+          Создана:
+        </span>
+        <span style={{ color: 'var(--white)', fontFamily: 'var(--font-mono)' }}>
+          {formatDate(group?.created_at)}
+        </span>
+      </div>
+
       <button
         type="button"
         onClick={() => { setConfirmOpen(true); setError(null); }}
@@ -1249,24 +1601,30 @@ export default function GroupDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [group, setGroup] = useState(null);
+  const [tourists, setTourists] = useState([]);
+  const [hotels, setHotels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('groups');
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const data = await getGroup(id);
-        // getGroup returns { group, tourists, hotels } — unwrap to the flat group object
-        // so downstream components (StatusSection, DocumentsTab) see group.id directly.
-        setGroup(data?.group ?? data);
-      } catch (e) {
-        setError(e.message);
-      } finally {
-        setLoading(false);
-      }
-    })();
+  // getGroup returns { group, tourists, hotels } — we need tourists + hotels
+  // at the top level to feed the workflow stepper.
+  const loadGroup = useCallback(async () => {
+    try {
+      const data = await getGroup(id);
+      setGroup(data?.group ?? data);
+      setTourists(Array.isArray(data?.tourists) ? data.tourists : []);
+      setHotels(Array.isArray(data?.hotels) ? data.hotels : []);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
   }, [id]);
+
+  // Re-fetch when the user switches tabs so the stepper reflects changes
+  // (tourists added, scans uploaded, documents generated) without a hard reload.
+  useEffect(() => { loadGroup(); }, [loadGroup, activeTab]);
 
   if (loading) return (
     <div className="page-container">
@@ -1285,20 +1643,9 @@ export default function GroupDetailPage() {
     <div className="page-container">
       <div className="page-header">
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-            <button
-              onClick={() => navigate('/')}
-              style={{ background: 'none', border: 'none', color: 'var(--white-dim)', fontSize: 13, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: 4 }}
-            >
-              ← Подачи
-            </button>
-            <span style={{ color: 'var(--border)' }}>/</span>
-            <span style={{ color: 'var(--white-dim)', fontSize: 13 }}>{group?.name}</span>
-          </div>
           <div className="page-title">{group?.name}</div>
           <div className="page-subtitle" style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6 }}>
             <StatusBadge status={group?.status || 'draft'} />
-            <span style={{ color: 'var(--white-dim)', fontSize: 12 }}>Создана: {formatDate(group?.created_at)}</span>
           </div>
         </div>
       </div>
@@ -1314,10 +1661,17 @@ export default function GroupDetailPage() {
       {activeTab === 'status' && <StatusSection group={group} onGroupUpdated={setGroup} />}
       {activeTab === 'groups' && <GroupsTab groupId={id} />}
       {activeTab === 'documents' && (
-        <DocumentsTab groupId={id} group={group} onGroupUpdated={setGroup} />
+        <>
+          <DocumentsTab groupId={id} group={group} onGroupUpdated={setGroup} />
+          <AILogsSection groupId={id} />
+        </>
       )}
       {activeTab === 'settings' && (
-        <SettingsTab group={group} onDeleted={() => navigate('/')} />
+        <SettingsTab
+          group={group}
+          onDeleted={() => navigate('/')}
+          onGroupUpdated={setGroup}
+        />
       )}
     </div>
   );

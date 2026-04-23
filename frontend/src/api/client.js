@@ -102,6 +102,14 @@ export async function uploadTouristFile(touristId, file, fileType) {
   return res.json();
 }
 
+export async function deleteTouristUpload(touristId, uploadId) {
+  const res = await apiFetch(`/tourists/${touristId}/uploads/${uploadId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
 // Hotels
 export async function getHotels() {
   const res = await apiFetch('/hotels');
@@ -176,7 +184,7 @@ export async function updateSubgroup(subgroupId, name) {
 export async function deleteSubgroup(subgroupId) {
   const res = await apiFetch(`/subgroups/${subgroupId}`, { method: 'DELETE' });
   if (!res.ok) throw await errFromRes(res);
-  return res.json();
+  // Backend returns 204 No Content — no body to parse.
 }
 
 export async function assignTouristSubgroup(touristId, subgroupId) {
@@ -283,6 +291,12 @@ export async function archiveSubmission(id) {
   return res.json();
 }
 
+export async function eraseSubmission(id) {
+  const res = await apiFetch(`/submissions/${id}/erase`, { method: 'DELETE' });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
 export async function attachSubmission(id, groupId, subgroupId = null) {
   const res = await apiFetch(`/submissions/${id}/attach`, {
     method: 'POST',
@@ -303,6 +317,77 @@ export async function updateFlightData(touristId, data) {
     method: 'PUT',
     body: JSON.stringify(data),
   });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+export async function applyFlightDataToSubgroup(touristId) {
+  const res = await apiFetch(
+    `/tourists/${touristId}/flight_data/apply_to_subgroup`,
+    { method: 'POST' },
+  );
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+export async function updateGroupName(groupId, name) {
+  const res = await apiFetch(`/groups/${groupId}/name`, {
+    method: 'PUT',
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+export async function updateGroupProgrammeNotes(groupId, notes) {
+  const res = await apiFetch(`/groups/${groupId}/programme_notes`, {
+    method: 'PUT',
+    body: JSON.stringify({ notes }),
+  });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+export async function updateSubgroupProgrammeNotes(subgroupId, notes) {
+  const res = await apiFetch(`/subgroups/${subgroupId}/programme_notes`, {
+    method: 'PUT',
+    body: JSON.stringify({ notes }),
+  });
+  if (!res.ok) throw await errFromRes(res);
+}
+
+// ── Document templates ────────────────────────────────────────────────────
+export async function getDoverenostTemplateStatus() {
+  const res = await apiFetch('/templates/doverenost');
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+export async function uploadDoverenostTemplate(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await apiFetch('/templates/doverenost', {
+    method: 'POST',
+    body: fd,
+  });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+export async function deleteDoverenostTemplate() {
+  const res = await apiFetch('/templates/doverenost', { method: 'DELETE' });
+  if (!res.ok) throw await errFromRes(res);
+}
+
+export function getDoverenostTemplateDownloadUrl() {
+  return `${API}/templates/doverenost/download`;
+}
+
+// ── AI audit log ──
+// Returns the latest 500 AI (Claude) calls made on behalf of this group,
+// newest first. Image/PDF bytes inside request JSONs are redacted server-side.
+export async function getGroupAILogs(groupId) {
+  const res = await apiFetch(`/groups/${encodeURIComponent(groupId)}/ai_logs`);
   if (!res.ok) throw await errFromRes(res);
   return res.json();
 }

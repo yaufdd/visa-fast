@@ -79,13 +79,16 @@ func NewRouter(pool *pgxpool.Pool, anthropicKey, uploadsDir, pythonScript string
 			r.Post("/groups", api.CreateGroup(pool))
 			r.Get("/groups/{id}", api.GetGroup(pool))
 			r.Delete("/groups/{id}", api.DeleteGroup(pool))
+			r.Put("/groups/{id}/name", api.UpdateGroupName(pool))
 			r.Put("/groups/{id}/status", api.UpdateGroupStatus(pool))
 			r.Put("/groups/{id}/notes", api.UpdateGroupNotes(pool))
+			r.Put("/groups/{id}/programme_notes", api.UpdateGroupProgrammeNotes(pool))
 
 			// Subgroups
 			r.Get("/groups/{id}/subgroups", api.ListSubgroups(pool, uploadsDir))
 			r.Post("/groups/{id}/subgroups", api.CreateSubgroup(pool))
 			r.Put("/subgroups/{id}", api.UpdateSubgroup(pool))
+			r.Put("/subgroups/{id}/programme_notes", api.UpdateSubgroupProgrammeNotes(pool))
 			r.Delete("/subgroups/{id}", api.DeleteSubgroup(pool))
 			r.Put("/tourists/{id}/subgroup", api.AssignTouristSubgroup(pool))
 			r.Get("/subgroups/{id}/hotels", api.ListSubgroupHotels(pool))
@@ -100,6 +103,7 @@ func NewRouter(pool *pgxpool.Pool, anthropicKey, uploadsDir, pythonScript string
 			// Per-tourist uploads
 			r.Get("/tourists/{id}/uploads", api.ListTouristUploads(pool))
 			r.Post("/tourists/{id}/uploads", api.UploadTouristFile(pool, uploadsDir, anthropicKey))
+			r.Delete("/tourists/{id}/uploads/{uploadId}", api.DeleteTouristUpload(pool))
 
 			// Group hotels
 			r.Get("/groups/{id}/hotels", api.ListGroupHotels(pool))
@@ -113,6 +117,9 @@ func NewRouter(pool *pgxpool.Pool, anthropicKey, uploadsDir, pythonScript string
 			r.Get("/groups/{id}/download/final", api.DownloadFinalZIP(pool, uploadsDir))
 			r.Get("/groups/{id}/final/status", api.FinalStatus(pool, uploadsDir))
 
+			// AI audit log — every Claude call made on behalf of this group.
+			r.Get("/groups/{id}/ai_logs", api.ListGroupAILogs(pool))
+
 			// Submissions (form-based workflow)
 			r.Post("/submissions", api.CreateSubmissionByManager(pool))
 			r.Get("/submissions", api.ListSubmissions(pool))
@@ -124,6 +131,13 @@ func NewRouter(pool *pgxpool.Pool, anthropicKey, uploadsDir, pythonScript string
 
 			// Flight data
 			r.Put("/tourists/{id}/flight_data", api.UpdateFlightData(pool))
+			r.Post("/tourists/{id}/flight_data/apply_to_subgroup", api.ApplyFlightDataToSubgroup(pool))
+
+			// Document templates (per-org custom .docx override)
+			r.Get("/templates/doverenost", api.GetDoverenostTemplateStatus(uploadsDir))
+			r.Post("/templates/doverenost", api.UploadDoverenostTemplate(uploadsDir))
+			r.Delete("/templates/doverenost", api.DeleteDoverenostTemplate(uploadsDir))
+			r.Get("/templates/doverenost/download", api.DownloadDoverenostTemplate(uploadsDir))
 		})
 	})
 

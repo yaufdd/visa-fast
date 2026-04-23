@@ -25,6 +25,7 @@ func TranslateStrings(ctx context.Context, apiKey string, src []string) ([]strin
 	if len(src) == 0 {
 		return nil, nil
 	}
+	ctx = WithFunctionName(ctx, "translate")
 	userBody, err := json.Marshal(map[string]any{"strings": src})
 	if err != nil {
 		return nil, fmt.Errorf("marshal translate input: %w", err)

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -119,14 +120,23 @@ func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey string) http.Handl
 			Data:            fileData,
 		}
 
+		// Each scan upload is its own auditable generation — a new UUID per
+		// parse run so a manager can trace exactly what went to Claude for
+		// this file.
+		sgID := ""
+		if subgroupID != nil {
+			sgID = *subgroupID
+		}
+		aiCtx := withAuditCtx(r.Context(), pool, orgID, groupID, sgID)
+
 		switch fileType {
 		case "ticket":
-			if parseErr := parseTicketAndPersist(r.Context(), pool, apiKey, orgID, touristID, fileInput); parseErr != nil {
+			if parseErr := parseTicketAndPersist(aiCtx, pool, apiKey, orgID, touristID, fileInput); parseErr != nil {
 				slog.Warn("ticket parse failed", "tourist_id", touristID, "err", parseErr)
 				resp["parse_error"] = parseErr.Error()
 			}
 		case "voucher":
-			if parseErr := parseVoucherAndPersist(r.Context(), pool, apiKey, orgID, groupID, subgroupID, fileInput); parseErr != nil {
+			if parseErr := parseVoucherAndPersist(aiCtx, pool, apiKey, orgID, groupID, subgroupID, fileInput); parseErr != nil {
 				slog.Warn("voucher parse failed", "tourist_id", touristID, "err", parseErr)
 				resp["parse_error"] = parseErr.Error()
 			}
@@ -143,6 +153,8 @@ func parseTicketAndPersist(ctx context.Context, pool *pgxpool.Pool, apiKey, orgI
 	if err != nil {
 		return err
 	}
+	flights.Arrival.Airport = ai.NormalizeJapaneseAirport(flights.Arrival.Airport)
+	flights.Departure.Airport = ai.NormalizeJapaneseAirport(flights.Departure.Airport)
 	buf, _ := json.Marshal(map[string]any{
 		"arrival":   flights.Arrival,
 		"departure": flights.Departure,
@@ -184,6 +196,10 @@ func parseVoucherAndPersist(ctx context.Context, pool *pgxpool.Pool, apiKey, org
 		return err
 	}
 	for _, h := range hotels {
+		// Vouchers tend to emit English CAPS ("TOKYO"); the UI expects
+		// canonical Russian ("Токио") so new hotels land consistent.
+		h.City = ai.NormalizeCity(h.City)
+
 		var hotelID string
 		// Look up in org-visible hotels (global or private to this org).
 		err := pool.QueryRow(ctx,
@@ -232,5 +248,34 @@ func ListTouristUploads(pool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, uploads)
+	}
+}
+
+// DeleteTouristUpload handles DELETE /api/tourists/:id/uploads/:uploadId
+// Deletes the DB row and removes the file from disk (best-effort — missing
+// file on disk is not an error).
+func DeleteTouristUpload(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
+		touristID := chi.URLParam(r, "id")
+		uploadID := chi.URLParam(r, "uploadId")
+
+		filePath, ok, err := db.DeleteTouristUpload(r.Context(), pool, orgID, touristID, uploadID)
+		if err != nil {
+			slog.Error("delete tourist upload", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusNotFound, "upload not found")
+			return
+		}
+
+		if filePath != "" {
+			if err := os.Remove(filePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				slog.Warn("remove upload file", "path", filePath, "err", err)
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
 }

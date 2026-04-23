@@ -80,9 +80,38 @@ type FileInput struct {
 }
 
 // callClaude POSTs to /v1/messages with retries on transient failures.
+//
+// Every call writes an audit row via the Logger installed in ctx (or
+// NopLogger when absent). Retries count as ONE audit row — we record the
+// final outcome, not each retry attempt.
 func callClaude(ctx context.Context, apiKey string, reqBody anthropicRequest) (string, error) {
+	started := time.Now()
+	logEntry := CallLog{
+		OrgID:        OrgIDFromContext(ctx),
+		GroupID:      GroupIDFromContext(ctx),
+		SubgroupID:   SubgroupIDFromContext(ctx),
+		GenerationID: GenerationIDFromContext(ctx),
+		FunctionName: FunctionNameFromContext(ctx),
+		Model:        reqBody.Model,
+		RequestJSON:  redactRequestForLog(reqBody),
+		StartedAt:    started,
+		// Default to error — success path overrides. Any early return
+		// skipping the explicit assignments below still persists a valid row.
+		Status: "error",
+	}
+	logger := LoggerFromContext(ctx)
+	defer func() {
+		logEntry.FinishedAt = time.Now()
+		logEntry.DurationMs = int(logEntry.FinishedAt.Sub(started) / time.Millisecond)
+		// Best-effort; ignore logger errors so an audit failure can never
+		// take down the AI call path.
+		_ = logger.Log(ctx, logEntry)
+	}()
+
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
+		logEntry.Status = "error"
+		logEntry.ErrorMsg = err.Error()
 		return "", fmt.Errorf("marshal claude request: %w", err)
 	}
 
@@ -148,15 +177,28 @@ func callClaude(ctx context.Context, apiKey string, reqBody anthropicRequest) (s
 
 		var ar anthropicResponse
 		if err := json.Unmarshal(body, &ar); err != nil {
-			return "", fmt.Errorf("unmarshal claude response (status %d): %w — body: %s", resp.StatusCode, err, body)
+			wrapped := fmt.Errorf("unmarshal claude response (status %d): %w — body: %s", resp.StatusCode, err, body)
+			logEntry.Status = "error"
+			logEntry.ErrorMsg = wrapped.Error()
+			return "", wrapped
 		}
 		if ar.Error != nil {
+			logEntry.Status = "error"
+			logEntry.ErrorMsg = "claude API error: " + ar.Error.Message
 			return "", fmt.Errorf("claude API error: %s", ar.Error.Message)
 		}
 		if len(ar.Content) == 0 {
+			logEntry.Status = "error"
+			logEntry.ErrorMsg = "claude returned empty content"
 			return "", fmt.Errorf("claude returned empty content")
 		}
+		logEntry.Status = "success"
+		logEntry.ResponseText = ar.Content[0].Text
 		return ar.Content[0].Text, nil
+	}
+	logEntry.Status = "error"
+	if lastErr != nil {
+		logEntry.ErrorMsg = lastErr.Error()
 	}
 	return "", lastErr
 }

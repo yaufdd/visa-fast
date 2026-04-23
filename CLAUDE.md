@@ -177,6 +177,23 @@ Anthropic (fails loudly if the name cannot be located). Passport scans
 (`docgen/passport_parser.py`, planned) are parsed fully locally and never
 reach Claude.
 
+### AI Audit Log
+
+Every call to Anthropic is persisted to the `ai_call_logs` table as an
+observational record (request JSON with image bytes redacted, response text,
+status, duration, model). Rows are scoped to `org_id` + `group_id` +
+`generation_id` (one UUID per `/generate`, `/finalize`, or scan-upload run).
+The log is wired at the `callClaude` seam in `backend/internal/ai/client.go`
+so no high-level function can forget to log — `ai.WithLogger(ctx, ...)` +
+`ai.WithGenerationID(ctx, ...)` at the handler entry are enough.
+
+Managers can inspect the log via the "Аудит-лог ИИ-вызовов" expandable
+section on the Documents tab of each group (UI component
+`frontend/src/components/AILogsSection.jsx`). `GET /api/groups/{id}/ai_logs`
+returns up to the latest 500 rows, newest first, grouped by `generation_id`.
+
+Retention policy (auto-cleanup after N days) is tracked as a follow-up task.
+
 ### Hotels CRUD
 - `/hotels` — list all hotels (city tags normalized to Title Case + RU translation for known Japanese cities).
 - Row click → `/hotels/:id` (HotelEditPage) — dedicated edit page, PUT /api/hotels/:id.

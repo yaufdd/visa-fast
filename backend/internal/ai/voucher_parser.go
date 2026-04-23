@@ -31,6 +31,7 @@ RULES:
 
 // ParseVouchers returns the hotels found across all voucher files.
 func ParseVouchers(ctx context.Context, apiKey string, files []FileInput) ([]VoucherHotel, error) {
+	ctx = WithFunctionName(ctx, "voucher_parser")
 	contents, err := buildFileContents(files)
 	if err != nil {
 		return nil, err

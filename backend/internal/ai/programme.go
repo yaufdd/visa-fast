@@ -32,6 +32,11 @@ type ProgrammeInput struct {
 	DepartureFlight FlightBrief  `json:"departure_flight,omitempty"`
 	Hotels          []HotelBrief `json:"hotels"`
 	ContactPhone    string       `json:"contact_phone"`
+	// ManagerNotes are free-form Russian hints from the travel-agency
+	// manager (e.g. "3 марта — чайная церемония", "trying not to walk much").
+	// The AI must honour them over the default activity rules wherever they
+	// don't conflict with the strict schema constraints below.
+	ManagerNotes string `json:"manager_notes,omitempty"`
 }
 
 // ProgrammeDay is one row of the programme table.
@@ -64,8 +69,18 @@ Regular sightseeing day:
   Rules: 3–4 places max; geographically close to hotel city; no duplicate sights anywhere; no sightseeing on arrival/transfer/departure days.
 
 Transfer day (check-out one hotel, check-in another):
-  "Check out\n\nTransfer to {City}\n\nCheck in"
-  May add 1–2 sights ONLY if clearly on the transfer route.
+  "Check out\n\nTransfer to {City}\n\n{Place1}\n\n{Place2}\n\nCheck in"
+  Rules:
+    - You MUST add 1–2 sightseeing places — pick sights in the destination
+      city (or along the transfer route) that make logistical sense given
+      luggage/travel time. Never leave the day as just
+      "Check out + Transfer + Check in".
+    - The sights must not duplicate any sightseeing shown on other days of
+      the same itinerary.
+    - The ONLY exception is when manager_notes explicitly instruct
+      otherwise (e.g. "трансферный день без экскурсий" / "no sightseeing
+      on transfer days"). Only in that case emit the short form
+      "Check out\n\nTransfer to {City}\n\nCheck in".
 
 Departure day (departure_date, if present):
   "Check out\n\nDeparture : {HH:MM}\n\n{AIRPORT IN CAPS}\n\n{FLIGHT NUMBER}"
@@ -86,11 +101,25 @@ HOTEL DATE LOGIC:
   A hotel checked in on X and out on Y covers nights X, X+1 ... Y-1.
   On date Y that is check-out of A AND check-in of B → show hotel B.
 
+MANAGER NOTES (manager_notes field on the input):
+  Free-form Russian hints written by the travel-agency manager. When present
+  they describe concrete wishes (specific sights, themes, exceptions) for
+  particular days or the whole trip. Treat them as high-priority
+  instructions: incorporate them into the relevant day's activity cell.
+  Honour them OVER the default activity rules wherever the two conflict,
+  EXCEPT these hard constraints that are never negotiable:
+    - CELL SEPARATOR ("\n\n") and DATE FORMAT (YYYY-DD-MM).
+    - ACCOMMODATION and CONTACT column rules.
+    - No duplicate sights anywhere in the itinerary.
+  If manager_notes are empty or absent, generate the programme from the
+  default rules alone.
+
 OUTPUT SCHEMA (array only, no wrapper):
 [ { "date": "YYYY-DD-MM", "activity": "...", "contact": "...", "accommodation": "..." } ]`
 
 // GenerateProgramme asks Claude Opus to produce the programme day rows.
 func GenerateProgramme(ctx context.Context, apiKey string, in ProgrammeInput) ([]ProgrammeDay, error) {
+	ctx = WithFunctionName(ctx, "programme")
 	body, err := json.MarshalIndent(in, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal programme input: %w", err)

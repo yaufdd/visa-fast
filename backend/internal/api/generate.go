@@ -29,6 +29,22 @@ var (
 	errNoHotelsForPipe = errors.New("no hotels configured")
 )
 
+// withAuditCtx wraps parent with the values that ai.callClaude uses to write
+// an audit row: a fresh generation_id, the org, optional group/subgroup, and
+// a Logger backed by the given pool. One generation_id per call — each
+// runPipeline invocation is its own auditable unit.
+func withAuditCtx(parent context.Context, pool *pgxpool.Pool, orgID, groupID, subgroupID string) context.Context {
+	ctx := ai.WithGenerationID(parent, ai.NewGenerationID())
+	ctx = ai.WithOrgID(ctx, orgID)
+	if groupID != "" {
+		ctx = ai.WithGroupID(ctx, groupID)
+	}
+	if subgroupID != "" {
+		ctx = ai.WithSubgroupID(ctx, subgroupID)
+	}
+	return ai.WithLogger(ctx, dbrepo.NewPgxAILogger(pool))
+}
+
 // freeTextKeys lists the submission_snapshot fields that are free-text Russian
 // strings requiring translation before they land in the final pass2 JSON.
 // The set mirrors what ai.AssembleTourist feeds through the translations map.
@@ -426,7 +442,8 @@ func GenerateDocuments(pool *pgxpool.Pool, apiKey, uploadsDir, pythonScript stri
 		var lastPass2JSON []byte
 
 		for _, sg := range subgroups {
-			pass2JSON, err := runPipeline(r.Context(), pool, apiKey, orgID, groupID, sg.id, guidePhone, now)
+			aiCtx := withAuditCtx(r.Context(), pool, orgID, groupID, sg.id)
+			pass2JSON, err := runPipeline(aiCtx, pool, apiKey, orgID, groupID, sg.id, guidePhone, now)
 			if err != nil {
 				if errors.Is(err, errNoTourists) {
 					slog.Warn("subgroup has no tourists, skipping", "subgroup", sg.name)
@@ -507,7 +524,8 @@ func GenerateSubgroupDocuments(pool *pgxpool.Pool, apiKey, uploadsDir, pythonScr
 		subDocsDir := filepath.Join(uploadsDir, groupID, "docs", subgroupName)
 		_ = os.RemoveAll(subDocsDir)
 
-		pass2JSON, err := runPipeline(r.Context(), pool, apiKey, orgID, groupID, subgroupID, guidePhone, now)
+		aiCtx := withAuditCtx(r.Context(), pool, orgID, groupID, subgroupID)
+		pass2JSON, err := runPipeline(aiCtx, pool, apiKey, orgID, groupID, subgroupID, guidePhone, now)
 		if err != nil {
 			if errors.Is(err, errNoTourists) {
 				writeError(w, http.StatusBadRequest, "no tourists in this subgroup")
