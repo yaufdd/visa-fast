@@ -1,34 +1,51 @@
+# syntax=docker/dockerfile:1.6
+
 # ── Build stage ────────────────────────────────────────────────────────────────
 FROM golang:1.25-alpine AS builder
 
 WORKDIR /src
+
+# Separate dep-download layer — module changes invalidate only the layers
+# below, not the base image or go-mod-download cache.
 COPY backend/go.mod backend/go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
 
 COPY backend/ ./
-RUN CGO_ENABLED=0 go build -o /app/server ./cmd/server
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -o /app/server ./cmd/server
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM python:3.12-slim
 
-# System deps:
-#   - pdftk-java : PDF form filling (fillpdf dependency, for anketa)
-#   - tesseract  : local OCR used by redact_scan.py to find the name region
-#                  on ticket/voucher scans BEFORE they are sent to Anthropic
-#   - poppler-utils: pdf2image dependency (PDF → image for OCR)
-#   - libgl1 libglib2.0-0 : opencv-python-headless runtime dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        pdftk-java \
-        tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng \
-        poppler-utils libgl1 libglib2.0-0 && \
-    rm -rf /var/lib/apt/lists/*
+# Layer 1 — stable apt deps (rarely change). Separating from OCR/opencv
+# lets the pdftk-java download (~200MB OpenJDK) stay cached across most builds.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends --no-install-suggests \
+        pdftk-java
 
-# Python dependencies for docgen + redact_scan.py
-RUN pip install --no-cache-dir \
-    python-docx fillpdf \
-    pytesseract==0.3.13 pdf2image==1.17.0 \
-    pillow==11.1.0 opencv-python-headless==4.10.0.84
+# Layer 2 — OCR + PDF image stack for redact_scan.py (newer, may churn).
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    apt-get install -y --no-install-recommends --no-install-suggests \
+        tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng \
+        poppler-utils libgl1 libglib2.0-0
+
+# Python deps — split into stable (docx/fillpdf) and OCR (pytesseract/opencv)
+# so the pip-cache mount + layer caching pays off on incremental rebuilds.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install python-docx fillpdf
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+        pytesseract==0.3.13 pdf2image==1.17.0 \
+        pillow==11.1.0 opencv-python-headless==4.10.0.84
 
 WORKDIR /app
 
