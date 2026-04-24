@@ -1,6 +1,6 @@
 COMPOSE := docker compose -f docker-compose.prod.yml
 
-.PHONY: help up down restart build rebuild logs logs-backend logs-web logs-db ps db-only dev-backend dev-frontend deploy clean
+.PHONY: help up down restart build rebuild logs logs-backend logs-web logs-db ps db-only dev-backend dev-frontend deploy clean audit audit-run audit-full audit-run-full
 
 help:
 	@echo "FujiTravel Admin — Make targets"
@@ -22,6 +22,11 @@ help:
 	@echo ""
 	@echo "  make deploy        — git pull + rebuild + restart (for server)"
 	@echo "  make clean         — stop and remove volumes (DANGER: wipes db)"
+	@echo ""
+	@echo "  make audit          — последний вызов ИИ (кратко: модель, статус, время)"
+	@echo "  make audit-run      — все вызовы последней генерации (кратко)"
+	@echo "  make audit-full     — последний вызов с полным запросом и ответом"
+	@echo "  make audit-run-full — все вызовы последней генерации с полными запросами и ответами"
 
 # ── Docker compose commands ──────────────────────────────────────────────
 up:
@@ -76,3 +81,46 @@ deploy:
 
 clean:
 	$(COMPOSE) down -v
+
+# ── Аудит ИИ-вызовов ─────────────────────────────────────────────────────
+# Все команды идут через docker exec к контейнеру `db`, psql на хосте не нужен.
+
+audit:
+	@$(COMPOSE) exec -T db psql -U fuji -d fujitravel -c "\
+	SELECT started_at, function_name, model, status, duration_ms, \
+	       input_tokens, output_tokens, COALESCE(error_msg,'') AS error \
+	FROM ai_call_logs \
+	ORDER BY started_at DESC \
+	LIMIT 1;"
+
+audit-run:
+	@$(COMPOSE) exec -T db psql -U fuji -d fujitravel -c "\
+	SELECT started_at, function_name, model, status, duration_ms, \
+	       input_tokens, output_tokens, COALESCE(error_msg,'') AS error \
+	FROM ai_call_logs \
+	WHERE generation_id = ( \
+	    SELECT generation_id FROM ai_call_logs \
+	    ORDER BY started_at DESC LIMIT 1 \
+	) \
+	ORDER BY started_at ASC;"
+
+audit-full:
+	@$(COMPOSE) exec -T db psql -U fuji -d fujitravel -x -c "\
+	SELECT started_at, function_name, model, status, duration_ms, \
+	       input_tokens, output_tokens, error_msg, \
+	       request_json, response_text \
+	FROM ai_call_logs \
+	ORDER BY started_at DESC \
+	LIMIT 1;"
+
+audit-run-full:
+	@$(COMPOSE) exec -T db psql -U fuji -d fujitravel -x -c "\
+	SELECT started_at, function_name, model, status, duration_ms, \
+	       input_tokens, output_tokens, error_msg, \
+	       request_json, response_text \
+	FROM ai_call_logs \
+	WHERE generation_id = ( \
+	    SELECT generation_id FROM ai_call_logs \
+	    ORDER BY started_at DESC LIMIT 1 \
+	) \
+	ORDER BY started_at ASC;"

@@ -14,7 +14,6 @@ import {
 import StatusSection from '../components/StatusSection';
 import AddFromDBModal from '../components/AddFromDBModal';
 import TouristCard from '../components/TouristCard';
-import AILogsSection from '../components/AILogsSection';
 import { normalizeCity } from '../constants/cities';
 
 // Folder-download icon.
@@ -43,7 +42,7 @@ function formatDate(iso) {
 
 // ── GroupCard ─────────────────────────────────────────────────────────────────
 
-function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, onRenamed, onDeleted, layoutVariant }) {
+function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, onRenamed, onDeleted }) {
   const [expanded, setExpanded] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -214,7 +213,6 @@ function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, on
                   <TouristCard
                     key={t.id}
                     tourist={t}
-                    variant={layoutVariant}
                     onUpdated={onReload}
                     onDelete={async () => {
                       try { await deleteTourist(t.id); onTouristDeleted(t.id); }
@@ -316,13 +314,6 @@ function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, on
 
 // ── GroupsTab ─────────────────────────────────────────────────────────────────
 
-const LAYOUT_VARIANTS = [
-  { value: 'A', label: 'A · плоско' },
-  { value: 'B', label: 'B · сворачиваемые документы' },
-  { value: 'C', label: 'C · две колонки' },
-];
-const LAYOUT_STORAGE_KEY = 'tourist_card_layout';
-
 function GroupsTab({ groupId }) {
   const [subgroups, setSubgroups] = useState([]);
   const [tourists, setTourists] = useState([]);
@@ -331,14 +322,6 @@ function GroupsTab({ groupId }) {
   const [showNewForm, setShowNewForm] = useState(false);
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
-  const [layoutVariant, setLayoutVariant] = useState(() => {
-    const saved = typeof window !== 'undefined' && window.localStorage?.getItem(LAYOUT_STORAGE_KEY);
-    return saved && ['A', 'B', 'C'].includes(saved) ? saved : 'B';
-  });
-  const changeLayout = (v) => {
-    setLayoutVariant(v);
-    try { window.localStorage?.setItem(LAYOUT_STORAGE_KEY, v); } catch { /* ignore */ }
-  };
 
   const load = useCallback(async () => {
     try {
@@ -390,38 +373,7 @@ function GroupsTab({ groupId }) {
     <div>
       {error && <div className="error-message" style={{ marginBottom: 14 }}>{error}</div>}
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{
-            fontSize: 10, color: 'var(--white-dim)',
-            textTransform: 'uppercase', letterSpacing: '0.05em',
-          }}>
-            Макет
-          </span>
-          <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
-            {LAYOUT_VARIANTS.map((v) => {
-              const active = layoutVariant === v.value;
-              return (
-                <button
-                  key={v.value}
-                  type="button"
-                  onClick={() => changeLayout(v.value)}
-                  style={{
-                    background: active ? 'var(--accent-dim)' : 'transparent',
-                    color: active ? 'var(--accent)' : 'var(--white-dim)',
-                    border: 'none',
-                    padding: '4px 10px',
-                    fontSize: 11,
-                    cursor: 'pointer',
-                    borderLeft: v.value !== 'A' ? '1px solid var(--border)' : 'none',
-                  }}
-                >
-                  {v.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 16, gap: 12 }}>
         <button className="btn btn-primary btn-sm" onClick={() => setShowNewForm(true)}>
           + Добавить группу
         </button>
@@ -467,7 +419,6 @@ function GroupsTab({ groupId }) {
               onTouristDeleted={handleTouristDeleted}
               onRenamed={handleRenamed}
               onDeleted={handleDeleted}
-              layoutVariant={layoutVariant}
             />
           ))}
 
@@ -482,7 +433,6 @@ function GroupsTab({ groupId }) {
                   <TouristCard
                     key={t.id}
                     tourist={t}
-                    variant={layoutVariant}
                     subgroups={subgroups}
                     onUpdated={load}
                     onAssign={async (touristId, sgId) => {
@@ -1353,10 +1303,7 @@ export default function GroupDetailPage() {
       {activeTab === 'status' && <StatusSection group={group} onGroupUpdated={setGroup} />}
       {activeTab === 'groups' && <GroupsTab groupId={id} />}
       {activeTab === 'documents' && (
-        <>
-          <DocumentsTab groupId={id} group={group} onGroupUpdated={setGroup} />
-          <AILogsSection groupId={id} />
-        </>
+        <DocumentsTab groupId={id} group={group} onGroupUpdated={setGroup} />
       )}
       {activeTab === 'settings' && (
         <SettingsTab

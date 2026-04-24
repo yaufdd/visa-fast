@@ -368,7 +368,7 @@ function FlightLine({ label, value }) {
   );
 }
 
-function FlightBlock({ tourist, onUpdated, layout = 'rows' }) {
+function FlightBlock({ tourist, onUpdated }) {
   const [open, setOpen] = useState(false);
   const flight = useMemo(() => safeParse(tourist.flight_data) || {}, [tourist]);
   const arrivalStr = formatLeg(flight.arrival);
@@ -396,38 +396,12 @@ function FlightBlock({ tourist, onUpdated, layout = 'rows' }) {
     />
   );
 
-  if (layout === 'summary') {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, lineHeight: 1.4 }}>
-        <span
-          style={{
-            width: 60,
-            flexShrink: 0,
-            color: 'var(--white-dim)',
-            textTransform: 'uppercase',
-            fontSize: 10,
-            letterSpacing: '0.05em',
-          }}
-        >
-          Рейсы
-        </span>
-        <span style={{ flex: 1, color: has ? 'var(--white)' : 'var(--white-dim)', fontFamily: 'var(--font-mono)' }}>
-          {has ? `${arrivalStr || '—'}${departureStr ? `   →   ${departureStr}` : ''}` : 'не заданы'}
-        </span>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpen(true)}>
-          {has ? 'Изменить' : 'Добавить'}
-        </button>
-        {form}
-      </div>
-    );
-  }
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       {has ? (
         <>
           {arrivalStr && <FlightLine label="Прилёт" value={arrivalStr} />}
-          {departureStr && <FlightLine label="Обратно" value={departureStr} />}
+          {departureStr && <FlightLine label="Вылет" value={departureStr} />}
           {!arrivalStr && !departureStr && (
             <div style={{ fontSize: 12, color: 'var(--white-dim)' }}>Данные заполнены частично</div>
           )}
@@ -498,46 +472,14 @@ function CardHeader({ tourist, onDelete, subgroups, onAssign }) {
   );
 }
 
-// ── Variant A: flat (everything visible) ─────────────────────────────────────
+// ── Card body: flights + collapsible documents ───────────────────────────────
 
-function VariantA({ tourist, onUpdated, hook }) {
-  return (
-    <>
-      <FlightBlock tourist={tourist} onUpdated={onUpdated} layout="rows" />
-      <FilesGroup
-        title="Билеты"
-        items={hook.tickets}
-        onUploadClick={() => hook.ticketRef.current?.click()}
-        uploading={hook.uploadingType === 'ticket'}
-        uploadProgress={hook.uploadProgress}
-        busy={hook.busy}
-        hook={hook}
-      />
-      <FilesGroup
-        title="Ваучеры"
-        items={hook.vouchers}
-        onUploadClick={() => hook.voucherRef.current?.click()}
-        uploading={hook.uploadingType === 'voucher'}
-        uploadProgress={hook.uploadProgress}
-        busy={hook.busy}
-        hook={hook}
-      />
-      {hook.error && <div style={{ fontSize: 11, color: 'var(--danger)', whiteSpace: 'pre-wrap' }}>{hook.error}</div>}
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <ParseAllButton hook={hook} count={hook.unparsedCount} />
-      </div>
-    </>
-  );
-}
-
-// ── Variant B: collapsible documents ─────────────────────────────────────────
-
-function VariantB({ tourist, onUpdated, hook }) {
+function CardBody({ tourist, onUpdated, hook }) {
   const [open, setOpen] = useState(hook.unparsedCount > 0);
   const totalDocs = hook.uploads.length;
   return (
     <>
-      <FlightBlock tourist={tourist} onUpdated={onUpdated} layout="summary" />
+      <FlightBlock tourist={tourist} onUpdated={onUpdated} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <button
           type="button"
@@ -633,62 +575,12 @@ function VariantB({ tourist, onUpdated, hook }) {
   );
 }
 
-// ── Variant C: two columns ───────────────────────────────────────────────────
-
-function VariantC({ tourist, onUpdated, hook }) {
-  return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'minmax(220px, 1fr) minmax(280px, 1.4fr)',
-        gap: 18,
-      }}
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div style={{
-          fontSize: 10, color: 'var(--white-dim)', textTransform: 'uppercase', letterSpacing: '0.05em',
-          paddingBottom: 4, borderBottom: '1px solid var(--border)',
-        }}>
-          Рейсы
-        </div>
-        <FlightBlock tourist={tourist} onUpdated={onUpdated} layout="rows" />
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <FilesGroup
-          title="Билеты"
-          items={hook.tickets}
-          onUploadClick={() => hook.ticketRef.current?.click()}
-          uploading={hook.uploadingType === 'ticket'}
-          uploadProgress={hook.uploadProgress}
-          busy={hook.busy}
-          hook={hook}
-        />
-        <FilesGroup
-          title="Ваучеры"
-          items={hook.vouchers}
-          onUploadClick={() => hook.voucherRef.current?.click()}
-          uploading={hook.uploadingType === 'voucher'}
-          uploadProgress={hook.uploadProgress}
-          busy={hook.busy}
-          hook={hook}
-        />
-        {hook.error && <div style={{ fontSize: 11, color: 'var(--danger)', whiteSpace: 'pre-wrap' }}>{hook.error}</div>}
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <ParseAllButton hook={hook} count={hook.unparsedCount} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Public API ───────────────────────────────────────────────────────────────
 
 export default function TouristCard({
-  tourist, onDelete, subgroups, onAssign, onUpdated, variant = 'B',
+  tourist, onDelete, subgroups, onAssign, onUpdated,
 }) {
   const hook = useTouristUploads(tourist.id, onUpdated);
-
-  const Body = variant === 'A' ? VariantA : variant === 'C' ? VariantC : VariantB;
 
   return (
     <div
@@ -703,9 +595,9 @@ export default function TouristCard({
       }}
     >
       <CardHeader tourist={tourist} onDelete={onDelete} subgroups={subgroups} onAssign={onAssign} />
-      <Body tourist={tourist} onUpdated={onUpdated} hook={hook} />
+      <CardBody tourist={tourist} onUpdated={onUpdated} hook={hook} />
 
-      {/* Hidden file inputs — shared across variants */}
+      {/* Hidden file inputs */}
       <input
         ref={hook.ticketRef}
         type="file"
