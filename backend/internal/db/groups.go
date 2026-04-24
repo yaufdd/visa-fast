@@ -10,18 +10,19 @@ import (
 )
 
 type Group struct {
-	ID        string    `json:"id"`
-	OrgID     string    `json:"-"`
-	Name      string    `json:"name"`
-	Status    string    `json:"status"`
-	Notes     *string   `json:"notes"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	OrgID          string    `json:"-"`
+	Name           string    `json:"name"`
+	Status         string    `json:"status"`
+	Notes          *string   `json:"notes"`
+	ProgrammeNotes *string   `json:"programme_notes"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func ListGroups(ctx context.Context, pool *pgxpool.Pool, orgID string) ([]Group, error) {
 	rows, err := pool.Query(ctx,
-		`SELECT id, org_id, name, status, notes, created_at, updated_at
+		`SELECT id, org_id, name, status, notes, programme_notes, created_at, updated_at
 		   FROM groups WHERE org_id = $1
 		   ORDER BY created_at DESC`, orgID)
 	if err != nil {
@@ -31,7 +32,7 @@ func ListGroups(ctx context.Context, pool *pgxpool.Pool, orgID string) ([]Group,
 	out := []Group{}
 	for rows.Next() {
 		var g Group
-		if err := rows.Scan(&g.ID, &g.OrgID, &g.Name, &g.Status, &g.Notes, &g.CreatedAt, &g.UpdatedAt); err != nil {
+		if err := rows.Scan(&g.ID, &g.OrgID, &g.Name, &g.Status, &g.Notes, &g.ProgrammeNotes, &g.CreatedAt, &g.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, g)
@@ -42,9 +43,9 @@ func ListGroups(ctx context.Context, pool *pgxpool.Pool, orgID string) ([]Group,
 func GetGroup(ctx context.Context, pool *pgxpool.Pool, orgID, id string) (*Group, error) {
 	var g Group
 	err := pool.QueryRow(ctx,
-		`SELECT id, org_id, name, status, notes, created_at, updated_at
+		`SELECT id, org_id, name, status, notes, programme_notes, created_at, updated_at
 		   FROM groups WHERE id = $1 AND org_id = $2`, id, orgID,
-	).Scan(&g.ID, &g.OrgID, &g.Name, &g.Status, &g.Notes, &g.CreatedAt, &g.UpdatedAt)
+	).Scan(&g.ID, &g.OrgID, &g.Name, &g.Status, &g.Notes, &g.ProgrammeNotes, &g.CreatedAt, &g.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -68,6 +69,14 @@ func DeleteGroup(ctx context.Context, pool *pgxpool.Pool, orgID, id string) (boo
 	return tag.RowsAffected() > 0, err
 }
 
+// UpdateGroupName renames a group within the calling org.
+func UpdateGroupName(ctx context.Context, pool *pgxpool.Pool, orgID, id, name string) (bool, error) {
+	tag, err := pool.Exec(ctx,
+		`UPDATE groups SET name = $1, updated_at = NOW()
+		  WHERE id = $2 AND org_id = $3`, name, id, orgID)
+	return tag.RowsAffected() > 0, err
+}
+
 func UpdateGroupStatus(ctx context.Context, pool *pgxpool.Pool, orgID, id, status string) (bool, error) {
 	tag, err := pool.Exec(ctx,
 		`UPDATE groups SET status = $1, updated_at = NOW()
@@ -78,6 +87,16 @@ func UpdateGroupStatus(ctx context.Context, pool *pgxpool.Pool, orgID, id, statu
 func UpdateGroupNotes(ctx context.Context, pool *pgxpool.Pool, orgID, id string, notes *string) (bool, error) {
 	tag, err := pool.Exec(ctx,
 		`UPDATE groups SET notes = $1, updated_at = NOW()
+		  WHERE id = $2 AND org_id = $3`, notes, id, orgID)
+	return tag.RowsAffected() > 0, err
+}
+
+// UpdateGroupProgrammeNotes stores the manager's free-text hints that the
+// programme-generation AI should honour (e.g. "add a tea ceremony on day 3",
+// "no sightseeing on transfer days"). Empty string is stored as SQL NULL.
+func UpdateGroupProgrammeNotes(ctx context.Context, pool *pgxpool.Pool, orgID, id string, notes *string) (bool, error) {
+	tag, err := pool.Exec(ctx,
+		`UPDATE groups SET programme_notes = $1, updated_at = NOW()
 		  WHERE id = $2 AND org_id = $3`, notes, id, orgID)
 	return tag.RowsAffected() > 0, err
 }

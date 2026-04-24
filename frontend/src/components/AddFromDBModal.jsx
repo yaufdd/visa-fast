@@ -1,6 +1,18 @@
 import { useEffect, useState, useCallback } from 'react';
 import { listSubmissions, attachSubmission } from '../api/client';
 
+// Group statuses where the previous visa case is considered finalized —
+// the submission can then appear in the pool again as a fresh attach
+// candidate (e.g. the same tourist starting another trip).
+const POOL_ELIGIBLE_FINALIZED_STATUSES = new Set(['submitted', 'visa_issued']);
+
+const GROUP_STATUS_RU = {
+  draft: 'черновик',
+  docs_ready: 'документы готовы',
+  submitted: 'подано',
+  visa_issued: 'виза выдана',
+};
+
 function safeParsePayload(raw) {
   if (!raw) return {};
   if (typeof raw === 'object') return raw;
@@ -17,24 +29,39 @@ export default function AddFromDBModal({ groupId, subgroupId, onClose, onAdded }
   const load = useCallback((query) => {
     setLoading(true);
     setError(null);
-    listSubmissions(query, 'pending')
-      .then((data) => setRows(Array.isArray(data) ? data : []))
+    // Fetch pending + attached in one call; we filter client-side based on
+    // the latest attachment's group status so the manager only sees
+    // submissions that are actually available for a new attach.
+    listSubmissions(query, 'pending,attached')
+      .then((data) => {
+        const list = Array.isArray(data) ? data : [];
+        setRows(list.filter((r) => {
+          if (r.status === 'pending') return true;
+          // Attached: show only when the latest group is finalized. Also
+          // exclude the current group — re-attaching there is a no-op.
+          if (r.status === 'attached') {
+            if (r.current_group_id === groupId) return false;
+            return POOL_ELIGIBLE_FINALIZED_STATUSES.has(r.current_group_status || '');
+          }
+          return false;
+        }));
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [groupId]);
 
   useEffect(() => {
     const handle = setTimeout(() => load(q), 250);
     return () => clearTimeout(handle);
   }, [q, load]);
 
-  const attach = async (id) => {
-    setBusyId(id);
+  const attach = async (row) => {
+    setBusyId(row.id);
     setError(null);
     try {
-      await attachSubmission(id, groupId, subgroupId);
+      await attachSubmission(row.id, groupId, subgroupId);
       // Remove locally so the list updates without a refetch.
-      setRows((prev) => prev.filter((r) => r.id !== id));
+      setRows((prev) => prev.filter((r) => r.id !== row.id));
       onAdded();
     } catch (e) {
       setError(e.message);
@@ -69,6 +96,8 @@ export default function AddFromDBModal({ groupId, subgroupId, onClose, onAdded }
             const name = p.name_lat || p.name_cyr || '—';
             const passport = p.passport_number || '';
             const isBusy = busyId === r.id;
+            const previousTrip = r.status === 'attached';
+
             return (
               <li key={r.id}>
                 <div style={{ minWidth: 0, flex: 1 }}>
@@ -76,18 +105,28 @@ export default function AddFromDBModal({ groupId, subgroupId, onClose, onAdded }
                   {passport && (
                     <div className="submission-list-sub">паспорт {passport}</div>
                   )}
+                  {previousTrip && (
+                    <div
+                      className="submission-list-sub"
+                      style={{ marginTop: 3, color: 'var(--white-dim)' }}
+                    >
+                      предыдущая поездка:
+                      {' '}«{r.current_group_name || '—'}»
+                      {r.current_group_status && (
+                        <> · {GROUP_STATUS_RU[r.current_group_status] || r.current_group_status}</>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"
                   className="btn btn-primary btn-sm"
-                  onClick={() => attach(r.id)}
+                  onClick={() => attach(r)}
                   disabled={isBusy}
                 >
-                  {isBusy ? (
-                    <><span className="spinner" /> Добавляем...</>
-                  ) : (
-                    'Добавить'
-                  )}
+                  {isBusy
+                    ? <><span className="spinner" /> Добавляем...</>
+                    : 'Добавить'}
                 </button>
               </li>
             );

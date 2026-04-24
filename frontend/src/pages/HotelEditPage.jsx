@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { getHotel, updateHotel } from '../api/client';
+import { CANONICAL_CITIES, normalizeCity } from '../constants/cities';
 
 const EMPTY_FORM = {
   name_en: '',
-  name_ru: '',
   city: '',
   address: '',
   phone: '',
@@ -26,8 +26,9 @@ export default function HotelEditPage() {
         const h = await getHotel(id);
         setForm({
           name_en: h.name_en || '',
-          name_ru: h.name_ru || '',
-          city: h.city || '',
+          // Legacy rows may still carry English cities — normalize on load
+          // so the UI always shows canonical Russian and saves it back.
+          city: normalizeCity(h.city || ''),
           address: h.address || '',
           phone: h.phone || '',
         });
@@ -49,7 +50,7 @@ export default function HotelEditPage() {
     setSaving(true);
     setSaveError(null);
     try {
-      await updateHotel(id, form);
+      await updateHotel(id, { ...form, city: normalizeCity(form.city) });
       navigate('/hotels');
     } catch (err) {
       setSaveError(err.message);
@@ -90,40 +91,34 @@ export default function HotelEditPage() {
 
       {saveError && <div className="error-message">{saveError}</div>}
 
+      <datalist id="city-suggestions">
+        {CANONICAL_CITIES.map(c => <option key={c} value={c} />)}
+      </datalist>
+
       <div className="card">
         <form onSubmit={handleSubmit}>
-          <div className="grid-2">
-            <div className="form-group">
-              <label className="form-label">Название (English) *</label>
-              <input
-                className="form-input"
-                type="text"
-                placeholder="Hotel name in English"
-                value={form.name_en}
-                onChange={e => handleChange('name_en', e.target.value)}
-              />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Название (Русский)</label>
-              <input
-                className="form-input"
-                type="text"
-                placeholder="Название на русском"
-                value={form.name_ru}
-                onChange={e => handleChange('name_ru', e.target.value)}
-              />
-            </div>
+          <div className="form-group">
+            <label className="form-label">Название (English) *</label>
+            <input
+              className="form-input"
+              type="text"
+              placeholder="Hotel name in English"
+              value={form.name_en}
+              onChange={e => handleChange('name_en', e.target.value)}
+            />
           </div>
 
           <div className="grid-3">
             <div className="form-group">
-              <label className="form-label">Город</label>
+              <label className="form-label">Город (по-русски)</label>
               <input
                 className="form-input"
                 type="text"
-                placeholder="Tokyo"
+                placeholder="Токио"
+                list="city-suggestions"
                 value={form.city}
                 onChange={e => handleChange('city', e.target.value)}
+                onBlur={e => handleChange('city', normalizeCity(e.target.value))}
               />
             </div>
             <div className="form-group">

@@ -3,6 +3,13 @@ import { getConsentText } from '../api/client';
 import { ruToLatICAO } from '../utils/translit';
 import { dmyToIso, isoToDmy } from '../utils/dates';
 import { normalizePhone, phoneOnInput } from '../utils/phone';
+import BoxedCharInput from './BoxedCharInput';
+
+// Allowed characters in "кем выдан" — Cyrillic/Latin letters, digits, spaces
+// and common passport-code punctuation (dash, slash, dot, comma, №). No
+// length limit.
+const ISSUED_BY_SANITIZE = (s) =>
+  s.replace(/[^a-zA-Zа-яА-ЯёЁ0-9 №.,/\-]/g, '');
 
 // Flat submission form. Field names MUST match the backend "payload"
 // contract (see backend/internal/api/submissions.go and
@@ -175,6 +182,25 @@ export default function SubmissionForm({
           autoComplete="off"
         />
         {extra.hint && !err && <span className="sf-hint">{extra.hint}</span>}
+        {err && <span className="sf-error">{err}</span>}
+      </label>
+    );
+  };
+
+  // Same visual language as the flight number input — character boxes,
+  // unlimited length. Used for "кем выдан" fields which often carry
+  // mixed digits/Cyrillic punctuation.
+  const boxedField = (name, label) => {
+    const err = errors[name];
+    return (
+      <label className={`sf-field${err ? ' has-error' : ''}`} data-field={name}>
+        <span className="sf-label">{label}</span>
+        <BoxedCharInput
+          value={payload[name] ?? ''}
+          onChange={(v) => setField(name, v)}
+          sanitize={ISSUED_BY_SANITIZE}
+          ariaLabel={label}
+        />
         {err && <span className="sf-error">{err}</span>}
       </label>
     );
@@ -446,13 +472,13 @@ export default function SubmissionForm({
       ])}
       {dateField('issue_date', 'Дата выдачи')}
       {dateField('expiry_date', 'Дата окончания')}
-      {textField('issued_by_ru', 'Кем выдан')}
+      {boxedField('issued_by_ru', 'Кем выдан')}
 
       <h2 className="sf-heading">Внутренний паспорт РФ</h2>
 
       {internalPassportField()}
       {dateField('internal_issued_ru', 'Дата выдачи')}
-      {textField('internal_issued_by_ru', 'Кем выдан')}
+      {boxedField('internal_issued_by_ru', 'Кем выдан')}
       {textareaField('reg_address_ru', 'Адрес регистрации')}
 
       <h2 className="sf-heading">Контакты</h2>
@@ -462,7 +488,17 @@ export default function SubmissionForm({
 
       <h2 className="sf-heading">Работа</h2>
 
-      {textField('occupation_ru', 'Должность')}
+      <label className="sf-checkbox-row">
+        <input
+          type="checkbox"
+          checked={(payload.occupation_ru || '').trim().toLowerCase() === 'ип'}
+          onChange={(e) => setField('occupation_ru', e.target.checked ? 'ИП' : '')}
+        />
+        <span>Индивидуальный предприниматель (ИП)</span>
+      </label>
+
+      {(payload.occupation_ru || '').trim().toLowerCase() !== 'ип'
+        && textField('occupation_ru', 'Должность')}
       {textField('employer_ru', 'Название организации')}
       {textareaField('employer_address_ru', 'Адрес организации')}
       {phoneField('employer_phone', 'Телефон организации')}
@@ -651,6 +687,23 @@ export default function SubmissionForm({
         .sf-consent-check input[type="checkbox"] {
           margin-top: 3px;
           accent-color: var(--accent);
+        }
+
+        .sf-checkbox-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          font-size: 13px;
+          color: var(--white);
+          cursor: pointer;
+          user-select: none;
+          padding: 6px 0;
+        }
+
+        .sf-checkbox-row input[type="checkbox"] {
+          accent-color: var(--accent);
+          width: 16px;
+          height: 16px;
         }
 
         .sf-api-error {

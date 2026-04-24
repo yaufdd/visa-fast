@@ -5,6 +5,7 @@ const navItems = [
   { to: '/', label: 'Подачи', icon: '◫', end: true },
   { to: '/submissions', label: 'Анкеты', icon: '⌬', end: false },
   { to: '/hotels', label: 'Отели', icon: '⊞', end: true },
+  { to: '/templates', label: 'Шаблоны', icon: '❡', end: true },
 ];
 
 export default function Sidebar({ open, onClose }) {
@@ -20,7 +21,6 @@ export default function Sidebar({ open, onClose }) {
       </div>
 
       <nav className="sidebar-nav">
-        <div className="sidebar-nav-label">Navigation</div>
         {navItems.map(item => (
           <NavLink
             key={item.to}
@@ -50,7 +50,6 @@ export default function Sidebar({ open, onClose }) {
               {theme === 'dark' ? '☀' : '☾'}
             </span>
           </button>
-          <div className="sidebar-footer-text">v1.0.0</div>
         </div>
       </div>
 

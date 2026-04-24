@@ -30,23 +30,23 @@ var allowedTouristFileTypes = map[string]bool{
 }
 
 // UploadTouristFile handles POST /api/tourists/:id/uploads.
-// It saves the file to disk, caches it on the Anthropic Files API and then
-// SYNCHRONOUSLY invokes the matching parser (ticket or voucher) so that the
-// tourist's flight data / group hotels are populated immediately.
+// Two-step flow: this handler ONLY saves the file (and pre-uploads the
+// redacted copy to Anthropic Files so a later /parse call is cheap). It does
+// NOT invoke the AI parser — the manager triggers that explicitly via the
+// "Распознать" button (ParseTouristUpload).
 //
-// If the parser fails we still return 200 with a "parse_error" field — the
-// raw scan is already saved and the operator can retry later.
+// Redaction still happens here (fail-loud) so the original never leaves the
+// server. Only the redacted bytes are ever uploaded to Anthropic.
 func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := middleware.OrgID(r.Context())
 		touristID := chi.URLParam(r, "id")
 
 		var groupID string
-		var subgroupID *string
 		if err := pool.QueryRow(r.Context(),
-			`SELECT group_id, subgroup_id FROM tourists WHERE id = $1 AND org_id = $2`,
+			`SELECT group_id FROM tourists WHERE id = $1 AND org_id = $2`,
 			touristID, orgID,
-		).Scan(&groupID, &subgroupID); err != nil {
+		).Scan(&groupID); err != nil {
 			writeError(w, http.StatusNotFound, "tourist not found")
 			return
 		}
@@ -97,17 +97,19 @@ func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript stri
 			}
 			slog.Warn("scan redact failed", "tourist_id", touristID, "err", redactErr)
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-				"id":         "",
-				"tourist_id": touristID,
-				"file_path":  savedPath,
+				"id":           "",
+				"tourist_id":   touristID,
+				"file_path":    savedPath,
 				"redact_error": msg,
+				"error":        msg,
 			})
 			return
 		}
 		uploadBytes := redacted.RedactedBytes
 		uploadName := privacy.OutputFilename(header.Filename, redacted.OutputPath)
 
-		// Upload the REDACTED copy to Anthropic (non-fatal — inline fallback).
+		// Upload the REDACTED copy to Anthropic (non-fatal — inline fallback
+		// at parse time).
 		var anthropicFileID string
 		if fid, err := ai.UploadFileToAnthropic(apiKey, uploadName, uploadBytes); err != nil {
 			slog.Warn("anthropic file upload failed, will use inline fallback", "err", err)
@@ -127,50 +129,132 @@ func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript stri
 				slog.Warn("set upload anthropic id", "err", err)
 			}
 		}
-		createdAt := time.Now()
 
-		// Run the matching parser synchronously.
-		resp := map[string]any{
+		writeJSON(w, http.StatusCreated, map[string]any{
 			"id":         uploadID,
 			"tourist_id": touristID,
 			"group_id":   groupID,
 			"file_type":  fileType,
 			"file_path":  savedPath,
 			"filename":   header.Filename,
-			"created_at": createdAt,
+			"created_at": time.Now(),
+			"parsed_at":  nil,
+		})
+	}
+}
+
+// ParseTouristUpload handles POST /api/tourists/:id/uploads/:uploadId/parse.
+// Runs the matching AI parser (ticket or voucher) on a previously uploaded
+// file and stamps parsed_at on success. Idempotent-ish: callers may re-parse,
+// though the UI normally hides the button once parsed_at is set.
+func ParseTouristUpload(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
+		touristID := chi.URLParam(r, "id")
+		uploadID := chi.URLParam(r, "uploadId")
+
+		up, err := db.GetTouristUpload(r.Context(), pool, orgID, touristID, uploadID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "upload not found")
+				return
+			}
+			slog.Error("get tourist upload", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
 		}
 
-		fileInput := ai.FileInput{
-			AnthropicFileID: anthropicFileID,
-			// Redacted name + redacted bytes — originals never reach AI.
-			Name: uploadName,
-			Data: uploadBytes,
+		// Fetch subgroup id from tourist (voucher parser needs it).
+		var subgroupID *string
+		if err := pool.QueryRow(r.Context(),
+			`SELECT subgroup_id FROM tourists WHERE id = $1 AND org_id = $2`,
+			touristID, orgID,
+		).Scan(&subgroupID); err != nil {
+			writeError(w, http.StatusNotFound, "tourist not found")
+			return
 		}
 
-		// Each scan upload is its own auditable generation — a new UUID per
-		// parse run so a manager can trace exactly what went to Claude for
-		// this file.
+		// Build the FileInput. Prefer the cached Anthropic file ID; if it
+		// wasn't uploaded (Anthropic was down at upload time), re-read the
+		// original from disk and re-redact on the fly for an inline fallback.
+		fileInput := ai.FileInput{}
+		if up.AnthropicFileID != nil && *up.AnthropicFileID != "" {
+			fileInput.AnthropicFileID = *up.AnthropicFileID
+			fileInput.Name = filenameFromPath(up.FilePath)
+		} else {
+			origBytes, err := os.ReadFile(up.FilePath)
+			if err != nil {
+				slog.Error("read upload for parse", "err", err)
+				writeError(w, http.StatusInternalServerError, "failed to read upload file")
+				return
+			}
+			redacted, redactErr := privacy.RedactScan(r.Context(), redactScript, filenameFromPath(up.FilePath), origBytes)
+			if redactErr != nil {
+				msg := redactErr.Error()
+				if errors.Is(redactErr, privacy.ErrNoLabelsFound) {
+					msg = "не удалось определить область имени на скане — загрузите более чёткое изображение или заполните поля вручную"
+				}
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+					"id":           up.ID,
+					"redact_error": msg,
+					"error":        msg,
+				})
+				return
+			}
+			fileInput.Name = privacy.OutputFilename(filenameFromPath(up.FilePath), redacted.OutputPath)
+			fileInput.Data = redacted.RedactedBytes
+		}
+
 		sgID := ""
 		if subgroupID != nil {
 			sgID = *subgroupID
 		}
-		aiCtx := withAuditCtx(r.Context(), pool, orgID, groupID, sgID)
+		aiCtx := withAuditCtx(r.Context(), pool, orgID, up.GroupID, sgID)
 
-		switch fileType {
+		resp := map[string]any{
+			"id":         up.ID,
+			"tourist_id": touristID,
+			"group_id":   up.GroupID,
+			"file_type":  up.FileType,
+		}
+
+		switch up.FileType {
 		case "ticket":
 			if parseErr := parseTicketAndPersist(aiCtx, pool, apiKey, orgID, touristID, fileInput); parseErr != nil {
 				slog.Warn("ticket parse failed", "tourist_id", touristID, "err", parseErr)
 				resp["parse_error"] = parseErr.Error()
+				writeJSON(w, http.StatusOK, resp)
+				return
 			}
 		case "voucher":
-			if parseErr := parseVoucherAndPersist(aiCtx, pool, apiKey, orgID, groupID, subgroupID, fileInput); parseErr != nil {
+			if parseErr := parseVoucherAndPersist(aiCtx, pool, apiKey, orgID, up.GroupID, subgroupID, fileInput); parseErr != nil {
 				slog.Warn("voucher parse failed", "tourist_id", touristID, "err", parseErr)
 				resp["parse_error"] = parseErr.Error()
+				writeJSON(w, http.StatusOK, resp)
+				return
 			}
+		default:
+			writeError(w, http.StatusBadRequest, "unknown file_type on upload")
+			return
 		}
 
-		writeJSON(w, http.StatusCreated, resp)
+		if err := db.MarkUploadParsed(r.Context(), pool, orgID, up.ID); err != nil {
+			slog.Warn("mark upload parsed", "err", err)
+		}
+		now := time.Now()
+		resp["parsed_at"] = now
+		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+// filenameFromPath pulls the last path segment (works for both / and \\).
+func filenameFromPath(p string) string {
+	for i := len(p) - 1; i >= 0; i-- {
+		if p[i] == '/' || p[i] == '\\' {
+			return p[i+1:]
+		}
+	}
+	return p
 }
 
 // parseTicketAndPersist calls the ticket parser and writes the result into

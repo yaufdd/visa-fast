@@ -40,7 +40,6 @@ func CreateHotel(pool *pgxpool.Pool) http.HandlerFunc {
 		orgID := middleware.OrgID(r.Context())
 		var body struct {
 			NameEn  string `json:"name_en"`
-			NameRu  string `json:"name_ru"`
 			City    string `json:"city"`
 			Address string `json:"address"`
 			Phone   string `json:"phone"`
@@ -56,7 +55,6 @@ func CreateHotel(pool *pgxpool.Pool) http.HandlerFunc {
 
 		id, err := db.CreateHotel(r.Context(), pool, orgID, db.Hotel{
 			NameEn:  body.NameEn,
-			NameRu:  strPtr(body.NameRu),
 			City:    strPtr(body.City),
 			Address: strPtr(body.Address),
 			Phone:   strPtr(body.Phone),
@@ -104,7 +102,6 @@ func UpdateHotel(pool *pgxpool.Pool) http.HandlerFunc {
 		id := chi.URLParam(r, "id")
 		var body struct {
 			NameEn  string `json:"name_en"`
-			NameRu  string `json:"name_ru"`
 			City    string `json:"city"`
 			Address string `json:"address"`
 			Phone   string `json:"phone"`
@@ -120,7 +117,6 @@ func UpdateHotel(pool *pgxpool.Pool) http.HandlerFunc {
 
 		ok, err := db.UpdateHotel(r.Context(), pool, orgID, id, db.Hotel{
 			NameEn:  body.NameEn,
-			NameRu:  strPtr(body.NameRu),
 			City:    strPtr(body.City),
 			Address: strPtr(body.Address),
 			Phone:   strPtr(body.Phone),
@@ -159,7 +155,7 @@ func ListGroupHotels(pool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		rows, err := pool.Query(r.Context(),
-			`SELECT gh.id, gh.hotel_id, h.name_en, COALESCE(h.name_ru,''), COALESCE(h.city,''),
+			`SELECT gh.id, gh.hotel_id, h.name_en, COALESCE(h.city,''),
 			        COALESCE(h.address,''), COALESCE(h.phone,''),
 			        gh.check_in, gh.check_out, COALESCE(gh.room_type,''), gh.sort_order
 			   FROM group_hotels gh
@@ -176,23 +172,22 @@ func ListGroupHotels(pool *pgxpool.Pool) http.HandlerFunc {
 		defer rows.Close()
 
 		type groupHotelRow struct {
-			ID          string `json:"id"`
-			HotelID     string `json:"hotel_id"`
-			HotelName   string `json:"hotel_name"`
-			HotelNameRu string `json:"hotel_name_ru"`
-			City        string `json:"city"`
-			Address     string `json:"address"`
-			Phone       string `json:"phone"`
-			CheckIn     string `json:"check_in"`
-			CheckOut    string `json:"check_out"`
-			RoomType    string `json:"room_type"`
-			SortOrder   int    `json:"sort_order"`
+			ID        string `json:"id"`
+			HotelID   string `json:"hotel_id"`
+			HotelName string `json:"hotel_name"`
+			City      string `json:"city"`
+			Address   string `json:"address"`
+			Phone     string `json:"phone"`
+			CheckIn   string `json:"check_in"`
+			CheckOut  string `json:"check_out"`
+			RoomType  string `json:"room_type"`
+			SortOrder int    `json:"sort_order"`
 		}
 		var result []groupHotelRow
 		for rows.Next() {
 			var gh groupHotelRow
 			if err := rows.Scan(
-				&gh.ID, &gh.HotelID, &gh.HotelName, &gh.HotelNameRu, &gh.City,
+				&gh.ID, &gh.HotelID, &gh.HotelName, &gh.City,
 				&gh.Address, &gh.Phone, &gh.CheckIn, &gh.CheckOut, &gh.RoomType, &gh.SortOrder,
 			); err != nil {
 				slog.Error("scan group hotel", "err", err)
@@ -225,7 +220,7 @@ func ListSubgroupHotels(pool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		rows, err := pool.Query(r.Context(),
-			`SELECT gh.id, gh.hotel_id, h.name_en, COALESCE(h.name_ru,''), COALESCE(h.city,''),
+			`SELECT gh.id, gh.hotel_id, h.name_en, COALESCE(h.city,''),
 			        COALESCE(h.address,''), COALESCE(h.phone,''),
 			        gh.check_in::text, gh.check_out::text, COALESCE(gh.room_type,''), gh.sort_order
 			   FROM group_hotels gh
@@ -242,23 +237,22 @@ func ListSubgroupHotels(pool *pgxpool.Pool) http.HandlerFunc {
 		defer rows.Close()
 
 		type row struct {
-			ID          string `json:"id"`
-			HotelID     string `json:"hotel_id"`
-			HotelName   string `json:"hotel_name"`
-			HotelNameRu string `json:"hotel_name_ru"`
-			City        string `json:"city"`
-			Address     string `json:"address"`
-			Phone       string `json:"phone"`
-			CheckIn     string `json:"check_in"`
-			CheckOut    string `json:"check_out"`
-			RoomType    string `json:"room_type"`
-			SortOrder   int    `json:"sort_order"`
+			ID        string `json:"id"`
+			HotelID   string `json:"hotel_id"`
+			HotelName string `json:"hotel_name"`
+			City      string `json:"city"`
+			Address   string `json:"address"`
+			Phone     string `json:"phone"`
+			CheckIn   string `json:"check_in"`
+			CheckOut  string `json:"check_out"`
+			RoomType  string `json:"room_type"`
+			SortOrder int    `json:"sort_order"`
 		}
 		var result []row
 		for rows.Next() {
 			var gh row
 			if err := rows.Scan(
-				&gh.ID, &gh.HotelID, &gh.HotelName, &gh.HotelNameRu, &gh.City,
+				&gh.ID, &gh.HotelID, &gh.HotelName, &gh.City,
 				&gh.Address, &gh.Phone, &gh.CheckIn, &gh.CheckOut, &gh.RoomType, &gh.SortOrder,
 			); err != nil {
 				slog.Error("scan subgroup hotel", "err", err)

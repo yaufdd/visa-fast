@@ -11,3 +11,7 @@ frontend/dist/
 *.zip
 *.pdf
 !templates/anketa_template.pdf
+.DS_Store
+.playwright-mcp/
+.serena/
+docgen/_scratch_*

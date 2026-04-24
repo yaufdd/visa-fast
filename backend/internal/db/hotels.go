@@ -12,7 +12,6 @@ import (
 type Hotel struct {
 	ID        string    `json:"id"`
 	NameEn    string    `json:"name_en"`
-	NameRu    *string   `json:"name_ru"`
 	City      *string   `json:"city"`
 	Address   *string   `json:"address"`
 	Phone     *string   `json:"phone"`
@@ -25,7 +24,7 @@ type Hotel struct {
 // org's private hotels. Private ones come first.
 func ListHotels(ctx context.Context, pool *pgxpool.Pool, orgID string) ([]Hotel, error) {
 	rows, err := pool.Query(ctx,
-		`SELECT id, name_en, name_ru, city, address, phone,
+		`SELECT id, name_en, city, address, phone,
 		        (org_id IS NULL) AS is_global,
 		        created_at, updated_at
 		   FROM hotels
@@ -38,7 +37,7 @@ func ListHotels(ctx context.Context, pool *pgxpool.Pool, orgID string) ([]Hotel,
 	out := []Hotel{}
 	for rows.Next() {
 		var h Hotel
-		if err := rows.Scan(&h.ID, &h.NameEn, &h.NameRu, &h.City, &h.Address, &h.Phone,
+		if err := rows.Scan(&h.ID, &h.NameEn, &h.City, &h.Address, &h.Phone,
 			&h.IsGlobal, &h.CreatedAt, &h.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -51,12 +50,12 @@ func ListHotels(ctx context.Context, pool *pgxpool.Pool, orgID string) ([]Hotel,
 func GetHotel(ctx context.Context, pool *pgxpool.Pool, orgID, id string) (*Hotel, error) {
 	var h Hotel
 	err := pool.QueryRow(ctx,
-		`SELECT id, name_en, name_ru, city, address, phone,
+		`SELECT id, name_en, city, address, phone,
 		        (org_id IS NULL) AS is_global,
 		        created_at, updated_at
 		   FROM hotels
 		  WHERE id = $1 AND (org_id IS NULL OR org_id = $2)`, id, orgID,
-	).Scan(&h.ID, &h.NameEn, &h.NameRu, &h.City, &h.Address, &h.Phone,
+	).Scan(&h.ID, &h.NameEn, &h.City, &h.Address, &h.Phone,
 		&h.IsGlobal, &h.CreatedAt, &h.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -71,9 +70,9 @@ func GetHotel(ctx context.Context, pool *pgxpool.Pool, orgID, id string) (*Hotel
 func CreateHotel(ctx context.Context, pool *pgxpool.Pool, orgID string, h Hotel) (string, error) {
 	var id string
 	err := pool.QueryRow(ctx,
-		`INSERT INTO hotels (org_id, name_en, name_ru, city, address, phone)
-		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		orgID, h.NameEn, h.NameRu, h.City, h.Address, h.Phone,
+		`INSERT INTO hotels (org_id, name_en, city, address, phone)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		orgID, h.NameEn, h.City, h.Address, h.Phone,
 	).Scan(&id)
 	return id, err
 }
@@ -83,9 +82,9 @@ func CreateHotel(ctx context.Context, pool *pgxpool.Pool, orgID string, h Hotel)
 // Returns (false, nil) when not found or is global.
 func UpdateHotel(ctx context.Context, pool *pgxpool.Pool, orgID, id string, h Hotel) (bool, error) {
 	tag, err := pool.Exec(ctx,
-		`UPDATE hotels SET name_en = $1, name_ru = $2, city = $3,
-		                   address = $4, phone = $5, updated_at = NOW()
-		  WHERE id = $6 AND org_id = $7`,
-		h.NameEn, h.NameRu, h.City, h.Address, h.Phone, id, orgID)
+		`UPDATE hotels SET name_en = $1, city = $2,
+		                   address = $3, phone = $4, updated_at = NOW()
+		  WHERE id = $5 AND org_id = $6`,
+		h.NameEn, h.City, h.Address, h.Phone, id, orgID)
 	return tag.RowsAffected() > 0, err
 }

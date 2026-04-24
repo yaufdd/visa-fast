@@ -256,45 +256,7 @@ with the name from the voucher (city left empty). Manager can edit later.
 
 ## Running locally
 
-Local dev runs Postgres in Docker, backend and frontend natively on the host
-— no `docker build` of the backend image, fast iteration.
-
-**Prerequisites (macOS, one-time):**
-
-```bash
-brew install tesseract poppler go node golang-migrate
-
-# Russian/English OCR traineddata for redact_scan.py
-mkdir -p docgen/tessdata
-curl -fL -o docgen/tessdata/rus.traineddata \
-  https://github.com/tesseract-ocr/tessdata_best/raw/main/rus.traineddata
-curl -fL -o docgen/tessdata/eng.traineddata \
-  https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata
-
-# Python deps used by docgen and redact_scan.py
-python3 -m pip install --user python-docx fillpdf \
-  pytesseract==0.3.13 pdf2image==1.17.0 \
-  pillow==11.1.0 opencv-python-headless==4.10.0.84
-
-# Env vars — copy template and set ANTHROPIC_API_KEY
-cp .env.local.example .env.local
-```
-
-**Each dev session:**
-
-```bash
-./scripts/dev.sh                          # starts Postgres + migrations + backend
-cd frontend && npm run dev                # in a second terminal
-```
-
-Backend is at `http://localhost:8080`, Vite dev at `http://localhost:5173`,
-Postgres at `localhost:5435`.
-
-Required env vars: `DATABASE_URL`, `ANTHROPIC_API_KEY`, `APP_SECRET`. Optional:
-`APP_ENV`, `UPLOADS_DIR`, `PORT`, `DOCGEN_SCRIPT`, `REDACT_SCAN_SCRIPT`,
-`DOCGEN_PDF_TEMPLATE`, `TESSDATA_PREFIX`, `AI_LOG_RETENTION_DAYS`.
-
-For a fully containerised production build:
+For a fully containerised build:
 
 ```bash
 docker compose -f docker-compose.prod.yml build

@@ -8,6 +8,7 @@ import GroupsPage from './pages/GroupsPage';
 import GroupDetailPage from './pages/GroupDetailPage';
 import HotelsPage from './pages/HotelsPage';
 import HotelEditPage from './pages/HotelEditPage';
+import TemplatesPage from './pages/TemplatesPage';
 import SubmissionsListPage from './pages/SubmissionsListPage';
 import SubmissionDetailPage from './pages/SubmissionDetailPage';
 import SubmissionFormPage from './pages/SubmissionFormPage';
@@ -70,6 +71,7 @@ function AdminRoutes() {
         <Route path="/groups/:id" element={<GroupDetailPage />} />
         <Route path="/hotels" element={<HotelsPage />} />
         <Route path="/hotels/:id" element={<HotelEditPage />} />
+        <Route path="/templates" element={<TemplatesPage />} />
         <Route path="/submissions" element={<SubmissionsListPage />} />
         <Route path="/submissions/:id" element={<SubmissionDetailPage />} />
       </Routes>

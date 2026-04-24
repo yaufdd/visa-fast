@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import FlightDataForm from './FlightDataForm';
-import { updateFlightData } from '../api/client';
+import { updateFlightData, applyFlightDataToSubgroup } from '../api/client';
 
 function safeParse(raw) {
   if (!raw) return null;
@@ -35,6 +35,20 @@ export default function FlightDataCard({ tourist, onUpdated }) {
     setError(null);
     try {
       await updateFlightData(tourist.id, data);
+      onUpdated?.();
+    } catch (e) {
+      setError(e.message);
+      throw e;
+    }
+  };
+
+  // Save-then-broadcast: apply-to-subgroup reads the stored row, so we must
+  // persist the edited form first, then fan out to the rest of the subgroup.
+  const handleApplyToSubgroup = async (data) => {
+    setError(null);
+    try {
+      await updateFlightData(tourist.id, data);
+      await applyFlightDataToSubgroup(tourist.id);
       onUpdated?.();
     } catch (e) {
       setError(e.message);
@@ -86,6 +100,8 @@ export default function FlightDataCard({ tourist, onUpdated }) {
         initial={flight}
         onClose={() => setOpen(false)}
         onSave={handleSave}
+        canApplyToSubgroup={!!tourist.subgroup_id}
+        onApplyToSubgroup={handleApplyToSubgroup}
       />
     </div>
   );

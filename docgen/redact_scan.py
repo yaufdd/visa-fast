@@ -50,12 +50,33 @@ LABEL_PHRASES = [
     ("passenger", "name"),
     ("guest", "name"),
     ("имя", "пассажира"),
+    ("имя", "гостя"),
     ("фамилия", "и", "имя"),
     ("имя", "и", "фамилия"),
 ]
 
+# Trailing labels — the word appears AFTER the guest name on the same line.
+# Hotel vouchers commonly list passengers as "SURNAME FIRSTNAME   Adult",
+# with NO label before the name. We trigger on these anchors and redact the
+# words that precede them on the same line.
+#
+# To avoid false positives in running prose (e.g. "... the infants will be
+# converted to children ..."), a trailing label only fires when the two
+# immediately preceding non-empty tokens are BOTH all-uppercase alphabetic
+# — which is how passenger names appear on these vouchers.
+TRAILING_LABEL_TOKENS = {
+    "adult", "adults",
+    "child", "children",
+    "infant", "infants",
+    # Russian in case a localized voucher appears
+    "взрослый", "взрослые", "ребёнок", "ребенок", "дети",
+}
+
 # How many words after the label we blacken as "the name value".
 NAME_TOKENS_AFTER_LABEL = 5
+
+# How many words before a trailing label we treat as the name.
+NAME_TOKENS_BEFORE_LABEL = 4
 
 
 def _die(msg: str, code: int = 1) -> None:
@@ -87,6 +108,22 @@ def _ocr_words(img: Image.Image) -> dict:
 
 def _normalize(tok: str) -> str:
     return tok.strip(".,:;/\\|()[]{}\"'<>").lower()
+
+
+def _strip_punct(tok: str) -> str:
+    """Strip punctuation but preserve case — needed for the uppercase check
+    used by trailing-label detection."""
+    return tok.strip(".,:;/\\|()[]{}\"'<>")
+
+
+def _looks_like_name_token(tok: str) -> bool:
+    """A name-ish token on a voucher: all alphabetic (latin or cyrillic),
+    length >= 2, all uppercase. Matches e.g. 'ISAEV', 'ИСАЕВ'."""
+    if len(tok) < 2:
+        return False
+    if not tok.isalpha():
+        return False
+    return tok.isupper()
 
 
 def _find_redaction_regions(data: dict) -> tuple[list[tuple[int, int, int, int]], list[str]]:
@@ -166,8 +203,129 @@ def _find_redaction_regions(data: dict) -> tuple[list[tuple[int, int, int, int]]
                 elif normalized[j]:
                     break
                 j += 1
+            continue
+
+        # Trailing label — word appears AFTER the name on the same line.
+        # Common on hotel vouchers ("ISAEV ANDREY   Adult"). Because OCR
+        # often garbles one of the name tokens (e.g. misreads the surname
+        # as a mix of Cyrillic+Latin+digits), we can't require multiple
+        # clean all-caps tokens. Instead:
+        #   * require at least ONE clean all-caps alphabetic name token
+        #     (length >= 2) on the same line before the label,
+        #   * refuse to fire if any mixed-case alphabetic word (length >= 3)
+        #     appears on the line — that signals prose, not a name field.
+        # If both hold, blacken every token on the line before the label so
+        # that OCR-garbled parts of the name (like "|5АЕмА") are covered too.
+        if tok in TRAILING_LABEL_TOKENS:
+            line = line_nums[i]
+            block = block_nums[i]
+            prev: list[tuple[int, str]] = []  # [(token_index, original_text)]
+            has_name_token = False
+            has_prose_token = False
+            j = i - 1
+            while j >= 0 and len(prev) < NAME_TOKENS_BEFORE_LABEL:
+                if line_nums[j] != line or block_nums[j] != block:
+                    break
+                if not normalized[j]:
+                    j -= 1
+                    continue
+                raw = _strip_punct(words[j])
+                prev.append((j, raw))
+                if _looks_like_name_token(raw):
+                    has_name_token = True
+                elif raw.isalpha() and len(raw) >= 3 and not raw.isupper():
+                    has_prose_token = True
+                j -= 1
+
+            if has_name_token and not has_prose_token:
+                labels_found.append(tok)
+                for idx, _ in prev:
+                    _push(idx)
 
     return regions, labels_found
+
+
+# Common ALL-CAPS words that are NOT person names — used by the per-page
+# "is this page safe without any detected label" sanity check. Anything NOT in
+# this set that appears as 2+ consecutive all-caps alphabetic tokens on one
+# line is treated as a suspected name → fail loud.
+SAFE_CAPS_WORDS = {
+    # Document/section headers
+    "HOTEL", "VOUCHER", "INVOICE", "RECEIPT", "BOOKING", "CONFIRMATION",
+    "RESERVATION", "TICKET", "ORDER",
+    # Common structural / passenger-category words
+    "ADULT", "ADULTS", "CHILD", "CHILDREN", "INFANT", "INFANTS",
+    "GUEST", "GUESTS", "PASSENGER", "PASSENGERS",
+    "NAME", "ROOM", "MEAL", "RATE", "NIGHT", "NIGHTS",
+    "CHECK", "IN", "OUT", "ID", "NO", "NR",
+    # Country / airport codes that happen to be 3 letters all caps — we
+    # intentionally do NOT list these; 3-letter codes without surrounding
+    # name words won't trigger alone (need 2+ consecutive).
+}
+
+
+def _page_has_suspected_name(data: dict) -> bool:
+    """Return True if this page looks like it contains a person name even
+    though no redaction label was matched.
+
+    Heuristic for a name on a voucher line:
+      * 2+ consecutive all-caps alphabetic tokens of length >= 3
+      * at least one of them is NOT in SAFE_CAPS_WORDS
+      * and no mixed-case alphabetic word precedes them on the line
+        (that would mean prose — e.g. "MORI Building DIGITAL ART MUSEUM").
+    """
+    words = data.get("text", [])
+    if not words:
+        return False
+    line_nums = data["line_num"]
+    block_nums = data["block_num"]
+    n = len(words)
+
+    def _prev_on_line_is_prose(start: int) -> bool:
+        """True if any earlier non-empty token on the same line/block is an
+        alphabetic word in non-uppercase (i.e. mixed/title/lowercase)."""
+        line = line_nums[start]
+        block = block_nums[start]
+        k = start - 1
+        while k >= 0:
+            if line_nums[k] != line or block_nums[k] != block:
+                return False
+            raw = _strip_punct(words[k])
+            if raw and raw.isalpha() and not raw.isupper():
+                return True
+            k -= 1
+        return False
+
+    i = 0
+    while i < n:
+        raw = _strip_punct(words[i])
+        if _looks_like_name_token(raw) and len(raw) >= 3:
+            line = line_nums[i]
+            block = block_nums[i]
+            seq: list[str] = [raw]
+            j = i + 1
+            while j < n:
+                if line_nums[j] != line or block_nums[j] != block:
+                    break
+                next_raw = _strip_punct(words[j])
+                if not next_raw:
+                    j += 1
+                    continue
+                if _looks_like_name_token(next_raw) and len(next_raw) >= 3:
+                    seq.append(next_raw)
+                    j += 1
+                else:
+                    break
+            if (
+                len(seq) >= 2
+                and any(tok not in SAFE_CAPS_WORDS for tok in seq)
+                and not _prev_on_line_is_prose(i)
+            ):
+                return True
+            i = j
+        else:
+            i += 1
+    return False
 
 
 def _paint_black(img: Image.Image, regions: list[tuple[int, int, int, int]]) -> Image.Image:
@@ -203,7 +361,7 @@ def main(argv: list[str]) -> int:
     total_regions = 0
     all_labels: list[str] = []
     redacted_pages: list[Image.Image] = []
-    pages_without_labels: list[int] = []
+    unsafe_pages: list[int] = []
 
     for idx, page in enumerate(pages):
         try:
@@ -215,23 +373,29 @@ def main(argv: list[str]) -> int:
         all_labels.extend(labels)
         if regions:
             redacted_pages.append(_paint_black(page, regions))
-        else:
-            redacted_pages.append(page)
-            pages_without_labels.append(idx + 1)
+            continue
 
-    # Policy: every page must have at least one label. If any page lacks a
-    # recognizable name marker, we cannot guarantee the name isn't visible
-    # on that page → fail loud. Single-page scans fall back to the same rule.
+        # No label on this page. That's OK for pages that legitimately have
+        # no guest name (e.g. terms/remarks on a voucher). But if the page
+        # contains something that LOOKS like a person name (2+ consecutive
+        # all-caps tokens, not all from the safe headings list) we cannot
+        # ship it to AI — fail loud.
+        if _page_has_suspected_name(data):
+            unsafe_pages.append(idx + 1)
+        redacted_pages.append(page)
+
+    # Policy: at least one page in the document must have matched a label,
+    # and no page may contain an UN-redacted suspected name.
     if total_regions == 0:
         _die(
             "no name labels found — refusing to ship an un-redacted scan to AI. "
             "Manager should redact manually or enter fields by hand.",
             code=5,
         )
-    if pages_without_labels:
+    if unsafe_pages:
         _die(
-            "pages without any detectable name label: "
-            + ", ".join(str(p) for p in pages_without_labels)
+            "pages with a possible unredacted name: "
+            + ", ".join(str(p) for p in unsafe_pages)
             + " — refusing to ship a partially-redacted scan.",
             code=5,
         )

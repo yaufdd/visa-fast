@@ -1,49 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getHotels, createHotel } from '../api/client';
+import { CANONICAL_CITIES, normalizeCity } from '../constants/cities';
 
 const EMPTY_FORM = {
   name_en: '',
-  name_ru: '',
   city: '',
   address: '',
   phone: '',
 };
-
-// English → Russian names for Japanese cities that appear in the hotel DB.
-// Unknown cities fall back to Title Case (first letter capitalized).
-const CITY_RU = {
-  tokyo: 'Токио',
-  kyoto: 'Киото',
-  osaka: 'Осака',
-  hakone: 'Хаконэ',
-  izu: 'Идзу',
-  okinawa: 'Окинава',
-  nara: 'Нара',
-  kanazawa: 'Канадзава',
-  nagoya: 'Нагоя',
-  hiroshima: 'Хиросима',
-  nikko: 'Никко',
-  yokohama: 'Иокогама',
-  kamakura: 'Камакура',
-  sapporo: 'Саппоро',
-  fukuoka: 'Фукуока',
-  takayama: 'Такаяма',
-  matsumoto: 'Мацумото',
-  kobe: 'Кобе',
-  miyajima: 'Миядзима',
-  shirakawa: 'Сиракава',
-  shirakawago: 'Сиракава-го',
-  'mt fuji': 'Гора Фудзи',
-  fuji: 'Фудзи',
-};
-
-function formatCity(raw) {
-  if (!raw) return '';
-  const key = raw.trim().toLowerCase();
-  if (CITY_RU[key]) return CITY_RU[key];
-  return key.charAt(0).toUpperCase() + key.slice(1);
-}
 
 export default function HotelsPage() {
   const navigate = useNavigate();
@@ -93,7 +58,7 @@ export default function HotelsPage() {
     setSaveError(null);
     setSaveSuccess(false);
     try {
-      await createHotel(form);
+      await createHotel({ ...form, city: normalizeCity(form.city) });
       setForm(EMPTY_FORM);
       setFormOpen(false);
       setSaveSuccess(true);
@@ -127,6 +92,11 @@ export default function HotelsPage() {
       {error && <div className="error-message">{error}</div>}
       {saveSuccess && <div className="success-message">Отель добавлен успешно</div>}
 
+      {/* Shared datalist for city autocomplete */}
+      <datalist id="city-suggestions">
+        {CANONICAL_CITIES.map(c => <option key={c} value={c} />)}
+      </datalist>
+
       {/* Add hotel form (collapsible, above table) */}
       {formOpen && (
         <div className="card" style={{ marginBottom: 24 }}>
@@ -158,38 +128,28 @@ export default function HotelsPage() {
           {saveError && <div className="error-message">{saveError}</div>}
 
           <form onSubmit={handleSubmit}>
-            <div className="grid-2">
-              <div className="form-group">
-                <label className="form-label">Название (English) *</label>
-                <input
-                  className="form-input"
-                  type="text"
-                  placeholder="Hotel name in English"
-                  value={form.name_en}
-                  onChange={e => handleChange('name_en', e.target.value)}
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Название (Русский)</label>
-                <input
-                  className="form-input"
-                  type="text"
-                  placeholder="Название на русском"
-                  value={form.name_ru}
-                  onChange={e => handleChange('name_ru', e.target.value)}
-                />
-              </div>
+            <div className="form-group">
+              <label className="form-label">Название (English) *</label>
+              <input
+                className="form-input"
+                type="text"
+                placeholder="Hotel name in English"
+                value={form.name_en}
+                onChange={e => handleChange('name_en', e.target.value)}
+              />
             </div>
 
             <div className="grid-3">
               <div className="form-group">
-                <label className="form-label">Город</label>
+                <label className="form-label">Город (по-русски)</label>
                 <input
                   className="form-input"
                   type="text"
-                  placeholder="Tokyo"
+                  placeholder="Токио"
+                  list="city-suggestions"
                   value={form.city}
                   onChange={e => handleChange('city', e.target.value)}
+                  onBlur={e => handleChange('city', normalizeCity(e.target.value))}
                 />
               </div>
               <div className="form-group">
@@ -241,15 +201,7 @@ export default function HotelsPage() {
           <div className="spinner spinner-lg" />
           <span>Загрузка...</span>
         </div>
-      ) : hotels.length === 0 ? (
-        <div className="card" style={{ marginBottom: 24 }}>
-          <div className="empty-state">
-            <div className="empty-state-icon">🏨</div>
-            <div className="empty-state-title">Нет отелей</div>
-            <div className="empty-state-text">Нажмите «+ Добавить отель» выше, чтобы создать первый</div>
-          </div>
-        </div>
-      ) : (
+      ) : hotels.length === 0 ? null : (
         <div className="table-wrapper" style={{ marginBottom: 32 }}>
           <table>
             <thead>
@@ -261,41 +213,44 @@ export default function HotelsPage() {
               </tr>
             </thead>
             <tbody>
-              {hotels.map(h => (
-                <tr
-                  key={h.id}
-                  onClick={() => navigate(`/hotels/${h.id}`)}
-                  style={{ cursor: 'pointer' }}
-                  title="Нажмите, чтобы редактировать"
-                >
-                  <td style={{ fontWeight: 500 }}>{h.name_en}</td>
-                  <td>
-                    <span style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      minWidth: 90,
-                      height: 22,
-                      padding: '0 10px',
-                      borderRadius: 4,
-                      background: h.city ? 'var(--accent-dim)' : 'transparent',
-                      color: h.city ? 'var(--accent)' : 'var(--white-dim)',
-                      fontSize: 11,
-                      fontWeight: 500,
-                      textAlign: 'center',
-                      boxSizing: 'border-box',
-                    }}>
-                      {formatCity(h.city) || '—'}
-                    </span>
-                  </td>
-                  <td style={{ fontSize: 12, color: 'var(--white-dim)' }}>{h.address || '—'}</td>
-                  <td>
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--white-dim)' }}>
-                      {h.phone || '—'}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+              {hotels.map(h => {
+                const cityDisplay = normalizeCity(h.city);
+                return (
+                  <tr
+                    key={h.id}
+                    onClick={() => navigate(`/hotels/${h.id}`)}
+                    style={{ cursor: 'pointer' }}
+                    title="Нажмите, чтобы редактировать"
+                  >
+                    <td style={{ fontWeight: 500 }}>{h.name_en}</td>
+                    <td>
+                      <span style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        minWidth: 90,
+                        height: 22,
+                        padding: '0 10px',
+                        borderRadius: 4,
+                        background: cityDisplay ? 'var(--accent-dim)' : 'transparent',
+                        color: cityDisplay ? 'var(--accent)' : 'var(--white-dim)',
+                        fontSize: 11,
+                        fontWeight: 500,
+                        textAlign: 'center',
+                        boxSizing: 'border-box',
+                      }}>
+                        {cityDisplay || '—'}
+                      </span>
+                    </td>
+                    <td style={{ fontSize: 12, color: 'var(--white-dim)' }}>{h.address || '—'}</td>
+                    <td>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--white-dim)' }}>
+                        {h.phone || '—'}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

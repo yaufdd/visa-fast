@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import SubmissionForm from '../components/SubmissionForm';
 import AttachGroupModal from '../components/AttachGroupModal';
+import ConfirmModal from '../components/ConfirmModal';
 import {
   apiCreateSubmission,
   archiveSubmission,
@@ -35,6 +36,7 @@ export default function SubmissionDetailPage() {
 
   const [attachOpen, setAttachOpen] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
 
   useEffect(() => {
     if (isNew) {
@@ -72,9 +74,14 @@ export default function SubmissionDetailPage() {
     setTimeout(() => setNotice(null), 2000);
   }, [isNew, id, navigate]);
 
+  const requestArchive = useCallback(() => {
+    if (!submission) return;
+    setActionError(null);
+    setArchiveConfirmOpen(true);
+  }, [submission]);
+
   const handleArchive = useCallback(async () => {
     if (!submission) return;
-    if (!confirm('Архивировать анкету? Её можно будет восстановить.')) return;
     setArchiving(true);
     setActionError(null);
     try {
@@ -82,7 +89,6 @@ export default function SubmissionDetailPage() {
       navigate('/submissions');
     } catch (e) {
       setActionError(e.message);
-    } finally {
       setArchiving(false);
     }
   }, [submission, navigate]);
@@ -169,7 +175,7 @@ export default function SubmissionDetailPage() {
             <button
               type="button"
               className="btn btn-ghost"
-              onClick={handleArchive}
+              onClick={requestArchive}
               disabled={archiving}
             >
               {archiving ? 'Архивация...' : 'Архивировать'}
@@ -199,6 +205,19 @@ export default function SubmissionDetailPage() {
         open={attachOpen}
         onClose={() => setAttachOpen(false)}
         onConfirm={handleAttach}
+      />
+
+      <ConfirmModal
+        open={archiveConfirmOpen}
+        title="Архивировать анкету?"
+        message="Анкета уйдёт в архив. Её можно будет восстановить."
+        confirmText="Архивировать"
+        cancelText="Отмена"
+        variant="primary"
+        busy={archiving}
+        error={actionError}
+        onConfirm={handleArchive}
+        onCancel={() => setArchiveConfirmOpen(false)}
       />
     </div>
   );

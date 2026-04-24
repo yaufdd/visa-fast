@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -145,7 +146,7 @@ func GetGroup(pool *pgxpool.Pool) http.HandlerFunc {
 
 		// Hotels.
 		hRows, err := pool.Query(r.Context(),
-			`SELECT gh.id, gh.hotel_id, h.name_en, COALESCE(h.name_ru,''), h.city, COALESCE(h.address,''), COALESCE(h.phone,''),
+			`SELECT gh.id, gh.hotel_id, h.name_en, h.city, COALESCE(h.address,''), COALESCE(h.phone,''),
 			        gh.check_in::text, gh.check_out::text, COALESCE(gh.room_type,''), gh.sort_order
 			   FROM group_hotels gh
 			   JOIN hotels h ON h.id = gh.hotel_id
@@ -162,7 +163,6 @@ func GetGroup(pool *pgxpool.Pool) http.HandlerFunc {
 			ID        string `json:"id"`
 			HotelID   string `json:"hotel_id"`
 			NameEn    string `json:"name_en"`
-			NameRu    string `json:"name_ru"`
 			City      string `json:"city"`
 			Address   string `json:"address"`
 			Phone     string `json:"phone"`
@@ -175,7 +175,7 @@ func GetGroup(pool *pgxpool.Pool) http.HandlerFunc {
 		var hotels []GroupHotel
 		for hRows.Next() {
 			var h GroupHotel
-			if err := hRows.Scan(&h.ID, &h.HotelID, &h.NameEn, &h.NameRu, &h.City, &h.Address, &h.Phone,
+			if err := hRows.Scan(&h.ID, &h.HotelID, &h.NameEn, &h.City, &h.Address, &h.Phone,
 				&h.CheckIn, &h.CheckOut, &h.RoomType, &h.SortOrder); err != nil {
 				slog.Error("scan group hotel", "err", err)
 				writeError(w, http.StatusInternalServerError, "scan error")
@@ -233,6 +233,44 @@ func UpdateGroupStatus(pool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
+// UpdateGroupName handles PUT /api/groups/{id}/name.
+// Body: {"name": "..."}.
+func UpdateGroupName(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
+		id := chi.URLParam(r, "id")
+		var body struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		body.Name = strings.TrimSpace(body.Name)
+		if body.Name == "" {
+			writeError(w, http.StatusBadRequest, "field 'name' is required")
+			return
+		}
+		ok, err := db.UpdateGroupName(r.Context(), pool, orgID, id, body.Name)
+		if err != nil {
+			slog.Error("update group name", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+		g, err := db.GetGroup(r.Context(), pool, orgID, id)
+		if err != nil || g == nil {
+			slog.Error("load updated group", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		writeJSON(w, http.StatusOK, g)
+	}
+}
+
 // UpdateGroupNotes handles PUT /api/groups/{id}/notes.
 // Body: {"notes": "..."}. Empty string is allowed.
 func UpdateGroupNotes(pool *pgxpool.Pool) http.HandlerFunc {
@@ -251,6 +289,44 @@ func UpdateGroupNotes(pool *pgxpool.Pool) http.HandlerFunc {
 		ok, err := db.UpdateGroupNotes(r.Context(), pool, orgID, id, notes)
 		if err != nil {
 			slog.Error("update group notes", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+		g, err := db.GetGroup(r.Context(), pool, orgID, id)
+		if err != nil || g == nil {
+			slog.Error("load updated group", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		writeJSON(w, http.StatusOK, g)
+	}
+}
+
+// UpdateGroupProgrammeNotes handles PUT /api/groups/{id}/programme_notes.
+// Body: {"notes": "..."}. Empty string clears the notes (stored as SQL NULL).
+func UpdateGroupProgrammeNotes(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
+		id := chi.URLParam(r, "id")
+		var body struct {
+			Notes string `json:"notes"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		var notesPtr *string
+		if body.Notes != "" {
+			notesPtr = &body.Notes
+		}
+		ok, err := db.UpdateGroupProgrammeNotes(r.Context(), pool, orgID, id, notesPtr)
+		if err != nil {
+			slog.Error("update group programme_notes", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}

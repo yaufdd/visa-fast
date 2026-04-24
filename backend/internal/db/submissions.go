@@ -22,6 +22,12 @@ type TouristSubmission struct {
 	Status            string          `json:"status"`
 	CreatedAt         time.Time       `json:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at"`
+	// Set only when status='attached' — identifies the group the submission
+	// is currently bound to so the manager UI can show context / decide
+	// whether re-attach is permitted (depends on CurrentGroupStatus).
+	CurrentGroupID     *string `json:"current_group_id,omitempty"`
+	CurrentGroupName   *string `json:"current_group_name,omitempty"`
+	CurrentGroupStatus *string `json:"current_group_status,omitempty"`
 }
 
 // CreateSubmissionForOrg is used by both the public slug endpoint and
@@ -40,20 +46,48 @@ func CreateSubmissionForOrg(ctx context.Context, pool *pgxpool.Pool, orgID strin
 
 func ListSubmissions(ctx context.Context, pool *pgxpool.Pool, orgID, q, status string) ([]TouristSubmission, error) {
 	args := []any{orgID}
-	where := []string{"org_id = $1"}
+	where := []string{"ts.org_id = $1"}
 	if q != "" {
 		args = append(args, "%"+q+"%")
-		where = append(where, fmt.Sprintf("payload ->> 'name_lat' ILIKE $%d", len(args)))
+		where = append(where, fmt.Sprintf("ts.payload ->> 'name_lat' ILIKE $%d", len(args)))
 	}
+	// Support comma-separated status filter ("pending,attached") so the
+	// manager UI can request the re-attach-eligible pool in one call.
 	if status != "" {
-		args = append(args, status)
-		where = append(where, fmt.Sprintf("status = $%d", len(args)))
+		statuses := strings.Split(status, ",")
+		placeholders := make([]string, 0, len(statuses))
+		for _, s := range statuses {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			args = append(args, s)
+			placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+		}
+		if len(placeholders) > 0 {
+			where = append(where, "ts.status IN ("+strings.Join(placeholders, ",")+")")
+		}
 	}
-	sql := `SELECT id, payload, consent_accepted, consent_accepted_at, consent_version,
-	               source, status, created_at, updated_at
-	          FROM tourist_submissions
+	// LATERAL pulls the MOST RECENT tourists row for each submission — a
+	// submission may now have multiple rows (a finalized group + a fresh
+	// one for the tourist's next trip), and the UI filters based on the
+	// latest attachment's group status.
+	sql := `SELECT ts.id, ts.payload, ts.consent_accepted, ts.consent_accepted_at,
+	               ts.consent_version, ts.source, ts.status,
+	               ts.created_at, ts.updated_at,
+	               latest.group_id, latest.group_name, latest.group_status
+	          FROM tourist_submissions ts
+	          LEFT JOIN LATERAL (
+	            SELECT g.id AS group_id, g.name AS group_name, g.status AS group_status
+	              FROM tourists t
+	              JOIN groups   g ON g.id = t.group_id AND g.org_id = ts.org_id
+	             WHERE t.submission_id = ts.id
+	               AND t.org_id = ts.org_id
+	             ORDER BY t.created_at DESC
+	             LIMIT 1
+	          ) latest ON TRUE
 	         WHERE ` + strings.Join(where, " AND ") + `
-	         ORDER BY created_at DESC LIMIT 500`
+	         ORDER BY ts.created_at DESC LIMIT 500`
 
 	rows, err := pool.Query(ctx, sql, args...)
 	if err != nil {
@@ -64,11 +98,16 @@ func ListSubmissions(ctx context.Context, pool *pgxpool.Pool, orgID, q, status s
 	for rows.Next() {
 		var s TouristSubmission
 		var payload []byte
+		var groupID, groupName, groupStatus *string
 		if err := rows.Scan(&s.ID, &payload, &s.ConsentAccepted, &s.ConsentAcceptedAt,
-			&s.ConsentVersion, &s.Source, &s.Status, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			&s.ConsentVersion, &s.Source, &s.Status, &s.CreatedAt, &s.UpdatedAt,
+			&groupID, &groupName, &groupStatus); err != nil {
 			return nil, err
 		}
 		s.Payload = payload
+		s.CurrentGroupID = groupID
+		s.CurrentGroupName = groupName
+		s.CurrentGroupStatus = groupStatus
 		out = append(out, s)
 	}
 	return out, nil

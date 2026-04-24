@@ -83,7 +83,9 @@ export async function deleteTourist(touristId) {
   if (!res.ok) throw await errFromRes(res);
 }
 
-// Per-tourist uploads (ticket | voucher). Backend auto-parses on upload.
+// Per-tourist uploads (ticket | voucher). Two-step flow:
+//   1. uploadTouristFile — saves + redacts the scan, does NOT run AI.
+//   2. parseTouristUpload — runs the AI parser on a previously uploaded row.
 export async function getTouristUploads(touristId) {
   const res = await apiFetch(`/tourists/${touristId}/uploads`);
   if (!res.ok) throw await errFromRes(res);
@@ -97,6 +99,14 @@ export async function uploadTouristFile(touristId, file, fileType) {
   const res = await apiFetch(`/tourists/${touristId}/uploads`, {
     method: 'POST',
     body: formData,
+  });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+export async function parseTouristUpload(touristId, uploadId) {
+  const res = await apiFetch(`/tourists/${touristId}/uploads/${uploadId}/parse`, {
+    method: 'POST',
   });
   if (!res.ok) throw await errFromRes(res);
   return res.json();

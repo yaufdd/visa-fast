@@ -16,13 +16,14 @@ import (
 )
 
 type Subgroup struct {
-	ID          string     `json:"id"`
-	GroupID     string     `json:"group_id"`
-	Name        string     `json:"name"`
-	SortOrder   int        `json:"sort_order"`
-	CreatedAt   time.Time  `json:"created_at"`
-	HasZip      bool       `json:"has_zip"`
-	GeneratedAt *time.Time `json:"generated_at,omitempty"`
+	ID             string     `json:"id"`
+	GroupID        string     `json:"group_id"`
+	Name           string     `json:"name"`
+	SortOrder      int        `json:"sort_order"`
+	ProgrammeNotes *string    `json:"programme_notes"`
+	CreatedAt      time.Time  `json:"created_at"`
+	HasZip         bool       `json:"has_zip"`
+	GeneratedAt    *time.Time `json:"generated_at,omitempty"`
 }
 
 // ListSubgroups handles GET /api/groups/:id/subgroups
@@ -41,11 +42,12 @@ func ListSubgroups(pool *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 		subgroups := make([]Subgroup, 0, len(items))
 		for _, it := range items {
 			s := Subgroup{
-				ID:        it.ID,
-				GroupID:   it.GroupID,
-				Name:      it.Name,
-				SortOrder: it.SortOrder,
-				CreatedAt: it.CreatedAt,
+				ID:             it.ID,
+				GroupID:        it.GroupID,
+				Name:           it.Name,
+				SortOrder:      it.SortOrder,
+				ProgrammeNotes: it.ProgrammeNotes,
+				CreatedAt:      it.CreatedAt,
 			}
 			// Check if a generated ZIP exists on disk.
 			zipPath := filepath.Join(uploadsDir, s.GroupID, "subgroup_"+s.ID+".zip")
@@ -114,6 +116,37 @@ func UpdateSubgroup(pool *pgxpool.Pool) http.HandlerFunc {
 		ok, err := db.UpdateSubgroup(r.Context(), pool, orgID, id, body.Name, body.SortOrder)
 		if err != nil {
 			slog.Error("update subgroup", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusNotFound, "subgroup not found")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// UpdateSubgroupProgrammeNotes handles PUT /api/subgroups/:id/programme_notes
+// Body: {"notes": "..."} (empty string clears the notes).
+func UpdateSubgroupProgrammeNotes(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
+		id := chi.URLParam(r, "id")
+		var body struct {
+			Notes string `json:"notes"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		var notesPtr *string
+		if body.Notes != "" {
+			notesPtr = &body.Notes
+		}
+		ok, err := db.UpdateSubgroupProgrammeNotes(r.Context(), pool, orgID, id, notesPtr)
+		if err != nil {
+			slog.Error("update subgroup programme_notes", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}

@@ -18,7 +18,7 @@ import (
 // pythonScript should be the absolute path to docgen/generate.py.
 // uploadsDir is the base uploads directory (ZIP will be placed inside
 // uploadsDir/{groupID}/output.zip).
-func Generate(ctx context.Context, pythonScript, uploadsDir, groupID string, pass2JSON json.RawMessage) (string, error) {
+func Generate(ctx context.Context, pythonScript, uploadsDir, orgID, groupID string, pass2JSON json.RawMessage) (string, error) {
 	// Write pass2 JSON to a temp file so Python can read it.
 	tmpDir := filepath.Join(uploadsDir, groupID)
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
@@ -35,6 +35,7 @@ func Generate(ctx context.Context, pythonScript, uploadsDir, groupID string, pas
 	cmd := exec.CommandContext(ctx, "python3", pythonScript, groupID, jsonPath, zipPath, "tourists")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = templateEnv(os.Environ(), uploadsDir, orgID)
 
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("python docgen: %w", err)
@@ -49,7 +50,8 @@ func Generate(ctx context.Context, pythonScript, uploadsDir, groupID string, pas
 
 // GenerateWithSubgroup generates tourist docs for one subgroup into docs/{subgroupName}/.
 // It does NOT create a ZIP — call ZipDocsDir afterwards to collect all subgroups.
-func GenerateWithSubgroup(ctx context.Context, pythonScript, uploadsDir, groupID, subgroupName string, pass2JSON json.RawMessage) error {
+// orgID is used to look up org-specific template overrides; pass "" to skip.
+func GenerateWithSubgroup(ctx context.Context, pythonScript, uploadsDir, orgID, groupID, subgroupName string, pass2JSON json.RawMessage) error {
 	tmpDir := filepath.Join(uploadsDir, groupID)
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
 		return fmt.Errorf("create group dir: %w", err)
@@ -67,10 +69,26 @@ func GenerateWithSubgroup(ctx context.Context, pythonScript, uploadsDir, groupID
 	cmd := exec.CommandContext(ctx, "python3", pythonScript, groupID, jsonPath, zipPath, "tourists", subgroupName)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = templateEnv(os.Environ(), uploadsDir, orgID)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("python docgen subgroup: %w", err)
 	}
 	return nil
+}
+
+// templateEnv returns the base env plus overrides that point Python at the
+// org's custom templates when they exist on disk. No-op when orgID is empty
+// or the org has no uploaded templates.
+func templateEnv(base []string, uploadsDir, orgID string) []string {
+	if orgID == "" {
+		return base
+	}
+	env := append([]string{}, base...)
+	dovPath := filepath.Join(uploadsDir, orgID, "templates", "doverenost.docx")
+	if _, err := os.Stat(dovPath); err == nil {
+		env = append(env, "DOCGEN_DOVERENOST_TEMPLATE="+dovPath)
+	}
+	return env
 }
 
 // ZipDocsDir walks uploadsDir/{groupID}/docs/ and creates a ZIP with folder structure.
@@ -169,7 +187,7 @@ func safeFilename(s string) string {
 }
 
 // GenerateFinal generates group-level docs (для Инны, заявка ВЦ).
-func GenerateFinal(ctx context.Context, pythonScript, uploadsDir, groupID string, pass2JSON json.RawMessage) (string, error) {
+func GenerateFinal(ctx context.Context, pythonScript, uploadsDir, orgID, groupID string, pass2JSON json.RawMessage) (string, error) {
 	tmpDir := filepath.Join(uploadsDir, groupID)
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
 		return "", fmt.Errorf("create group dir: %w", err)
@@ -185,6 +203,7 @@ func GenerateFinal(ctx context.Context, pythonScript, uploadsDir, groupID string
 	cmd := exec.CommandContext(ctx, "python3", pythonScript, groupID, jsonPath, zipPath, "final")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = templateEnv(os.Environ(), uploadsDir, orgID)
 
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("python docgen final: %w", err)

@@ -816,6 +816,90 @@ select.form-input {
   gap: 0;
 }
 
+/* ── Boxed character input (flight number, passport issuing authority, …) ── */
+.boxed-char-input {
+  position: relative;
+  cursor: text;
+  min-height: 44px;
+  padding: 4px;
+  background: var(--carbon, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  transition: border-color 0.12s;
+}
+.boxed-char-input.is-focused {
+  border-color: var(--accent);
+}
+.bci-hidden-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  cursor: text;
+  z-index: 2;
+  font-family: inherit;
+  font-size: inherit;
+}
+.bci-display {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+  min-height: 36px;
+  pointer-events: none;
+}
+.bci-box {
+  min-width: 26px;
+  height: 34px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  background: var(--graphite);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--white);
+}
+.bci-gap {
+  width: 12px;
+}
+.bci-caret {
+  min-width: 14px;
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--border);
+  color: transparent;
+}
+.boxed-char-input.is-focused .bci-caret {
+  border-color: var(--accent);
+  animation: bci-caret-blink 1.1s steps(2, end) infinite;
+}
+@keyframes bci-caret-blink {
+  0% { opacity: 1; }
+  50% { opacity: 0.25; }
+  100% { opacity: 1; }
+}
+
+/* Public submission form tints its own inputs against --gray-dark, so the
+   boxed input adapts to that palette when rendered inside .submission-form. */
+.submission-form .boxed-char-input {
+  background: var(--gray-dark);
+}
+.submission-form .bci-box {
+  background: var(--gray);
+}
+
 /* ── Public form layout ──────────────────────────────────────────────────── */
 .public-form {
   max-width: 880px;

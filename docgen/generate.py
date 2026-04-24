@@ -75,7 +75,10 @@ TEMPLATES_DIR = os.environ.get("DOCGEN_TEMPLATES_DIR", "/Users/yaufdd/Desktop/FU
 PDF_TEMPLATE  = os.environ.get("DOCGEN_PDF_TEMPLATE", "/Users/yaufdd/Desktop/FUJIT TRAVEL/ТЕСТ_Бамба/Бамба Эрик.pdf")
 
 TMPL_PROGRAMME   = os.path.join(TEMPLATES_DIR, "ШАБЛОН программа.docx")
-TMPL_DOVERENOST  = os.path.join(TEMPLATES_DIR, "ШАБЛОН доверенность.docx")
+# Per-org custom доверенность template — when set, replaces the bundled
+# template for this generation run. Set by the Go layer when the org has
+# uploaded a custom .docx via /api/templates/doverenost.
+TMPL_DOVERENOST  = os.environ.get("DOCGEN_DOVERENOST_TEMPLATE") or os.path.join(TEMPLATES_DIR, "ШАБЛОН доверенность.docx")
 TMPL_INNA        = os.path.join(TEMPLATES_DIR, "ШАБЛОН для Инны в ВЦ.docx")
 TMPL_VC_REQUEST  = os.path.join(TEMPLATES_DIR, "ШАБЛОН заявка ВЦ.docx")
 
@@ -192,9 +195,14 @@ def generate_doverenost(data, dov, out_path):
     target = doc.paragraphs[2]  # index 2 is the main body paragraph
     full = target.text
 
+    # Name must be surrounded by commas per Russian legal conventions. We
+    # wrap the value with commas and rely on the cleanup pass below to
+    # collapse any duplicate commas in case the template already had them.
+    name_wrapped = f", {dov['name_ru']},"
+
     # Replace variable placeholders
     replacements = {
-        "(ФИО ПО-РУССКИ)": dov["name_ru"],
+        "(ФИО ПО-РУССКИ)": name_wrapped,
         "(ДД.ММ.ГГГГ)":    dov["dob"],
         "(СЕРИЯ НОМЕР)":   f"{dov['passport_series']} {dov['passport_number']}",
         "(ОРГАН ВЫДАЧИ)":  dov["issued_by"],
@@ -206,6 +214,14 @@ def generate_doverenost(data, dov, out_path):
 
     # Replace «ДД» МЕСЯЦ ГГГГ with the issued_date value
     full_new = re.sub(r"«ДД» МЕСЯЦ ГГГГ", dov["issued_date"], full_new)
+
+    # Collapse duplicate commas/spaces that may come from pre-existing
+    # template punctuation around the name placeholder or from the
+    # comma-wrapping above.
+    full_new = re.sub(r",[\s,]+,", ",", full_new)
+    full_new = re.sub(r",\s*,", ",", full_new)
+    full_new = re.sub(r"[ \t]{2,}", " ", full_new)
+    full_new = re.sub(r"\s+([,.;:])", r"\1", full_new)
 
     # For minors: insert "своего/своей сына/дочери, [имя ребёнка]," after "документов"
     if dov.get("is_minor") and dov.get("child_name_ru"):

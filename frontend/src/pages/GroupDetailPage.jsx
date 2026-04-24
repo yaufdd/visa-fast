@@ -6,7 +6,6 @@ import {
   finalizeGroup, getFinalDownloadUrl, getFinalStatus,
   generateSubgroupDocuments, getSubgroupDownloadUrl,
   getTourists, deleteTourist,
-  uploadTouristFile, getTouristUploads, deleteTouristUpload,
   getSubgroups, createSubgroup, updateSubgroup, deleteSubgroup,
   assignTouristSubgroup,
   updateGroupStatus, deleteGroup, updateGroupName,
@@ -14,7 +13,7 @@ import {
 } from '../api/client';
 import StatusSection from '../components/StatusSection';
 import AddFromDBModal from '../components/AddFromDBModal';
-import FlightDataCard from '../components/FlightDataCard';
+import TouristCard from '../components/TouristCard';
 import AILogsSection from '../components/AILogsSection';
 import { normalizeCity } from '../constants/cities';
 
@@ -34,6 +33,7 @@ const TrashIcon = ({ size = 14 }) => (
 );
 import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
+import ConfirmModal from '../components/ConfirmModal';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -55,352 +55,10 @@ function getTouristName(tourist) {
   return snap.name_lat || snap.name_cyr || '—';
 }
 
-// ── TouristUploadsBar — per-tourist ticket/voucher uploads ───────────────────
-
-const FILE_TYPE_LABEL = { ticket: 'Билет', voucher: 'Ваучер' };
-const FILE_TYPE_ICON = { ticket: '✈', voucher: '🏨' };
-
-function uploadDisplayName(u) {
-  const raw = u.file_path || '';
-  const base = raw.split(/[\\/]/).pop() || '';
-  const prefix = `${u.file_type}_`;
-  return base.startsWith(prefix) ? base.slice(prefix.length) : base;
-}
-
-function formatUploadDate(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString('ru-RU', {
-    day: '2-digit', month: '2-digit', year: '2-digit',
-  });
-}
-
-function TouristUploadsBar({ touristId, onChanged }) {
-  const [uploads, setUploads] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [uploadingType, setUploadingType] = useState(null);
-  const [deletingId, setDeletingId] = useState(null);
-  const ticketRef = useRef(null);
-  const voucherRef = useRef(null);
-
-  const load = useCallback(async () => {
-    try {
-      const data = await getTouristUploads(touristId);
-      setUploads(Array.isArray(data) ? data : []);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [touristId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const handleUpload = async (file, fileType) => {
-    if (!file) return;
-    setUploadingType(fileType);
-    setError(null);
-    try {
-      const res = await uploadTouristFile(touristId, file, fileType);
-      if (res?.parse_error) {
-        setError(`Парсинг не удался: ${res.parse_error}`);
-      }
-      await load();
-      onChanged?.();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setUploadingType(null);
-    }
-  };
-
-  const handleDelete = async (u) => {
-    const label = uploadDisplayName(u) || FILE_TYPE_LABEL[u.file_type] || 'файл';
-    if (!window.confirm(`Удалить «${label}»?`)) return;
-    setDeletingId(u.id);
-    setError(null);
-    try {
-      await deleteTouristUpload(touristId, u.id);
-      await load();
-      onChanged?.();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setDeletingId(null);
-    }
-  };
-
-  return (
-    <div style={{ marginTop: 10 }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 8,
-        }}
-      >
-        <span
-          style={{
-            fontSize: 11,
-            color: 'var(--white-dim)',
-            textTransform: 'uppercase',
-            letterSpacing: '0.05em',
-          }}
-        >
-          Сканы:
-        </span>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          onClick={() => ticketRef.current?.click()}
-          disabled={loading || uploadingType === 'ticket'}
-        >
-          {uploadingType === 'ticket'
-            ? <><span className="spinner" /> Билет...</>
-            : '+ Билет'}
-        </button>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          onClick={() => voucherRef.current?.click()}
-          disabled={loading || uploadingType === 'voucher'}
-        >
-          {uploadingType === 'voucher'
-            ? <><span className="spinner" /> Ваучер...</>
-            : '+ Ваучер'}
-        </button>
-        <input
-          ref={ticketRef}
-          type="file"
-          accept=".pdf,.jpg,.jpeg,.png"
-          style={{ display: 'none' }}
-          onChange={(e) => { handleUpload(e.target.files?.[0], 'ticket'); e.target.value = ''; }}
-        />
-        <input
-          ref={voucherRef}
-          type="file"
-          accept=".pdf,.jpg,.jpeg,.png"
-          style={{ display: 'none' }}
-          onChange={(e) => { handleUpload(e.target.files?.[0], 'voucher'); e.target.value = ''; }}
-        />
-      </div>
-
-      {error && (
-        <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>
-          {error}
-        </div>
-      )}
-
-      {uploads.length > 0 && (
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 4,
-            marginTop: 8,
-          }}
-        >
-          {uploads.map((u) => {
-            const name = uploadDisplayName(u);
-            const typeLabel = FILE_TYPE_LABEL[u.file_type] || u.file_type;
-            const date = formatUploadDate(u.created_at);
-            const isDeleting = deletingId === u.id;
-            return (
-              <div
-                key={u.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '6px 8px',
-                  background: 'var(--graphite)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 6,
-                  fontSize: 12,
-                }}
-              >
-                <span style={{ fontSize: 13, flexShrink: 0 }}>
-                  {FILE_TYPE_ICON[u.file_type] || '📄'}
-                </span>
-                <span
-                  style={{
-                    fontSize: 10,
-                    padding: '1px 6px',
-                    borderRadius: 3,
-                    background: 'var(--accent-dim)',
-                    color: 'var(--accent)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                    flexShrink: 0,
-                  }}
-                >
-                  {typeLabel}
-                </span>
-                <span
-                  style={{
-                    flex: 1,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    color: 'var(--white)',
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 11,
-                  }}
-                  title={name}
-                >
-                  {name || '—'}
-                </span>
-                {date && (
-                  <span
-                    style={{
-                      color: 'var(--white-dim)',
-                      fontSize: 10,
-                      flexShrink: 0,
-                    }}
-                  >
-                    {date}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  onClick={() => handleDelete(u)}
-                  disabled={isDeleting}
-                  title="Удалить"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: isDeleting ? 'var(--white-dim)' : 'var(--danger, #ff6b6b)',
-                    cursor: isDeleting ? 'default' : 'pointer',
-                    padding: '2px 6px',
-                    fontSize: 13,
-                    lineHeight: 1,
-                    opacity: isDeleting ? 0.5 : 1,
-                    flexShrink: 0,
-                  }}
-                >
-                  {isDeleting ? <span className="spinner" /> : <TrashIcon size={13} />}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── TouristCard — full per-tourist card (name + flight + uploads) ────────────
-
-function TouristCard({ tourist, onDelete, subgroups, onAssign, onUpdated }) {
-  const name = getTouristName(tourist);
-  const snap = snapshotOf(tourist);
-  const dob = snap.birth_date || snap.date_of_birth;
-
-  return (
-    <div
-      style={{
-        padding: '12px 14px',
-        background: 'var(--gray-dark)',
-        border: '1px solid var(--border)',
-        borderRadius: 8,
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 8,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
-          <div style={{ minWidth: 0 }}>
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 500,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {name}
-            </div>
-            {dob && (
-              <div
-                style={{
-                  fontSize: 11,
-                  color: 'var(--white-dim)',
-                  fontFamily: 'var(--font-mono)',
-                }}
-              >
-                {dob}
-              </div>
-            )}
-          </div>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            flexShrink: 0,
-          }}
-        >
-          {subgroups && subgroups.length > 0 && onAssign && (
-            <select
-              value=""
-              onChange={(e) => e.target.value && onAssign(tourist.id, e.target.value)}
-              style={{
-                background: 'var(--gray)',
-                border: '1px solid var(--border)',
-                borderRadius: 5,
-                color: 'var(--white-dim)',
-                fontSize: 11,
-                padding: '3px 6px',
-                cursor: 'pointer',
-              }}
-            >
-              <option value="">→ в группу</option>
-              {subgroups.map((sg) => (
-                <option key={sg.id} value={sg.id}>{sg.name}</option>
-              ))}
-            </select>
-          )}
-          <button
-            type="button"
-            onClick={onDelete}
-            title="Удалить"
-            aria-label="Удалить"
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: 'var(--white-dim)',
-              lineHeight: 1,
-              padding: '4px 6px',
-              borderRadius: 4,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          ><TrashIcon /></button>
-        </div>
-      </div>
-
-      <FlightDataCard tourist={tourist} onUpdated={onUpdated} />
-
-      <TouristUploadsBar touristId={tourist.id} onChanged={onUpdated} />
-    </div>
-  );
-}
 
 // ── GroupCard ─────────────────────────────────────────────────────────────────
 
-function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, onRenamed, onDeleted }) {
+function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, onRenamed, onDeleted, layoutVariant }) {
   const [expanded, setExpanded] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -571,6 +229,7 @@ function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, on
                   <TouristCard
                     key={t.id}
                     tourist={t}
+                    variant={layoutVariant}
                     onUpdated={onReload}
                     onDelete={async () => {
                       try { await deleteTourist(t.id); onTouristDeleted(t.id); }
@@ -672,6 +331,13 @@ function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, on
 
 // ── GroupsTab ─────────────────────────────────────────────────────────────────
 
+const LAYOUT_VARIANTS = [
+  { value: 'A', label: 'A · плоско' },
+  { value: 'B', label: 'B · сворачиваемые документы' },
+  { value: 'C', label: 'C · две колонки' },
+];
+const LAYOUT_STORAGE_KEY = 'tourist_card_layout';
+
 function GroupsTab({ groupId }) {
   const [subgroups, setSubgroups] = useState([]);
   const [tourists, setTourists] = useState([]);
@@ -680,6 +346,14 @@ function GroupsTab({ groupId }) {
   const [showNewForm, setShowNewForm] = useState(false);
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
+  const [layoutVariant, setLayoutVariant] = useState(() => {
+    const saved = typeof window !== 'undefined' && window.localStorage?.getItem(LAYOUT_STORAGE_KEY);
+    return saved && ['A', 'B', 'C'].includes(saved) ? saved : 'B';
+  });
+  const changeLayout = (v) => {
+    setLayoutVariant(v);
+    try { window.localStorage?.setItem(LAYOUT_STORAGE_KEY, v); } catch { /* ignore */ }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -731,7 +405,38 @@ function GroupsTab({ groupId }) {
     <div>
       {error && <div className="error-message" style={{ marginBottom: 14 }}>{error}</div>}
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{
+            fontSize: 10, color: 'var(--white-dim)',
+            textTransform: 'uppercase', letterSpacing: '0.05em',
+          }}>
+            Макет
+          </span>
+          <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
+            {LAYOUT_VARIANTS.map((v) => {
+              const active = layoutVariant === v.value;
+              return (
+                <button
+                  key={v.value}
+                  type="button"
+                  onClick={() => changeLayout(v.value)}
+                  style={{
+                    background: active ? 'var(--accent-dim)' : 'transparent',
+                    color: active ? 'var(--accent)' : 'var(--white-dim)',
+                    border: 'none',
+                    padding: '4px 10px',
+                    fontSize: 11,
+                    cursor: 'pointer',
+                    borderLeft: v.value !== 'A' ? '1px solid var(--border)' : 'none',
+                  }}
+                >
+                  {v.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <button className="btn btn-primary btn-sm" onClick={() => setShowNewForm(true)}>
           + Добавить группу
         </button>
@@ -777,6 +482,7 @@ function GroupsTab({ groupId }) {
               onTouristDeleted={handleTouristDeleted}
               onRenamed={handleRenamed}
               onDeleted={handleDeleted}
+              layoutVariant={layoutVariant}
             />
           ))}
 
@@ -791,6 +497,7 @@ function GroupsTab({ groupId }) {
                   <TouristCard
                     key={t.id}
                     tourist={t}
+                    variant={layoutVariant}
                     subgroups={subgroups}
                     onUpdated={load}
                     onAssign={async (touristId, sgId) => {

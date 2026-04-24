@@ -39,3 +39,25 @@ func UpdateFlightData(pool *pgxpool.Pool) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
 }
+
+// ApplyFlightDataToSubgroup handles POST /api/tourists/:id/flight_data/apply_to_subgroup
+// Copies the tourist's current flight_data to every other tourist in the same subgroup.
+// Responds 404 if the tourist does not exist, is cross-org, or is not assigned to a subgroup.
+func ApplyFlightDataToSubgroup(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := middleware.OrgID(r.Context())
+		touristID := chi.URLParam(r, "id")
+
+		ok, n, err := db.ApplyFlightDataToSubgroup(r.Context(), pool, orgID, touristID)
+		if err != nil {
+			slog.Error("apply flight_data to subgroup", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusNotFound, "tourist not found or not in a subgroup")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "updated": n})
+	}
+}
