@@ -1,15 +1,5 @@
-import { useRef, useState } from 'react';
+import { Fragment, useLayoutEffect, useRef, useState } from 'react';
 
-// Character-per-box text input with unlimited length. Renders a row of small
-// boxes mirroring the current value; a transparent <input> on top absorbs
-// keystrokes/paste. Use for fields where the user wants per-char visual
-// feedback (flight numbers, passport issuing authority codes, etc.).
-//
-// Props:
-//   value, onChange — controlled value
-//   sanitize        — (s) => s, applied to every input before onChange
-//   uppercase       — shorthand that wraps sanitize with .toUpperCase()
-//   ariaLabel, className — passthrough
 export default function BoxedCharInput({
   value = '',
   onChange,
@@ -19,16 +9,35 @@ export default function BoxedCharInput({
   className = '',
 }) {
   const inputRef = useRef(null);
+  const pendingCaret = useRef(null);
   const [focused, setFocused] = useState(false);
+  const [caret, setCaret] = useState(value.length);
 
-  const apply = (s) => {
-    const out = uppercase ? s.toUpperCase() : s;
-    return sanitize(out);
+  const apply = (s) => sanitize(uppercase ? s.toUpperCase() : s);
+
+  const handleChange = (e) => {
+    const raw = e.target.value;
+    const rawCaret = e.target.selectionStart ?? raw.length;
+    const cleanedCaret = apply(raw.slice(0, rawCaret)).length;
+    pendingCaret.current = cleanedCaret;
+    setCaret(cleanedCaret);
+    onChange(apply(raw));
   };
 
-  const handleChange = (e) => onChange(apply(e.target.value));
+  const handleSelect = (e) => {
+    setCaret(e.target.selectionStart ?? 0);
+  };
+
+  useLayoutEffect(() => {
+    if (pendingCaret.current !== null && inputRef.current) {
+      const pos = Math.min(pendingCaret.current, value.length);
+      inputRef.current.setSelectionRange(pos, pos);
+      pendingCaret.current = null;
+    }
+  }, [value]);
 
   const chars = value.split('');
+  const caretAt = Math.min(caret, chars.length);
 
   return (
     <div
@@ -41,6 +50,8 @@ export default function BoxedCharInput({
         className="bci-hidden-input"
         value={value}
         onChange={handleChange}
+        onSelect={handleSelect}
+        onKeyUp={handleSelect}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         aria-label={ariaLabel}
@@ -48,12 +59,15 @@ export default function BoxedCharInput({
         spellCheck={false}
       />
       <div className="bci-display" aria-hidden="true">
-        {chars.map((c, i) =>
-          c === ' '
-            ? <span key={i} className="bci-gap" />
-            : <span key={i} className="bci-box">{c}</span>,
-        )}
-        <span className="bci-box bci-caret" />
+        {chars.map((c, i) => (
+          <Fragment key={i}>
+            {focused && i === caretAt && <span className="bci-box bci-caret" />}
+            {c === ' '
+              ? <span className="bci-gap" />
+              : <span className="bci-box">{c}</span>}
+          </Fragment>
+        ))}
+        {focused && caretAt === chars.length && <span className="bci-box bci-caret" />}
       </div>
     </div>
   );

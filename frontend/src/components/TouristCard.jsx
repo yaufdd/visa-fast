@@ -345,54 +345,7 @@ function ParseAllButton({ hook, count, fullWidth }) {
   );
 }
 
-// ── Flight area (no card border, just rows or a single line) ─────────────────
-
-function FlightBlockRows({ tourist, onUpdated }) {
-  const [open, setOpen] = useState(false);
-  const flight = useMemo(() => safeParse(tourist.flight_data) || {}, [tourist]);
-  const arrivalStr = formatLeg(flight.arrival);
-  const departureStr = formatLeg(flight.departure);
-  const has = !isLegEmpty(flight.arrival) || !isLegEmpty(flight.departure);
-
-  const handleSave = async (data) => {
-    await updateFlightData(tourist.id, data);
-    onUpdated?.();
-  };
-  const handleApplyToSubgroup = async (data) => {
-    await updateFlightData(tourist.id, data);
-    await applyFlightDataToSubgroup(tourist.id);
-    onUpdated?.();
-  };
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      {has ? (
-        <>
-          {arrivalStr && <FlightLine label="Прилёт" value={arrivalStr} />}
-          {departureStr && <FlightLine label="Обратно" value={departureStr} />}
-          {!arrivalStr && !departureStr && (
-            <div style={{ fontSize: 12, color: 'var(--white-dim)' }}>Данные заполнены частично</div>
-          )}
-        </>
-      ) : (
-        <div style={{ fontSize: 12, color: 'var(--white-dim)' }}>Нет данных о рейсах</div>
-      )}
-      <div>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpen(true)} style={{ marginTop: 4 }}>
-          {has ? 'Изменить' : 'Добавить'}
-        </button>
-      </div>
-      <FlightDataForm
-        open={open}
-        initial={flight}
-        onClose={() => setOpen(false)}
-        onSave={handleSave}
-        canApplyToSubgroup={!!tourist.subgroup_id}
-        onApplyToSubgroup={handleApplyToSubgroup}
-      />
-    </div>
-  );
-}
+// ── Flight area (no card border, rows or single-line summary) ────────────────
 
 function FlightLine({ label, value }) {
   return (
@@ -415,11 +368,11 @@ function FlightLine({ label, value }) {
   );
 }
 
-function FlightSummaryLine({ tourist, onUpdated }) {
+function FlightBlock({ tourist, onUpdated, layout = 'rows' }) {
   const [open, setOpen] = useState(false);
   const flight = useMemo(() => safeParse(tourist.flight_data) || {}, [tourist]);
-  const a = formatLeg(flight.arrival);
-  const d = formatLeg(flight.departure);
+  const arrivalStr = formatLeg(flight.arrival);
+  const departureStr = formatLeg(flight.departure);
   const has = !isLegEmpty(flight.arrival) || !isLegEmpty(flight.departure);
 
   const handleSave = async (data) => {
@@ -432,34 +385,62 @@ function FlightSummaryLine({ tourist, onUpdated }) {
     onUpdated?.();
   };
 
+  const form = (
+    <FlightDataForm
+      open={open}
+      initial={flight}
+      onClose={() => setOpen(false)}
+      onSave={handleSave}
+      canApplyToSubgroup={!!tourist.subgroup_id}
+      onApplyToSubgroup={handleApplyToSubgroup}
+    />
+  );
+
+  if (layout === 'summary') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, lineHeight: 1.4 }}>
+        <span
+          style={{
+            width: 60,
+            flexShrink: 0,
+            color: 'var(--white-dim)',
+            textTransform: 'uppercase',
+            fontSize: 10,
+            letterSpacing: '0.05em',
+          }}
+        >
+          Рейсы
+        </span>
+        <span style={{ flex: 1, color: has ? 'var(--white)' : 'var(--white-dim)', fontFamily: 'var(--font-mono)' }}>
+          {has ? `${arrivalStr || '—'}${departureStr ? `   →   ${departureStr}` : ''}` : 'не заданы'}
+        </span>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpen(true)}>
+          {has ? 'Изменить' : 'Добавить'}
+        </button>
+        {form}
+      </div>
+    );
+  }
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, lineHeight: 1.4 }}>
-      <span
-        style={{
-          width: 60,
-          flexShrink: 0,
-          color: 'var(--white-dim)',
-          textTransform: 'uppercase',
-          fontSize: 10,
-          letterSpacing: '0.05em',
-        }}
-      >
-        Рейсы
-      </span>
-      <span style={{ flex: 1, color: has ? 'var(--white)' : 'var(--white-dim)', fontFamily: 'var(--font-mono)' }}>
-        {has ? `${a || '—'}${d ? `   →   ${d}` : ''}` : 'не заданы'}
-      </span>
-      <button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpen(true)}>
-        {has ? 'Изменить' : 'Добавить'}
-      </button>
-      <FlightDataForm
-        open={open}
-        initial={flight}
-        onClose={() => setOpen(false)}
-        onSave={handleSave}
-        canApplyToSubgroup={!!tourist.subgroup_id}
-        onApplyToSubgroup={handleApplyToSubgroup}
-      />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {has ? (
+        <>
+          {arrivalStr && <FlightLine label="Прилёт" value={arrivalStr} />}
+          {departureStr && <FlightLine label="Обратно" value={departureStr} />}
+          {!arrivalStr && !departureStr && (
+            <div style={{ fontSize: 12, color: 'var(--white-dim)' }}>Данные заполнены частично</div>
+          )}
+        </>
+      ) : (
+        <div style={{ fontSize: 12, color: 'var(--white-dim)' }}>Нет данных о рейсах</div>
+      )}
+      <div>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpen(true)} style={{ marginTop: 4 }}>
+          {has ? 'Изменить' : 'Добавить'}
+        </button>
+      </div>
+      {form}
     </div>
   );
 }
@@ -522,7 +503,7 @@ function CardHeader({ tourist, onDelete, subgroups, onAssign }) {
 function VariantA({ tourist, onUpdated, hook }) {
   return (
     <>
-      <FlightBlockRows tourist={tourist} onUpdated={onUpdated} />
+      <FlightBlock tourist={tourist} onUpdated={onUpdated} layout="rows" />
       <FilesGroup
         title="Билеты"
         items={hook.tickets}
@@ -556,7 +537,7 @@ function VariantB({ tourist, onUpdated, hook }) {
   const totalDocs = hook.uploads.length;
   return (
     <>
-      <FlightSummaryLine tourist={tourist} onUpdated={onUpdated} />
+      <FlightBlock tourist={tourist} onUpdated={onUpdated} layout="summary" />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <button
           type="button"
@@ -670,7 +651,7 @@ function VariantC({ tourist, onUpdated, hook }) {
         }}>
           Рейсы
         </div>
-        <FlightBlockRows tourist={tourist} onUpdated={onUpdated} />
+        <FlightBlock tourist={tourist} onUpdated={onUpdated} layout="rows" />
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <FilesGroup

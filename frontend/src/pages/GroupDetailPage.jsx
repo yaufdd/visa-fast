@@ -33,7 +33,6 @@ const TrashIcon = ({ size = 14 }) => (
 );
 import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
-import ConfirmModal from '../components/ConfirmModal';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -41,20 +40,6 @@ function formatDate(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' });
 }
-
-// Read a field from the tourist's submission_snapshot (raw JSON blob from DB).
-function snapshotOf(tourist) {
-  const raw = tourist?.submission_snapshot;
-  if (!raw) return {};
-  if (typeof raw === 'object') return raw;
-  try { return JSON.parse(raw); } catch { return {}; }
-}
-
-function getTouristName(tourist) {
-  const snap = snapshotOf(tourist);
-  return snap.name_lat || snap.name_cyr || '—';
-}
-
 
 // ── GroupCard ─────────────────────────────────────────────────────────────────
 
