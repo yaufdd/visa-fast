@@ -8,13 +8,19 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"fujitravel-admin/backend/internal/ai"
 	"fujitravel-admin/backend/internal/api"
 	appmw "fujitravel-admin/backend/internal/middleware"
 )
 
 // NewRouter builds the full chi router with public + protected groups.
 // Used by both main.go and integration tests.
-func NewRouter(pool *pgxpool.Pool, anthropicKey, uploadsDir, pythonScript, redactScript string) http.Handler {
+//
+// translator is the Yandex-backed Translator wired in cmd/server/main.go.
+// Tests that don't exercise the /generate paths can pass nil — the router
+// simply forwards it to the handlers, which only dereference it inside
+// runPipeline.
+func NewRouter(pool *pgxpool.Pool, translator ai.Translator, anthropicKey, uploadsDir, pythonScript, redactScript string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.RealIP)
 	r.Use(chimw.RequestID)
@@ -93,7 +99,7 @@ func NewRouter(pool *pgxpool.Pool, anthropicKey, uploadsDir, pythonScript, redac
 			r.Put("/tourists/{id}/subgroup", api.AssignTouristSubgroup(pool))
 			r.Get("/subgroups/{id}/hotels", api.ListSubgroupHotels(pool))
 			r.Post("/subgroups/{id}/hotels", api.UpsertSubgroupHotels(pool))
-			r.Post("/subgroups/{id}/generate", api.GenerateSubgroupDocuments(pool, anthropicKey, uploadsDir, pythonScript))
+			r.Post("/subgroups/{id}/generate", api.GenerateSubgroupDocuments(pool, translator, anthropicKey, uploadsDir, pythonScript))
 			r.Get("/subgroups/{id}/download", api.DownloadSubgroupZIP(pool, uploadsDir))
 
 			// Tourists
@@ -111,7 +117,7 @@ func NewRouter(pool *pgxpool.Pool, anthropicKey, uploadsDir, pythonScript, redac
 			r.Post("/groups/{id}/hotels", api.UpsertGroupHotels(pool))
 
 			// Document generation (AI Pass 2 + Python)
-			r.Post("/groups/{id}/generate", api.GenerateDocuments(pool, anthropicKey, uploadsDir, pythonScript))
+			r.Post("/groups/{id}/generate", api.GenerateDocuments(pool, translator, anthropicKey, uploadsDir, pythonScript))
 			r.Post("/groups/{id}/finalize", api.FinalizeGroup(pool, anthropicKey, uploadsDir, pythonScript))
 			r.Get("/groups/{id}/documents", api.GetDocuments(pool))
 			r.Get("/groups/{id}/download", api.DownloadZIP(pool))

@@ -5,21 +5,33 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"fujitravel-admin/backend/internal/ai"
+	"fujitravel-admin/backend/internal/ai/yandex"
 	dbrepo "fujitravel-admin/backend/internal/db"
 	"fujitravel-admin/backend/internal/server"
 )
 
 func main() {
-	ctx := context.Background()
+	// Root context tied to OS signals so the IAM-token refresh goroutine
+	// (and any other background task) shuts down cleanly when the process
+	// is asked to terminate. Background tasks should derive from this ctx.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	// ── Environment ───────────────────────────────────────────────────────────
 	dbURL := mustEnv("DATABASE_URL")
+	// ANTHROPIC_API_KEY is still required while programme.go and the scan
+	// parsers (ticket_parser, voucher_parser) live on Anthropic — those are
+	// migrated in tasks 1.B2, 1.C1, 1.C2. Once those land this read should
+	// be removed.
 	anthropicKey := mustEnv("ANTHROPIC_API_KEY")
 	uploadsDir := envOrDefault("UPLOADS_DIR", "./uploads")
 	port := envOrDefault("PORT", "8080")
@@ -31,19 +43,28 @@ func main() {
 	}
 	_ = appSecret // currently unused — will be consumed when Tier 2 adds token signing
 
-	// Yandex Cloud credentials for the upcoming Russian-services migration
-	// (Phase 1 of docs/superpowers/plans/2026-04-25-russian-services-migration.md).
-	// During migration both Anthropic and Yandex coexist; these vars are
-	// read but NOT required so existing deployments keep booting. Subsequent
-	// tasks (1.A2 … 1.D1) will wire actual callers and eventually flip the
-	// fatal-required switch once Anthropic is removed.
+	// Yandex Cloud credentials. As of task 1.B1 the translate.go path is
+	// served by YandexGPT, so a Yandex service-account key + folder are
+	// MANDATORY for the server to boot — running without them would yield
+	// a 500 at the first /generate. Anthropic is still required in
+	// parallel for the not-yet-migrated paths (programme, parsers).
 	yandexFolderID := os.Getenv("YANDEX_FOLDER_ID")
 	yandexSAKeyJSON := os.Getenv("YANDEX_SA_KEY_JSON")
 	if yandexFolderID == "" || yandexSAKeyJSON == "" {
-		slog.Info("yandex env not configured — Yandex AI features disabled")
+		slog.Error("YANDEX_FOLDER_ID and YANDEX_SA_KEY_JSON are required — translate.go is served by YandexGPT")
+		os.Exit(1)
 	}
-	_ = yandexFolderID  // wired in a later migration task
-	_ = yandexSAKeyJSON // wired in a later migration task (parsed as authorized_key.json)
+	tokenSource, err := yandex.NewTokenSource([]byte(yandexSAKeyJSON))
+	if err != nil {
+		slog.Error("yandex token source init", "err", err)
+		os.Exit(1)
+	}
+	// Background refresh of the IAM token. Cancelled when ctx is cancelled
+	// by SIGINT/SIGTERM above — the goroutine inside TokenSource exits
+	// without leaking.
+	tokenSource.Start(ctx)
+	gptClient := yandex.NewGPTClientFromSource(tokenSource, yandexFolderID, "")
+	translator := ai.NewYandexAdapter(gptClient)
 
 	// Resolve uploads dir to absolute path relative to cwd.
 	if !filepath.IsAbs(uploadsDir) {
@@ -102,7 +123,7 @@ func main() {
 	}
 
 	// ── Router ────────────────────────────────────────────────────────────────
-	r := server.NewRouter(pool, anthropicKey, uploadsDir, pythonScript, redactScript)
+	r := server.NewRouter(pool, translator, anthropicKey, uploadsDir, pythonScript, redactScript)
 
 	slog.Info("starting server", "port", port)
 	if err := http.ListenAndServe(":"+port, r); err != nil {
