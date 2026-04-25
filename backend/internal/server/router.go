@@ -110,8 +110,8 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 
 			// Per-tourist uploads
 			r.Get("/tourists/{id}/uploads", api.ListTouristUploads(pool))
-			r.Post("/tourists/{id}/uploads", api.UploadTouristFile(pool, uploadsDir, anthropicKey, redactScript))
-			r.Post("/tourists/{id}/uploads/{uploadId}/parse", api.ParseTouristUpload(pool, ocrClient, translator, uploadsDir, anthropicKey, redactScript))
+			r.Post("/tourists/{id}/uploads", api.UploadTouristFile(pool, uploadsDir))
+			r.Post("/tourists/{id}/uploads/{uploadId}/parse", api.ParseTouristUpload(pool, ocrClient, translator, uploadsDir))
 			r.Delete("/tourists/{id}/uploads/{uploadId}", api.DeleteTouristUpload(pool))
 
 			// Group hotels

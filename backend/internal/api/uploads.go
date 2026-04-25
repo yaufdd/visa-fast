@@ -18,7 +18,6 @@ import (
 	"fujitravel-admin/backend/internal/ai"
 	"fujitravel-admin/backend/internal/db"
 	"fujitravel-admin/backend/internal/middleware"
-	"fujitravel-admin/backend/internal/privacy"
 	"fujitravel-admin/backend/internal/storage"
 )
 
@@ -40,12 +39,10 @@ var allowedTouristFileTypes = map[string]bool{
 //     compliant). No on-prem redaction is required — passenger names stay
 //     inside Russia. The raw scan is saved as-is and the parser reads it
 //     directly at /parse time.
-//   - "voucher": still served by Anthropic (Task 1.C2 not yet done). The
-//     guest name is blacked out locally before the file is uploaded to
-//     Anthropic Files. The original stays on disk; only the redacted copy
-//     is shipped to AI. Fail-loud: if no label is found we refuse to
-//     upload and surface an error.
-func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript string) http.HandlerFunc {
+//   - "voucher": same Yandex pipeline as of Task 1.C2. Guest names stay
+//     inside RU residency, so the on-prem redactor is no longer invoked.
+//     The raw scan is saved as-is and ParseTouristUpload reads it directly.
+func UploadTouristFile(pool *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := middleware.OrgID(r.Context())
 		touristID := chi.URLParam(r, "id")
@@ -90,39 +87,9 @@ func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript stri
 			return
 		}
 
-		var anthropicFileID string
-		if fileType == "voucher" {
-			// Voucher path still uses Anthropic until Task 1.C2 — keep the
-			// fail-loud redaction step so PII never leaves Russia.
-			redacted, redactErr := privacy.RedactScan(r.Context(), redactScript, header.Filename, fileData)
-			if redactErr != nil {
-				msg := redactErr.Error()
-				if errors.Is(redactErr, privacy.ErrNoLabelsFound) {
-					msg = "не удалось определить область имени на скане — загрузите более чёткое изображение или заполните поля вручную"
-				}
-				slog.Warn("scan redact failed", "tourist_id", touristID, "err", redactErr)
-				writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-					"id":           "",
-					"tourist_id":   touristID,
-					"file_path":    savedPath,
-					"redact_error": msg,
-					"error":        msg,
-				})
-				return
-			}
-			uploadBytes := redacted.RedactedBytes
-			uploadName := privacy.OutputFilename(header.Filename, redacted.OutputPath)
-
-			// Upload the REDACTED copy to Anthropic (non-fatal — inline
-			// fallback at parse time).
-			if fid, err := ai.UploadFileToAnthropic(apiKey, uploadName, uploadBytes); err != nil {
-				slog.Warn("anthropic file upload failed, will use inline fallback", "err", err)
-			} else {
-				anthropicFileID = fid
-			}
-		}
-		// Ticket path (Yandex): nothing to do here — the raw scan stays on
-		// disk and ParseTouristUpload reads it directly at parse time.
+		// Both ticket and voucher paths use Yandex (RU-resident) — no
+		// on-prem redaction, no Anthropic Files pre-upload. The raw scan
+		// stays on disk and ParseTouristUpload reads it at parse time.
 
 		tid := touristID
 		uploadID, err := db.InsertUpload(r.Context(), pool, orgID, groupID, &tid, fileType, savedPath)
@@ -130,11 +97,6 @@ func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript stri
 			slog.Error("insert tourist upload", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
-		}
-		if anthropicFileID != "" {
-			if err := db.SetUploadAnthropicID(r.Context(), pool, orgID, uploadID, anthropicFileID); err != nil {
-				slog.Warn("set upload anthropic id", "err", err)
-			}
 		}
 
 		writeJSON(w, http.StatusCreated, map[string]any{
@@ -159,9 +121,9 @@ func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript stri
 //   - "ticket": Yandex pipeline (Vision OCR → YandexGPT). Reads the raw
 //     scan from disk and passes it to ai.ParseTicketScan; no redaction
 //     because the call stays inside RU-resident Yandex Cloud.
-//   - "voucher": Anthropic (until Task 1.C2). Uses the cached file_id if
-//     UploadTouristFile pre-uploaded; otherwise re-redacts and inlines.
-func ParseTouristUpload(pool *pgxpool.Pool, ocr ai.OCRRecognizer, translator ai.Translator, uploadsDir, apiKey, redactScript string) http.HandlerFunc {
+//   - "voucher": same Yandex pipeline (Task 1.C2). Reads the raw scan
+//     and calls ai.ParseVoucherScan; no on-prem redaction.
+func ParseTouristUpload(pool *pgxpool.Pool, ocr ai.OCRRecognizer, translator ai.Translator, uploadsDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := middleware.OrgID(r.Context())
 		touristID := chi.URLParam(r, "id")
@@ -178,7 +140,8 @@ func ParseTouristUpload(pool *pgxpool.Pool, ocr ai.OCRRecognizer, translator ai.
 			return
 		}
 
-		// Fetch subgroup id from tourist (voucher parser needs it).
+		// Fetch subgroup id from tourist (voucher parser needs it to scope
+		// the inserted group_hotels rows).
 		var subgroupID *string
 		if err := pool.QueryRow(r.Context(),
 			`SELECT subgroup_id FROM tourists WHERE id = $1 AND org_id = $2`,
@@ -218,35 +181,16 @@ func ParseTouristUpload(pool *pgxpool.Pool, ocr ai.OCRRecognizer, translator ai.
 				return
 			}
 		case "voucher":
-			// Anthropic path: prefer cached file_id; otherwise re-redact and inline.
-			fileInput := ai.FileInput{}
-			if up.AnthropicFileID != nil && *up.AnthropicFileID != "" {
-				fileInput.AnthropicFileID = *up.AnthropicFileID
-				fileInput.Name = filenameFromPath(up.FilePath)
-			} else {
-				origBytes, err := os.ReadFile(up.FilePath)
-				if err != nil {
-					slog.Error("read upload for parse", "err", err)
-					writeError(w, http.StatusInternalServerError, "failed to read upload file")
-					return
-				}
-				redacted, redactErr := privacy.RedactScan(r.Context(), redactScript, filenameFromPath(up.FilePath), origBytes)
-				if redactErr != nil {
-					msg := redactErr.Error()
-					if errors.Is(redactErr, privacy.ErrNoLabelsFound) {
-						msg = "не удалось определить область имени на скане — загрузите более чёткое изображение или заполните поля вручную"
-					}
-					writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-						"id":           up.ID,
-						"redact_error": msg,
-						"error":        msg,
-					})
-					return
-				}
-				fileInput.Name = privacy.OutputFilename(filenameFromPath(up.FilePath), redacted.OutputPath)
-				fileInput.Data = redacted.RedactedBytes
+			// Yandex path: same shape as ticket — read raw bytes, detect
+			// mime, no redaction. Two audit rows per parse (vision + gpt).
+			scanBytes, err := os.ReadFile(up.FilePath)
+			if err != nil {
+				slog.Error("read upload for voucher parse", "err", err)
+				writeError(w, http.StatusInternalServerError, "failed to read upload file")
+				return
 			}
-			if parseErr := parseVoucherAndPersist(aiCtx, pool, apiKey, orgID, up.GroupID, subgroupID, fileInput); parseErr != nil {
+			mime := detectScanMime(up.FilePath, scanBytes)
+			if parseErr := parseVoucherAndPersistYandex(aiCtx, pool, ocr, translator, orgID, up.GroupID, subgroupID, scanBytes, mime); parseErr != nil {
 				slog.Warn("voucher parse failed", "tourist_id", touristID, "err", parseErr)
 				resp["parse_error"] = parseErr.Error()
 				writeJSON(w, http.StatusOK, resp)
@@ -363,11 +307,14 @@ func parseDate(s string) time.Time {
 	return t
 }
 
-// parseVoucherAndPersist calls the voucher parser and, for each hotel,
-// looks up (or creates, scoped to this org) the hotels row and inserts a
-// group_hotels row scoped to the tourist's group_id/subgroup_id and org.
-func parseVoucherAndPersist(ctx context.Context, pool *pgxpool.Pool, apiKey, orgID, groupID string, subgroupID *string, input ai.FileInput) error {
-	hotels, err := ai.ParseVouchers(ctx, apiKey, []ai.FileInput{input})
+// parseVoucherAndPersistYandex runs the two-step Yandex pipeline (Vision
+// OCR → YandexGPT) on the given voucher scan and, for each hotel found,
+// looks up (or creates, scoped to this org) the hotels row and inserts
+// a group_hotels row scoped to the tourist's group_id/subgroup_id and
+// org. Replaces the old Anthropic-based parseVoucherAndPersist as of
+// Task 1.C2.
+func parseVoucherAndPersistYandex(ctx context.Context, pool *pgxpool.Pool, ocr ai.OCRRecognizer, translator ai.Translator, orgID, groupID string, subgroupID *string, scan []byte, mime string) error {
+	hotels, err := ai.ParseVoucherScan(ctx, ocr, translator, scan, mime)
 	if err != nil {
 		return err
 	}
