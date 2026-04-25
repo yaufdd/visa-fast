@@ -17,10 +17,12 @@ import (
 // Used by both main.go and integration tests.
 //
 // translator is the Yandex-backed Translator wired in cmd/server/main.go.
-// Tests that don't exercise the /generate paths can pass nil — the router
-// simply forwards it to the handlers, which only dereference it inside
-// runPipeline.
-func NewRouter(pool *pgxpool.Pool, translator ai.Translator, anthropicKey, uploadsDir, pythonScript, redactScript string) http.Handler {
+// ocrClient is the Yandex Vision OCR seam used by the migrated scan
+// parsers (ticket today; voucher / passport in follow-up tasks). Tests
+// that don't exercise the /generate or /uploads-parse paths can pass
+// nil — the router simply forwards both to the handlers, which only
+// dereference them inside the relevant codepaths.
+func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRecognizer, anthropicKey, uploadsDir, pythonScript, redactScript string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.RealIP)
 	r.Use(chimw.RequestID)
@@ -109,7 +111,7 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, anthropicKey, uploa
 			// Per-tourist uploads
 			r.Get("/tourists/{id}/uploads", api.ListTouristUploads(pool))
 			r.Post("/tourists/{id}/uploads", api.UploadTouristFile(pool, uploadsDir, anthropicKey, redactScript))
-			r.Post("/tourists/{id}/uploads/{uploadId}/parse", api.ParseTouristUpload(pool, uploadsDir, anthropicKey, redactScript))
+			r.Post("/tourists/{id}/uploads/{uploadId}/parse", api.ParseTouristUpload(pool, ocrClient, translator, uploadsDir, anthropicKey, redactScript))
 			r.Delete("/tourists/{id}/uploads/{uploadId}", api.DeleteTouristUpload(pool))
 
 			// Group hotels

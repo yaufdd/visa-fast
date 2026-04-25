@@ -66,6 +66,16 @@ func main() {
 	gptClient := yandex.NewGPTClientFromSource(tokenSource, yandexFolderID, "")
 	translator := ai.NewYandexAdapter(gptClient)
 
+	// Vision OCR client (Task 1.C1): used by the migrated ticket parser
+	// (and the upcoming voucher / passport parsers) to OCR a scan into
+	// plain text before the GPT extractor reads it. Wrapped in
+	// NewYandexOCRAdapter so every Recognize call writes one
+	// yandex-vision audit row in parallel with the yandex-gpt row from
+	// the extractor — managers see both halves of the pipeline in the
+	// AI audit log.
+	ocrRaw := yandex.NewOCRClientFromSource(tokenSource, yandexFolderID, "")
+	ocrClient := ai.NewYandexOCRAdapter(ocrRaw)
+
 	// Resolve uploads dir to absolute path relative to cwd.
 	if !filepath.IsAbs(uploadsDir) {
 		cwd, err := os.Getwd()
@@ -123,7 +133,7 @@ func main() {
 	}
 
 	// ── Router ────────────────────────────────────────────────────────────────
-	r := server.NewRouter(pool, translator, anthropicKey, uploadsDir, pythonScript, redactScript)
+	r := server.NewRouter(pool, translator, ocrClient, anthropicKey, uploadsDir, pythonScript, redactScript)
 
 	slog.Info("starting server", "port", port)
 	if err := http.ListenAndServe(":"+port, r); err != nil {

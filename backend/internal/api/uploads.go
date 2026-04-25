@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -30,13 +31,20 @@ var allowedTouristFileTypes = map[string]bool{
 }
 
 // UploadTouristFile handles POST /api/tourists/:id/uploads.
-// Two-step flow: this handler ONLY saves the file (and pre-uploads the
-// redacted copy to Anthropic Files so a later /parse call is cheap). It does
-// NOT invoke the AI parser — the manager triggers that explicitly via the
+// Two-step flow: this handler ONLY saves the file. It does NOT invoke
+// the AI parser — the manager triggers that explicitly via the
 // "Распознать" button (ParseTouristUpload).
 //
-// Redaction still happens here (fail-loud) so the original never leaves the
-// server. Only the redacted bytes are ever uploaded to Anthropic.
+// Redaction policy:
+//   - "ticket": parsed via Yandex Vision + YandexGPT (RU-resident, 152-ФЗ
+//     compliant). No on-prem redaction is required — passenger names stay
+//     inside Russia. The raw scan is saved as-is and the parser reads it
+//     directly at /parse time.
+//   - "voucher": still served by Anthropic (Task 1.C2 not yet done). The
+//     guest name is blacked out locally before the file is uploaded to
+//     Anthropic Files. The original stays on disk; only the redacted copy
+//     is shipped to AI. Fail-loud: if no label is found we refuse to
+//     upload and surface an error.
 func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := middleware.OrgID(r.Context())
@@ -82,40 +90,39 @@ func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript stri
 			return
 		}
 
-		// Redact passenger/guest name locally BEFORE anything touches
-		// Anthropic. The original stays on disk (savedPath) but never leaves
-		// the server; only the redacted copy is used for the AI path.
-		//
-		// Fail-loud policy: if the redactor can't find a name label we refuse
-		// to ship the scan to AI and surface an error to the manager so they
-		// can redact manually or enter fields by hand.
-		redacted, redactErr := privacy.RedactScan(r.Context(), redactScript, header.Filename, fileData)
-		if redactErr != nil {
-			msg := redactErr.Error()
-			if errors.Is(redactErr, privacy.ErrNoLabelsFound) {
-				msg = "не удалось определить область имени на скане — загрузите более чёткое изображение или заполните поля вручную"
-			}
-			slog.Warn("scan redact failed", "tourist_id", touristID, "err", redactErr)
-			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-				"id":           "",
-				"tourist_id":   touristID,
-				"file_path":    savedPath,
-				"redact_error": msg,
-				"error":        msg,
-			})
-			return
-		}
-		uploadBytes := redacted.RedactedBytes
-		uploadName := privacy.OutputFilename(header.Filename, redacted.OutputPath)
-
-		// Upload the REDACTED copy to Anthropic (non-fatal — inline fallback
-		// at parse time).
 		var anthropicFileID string
-		if fid, err := ai.UploadFileToAnthropic(apiKey, uploadName, uploadBytes); err != nil {
-			slog.Warn("anthropic file upload failed, will use inline fallback", "err", err)
-		} else {
-			anthropicFileID = fid
+		if fileType == "voucher" {
+			// Voucher path still uses Anthropic until Task 1.C2 — keep the
+			// fail-loud redaction step so PII never leaves Russia.
+			redacted, redactErr := privacy.RedactScan(r.Context(), redactScript, header.Filename, fileData)
+			if redactErr != nil {
+				msg := redactErr.Error()
+				if errors.Is(redactErr, privacy.ErrNoLabelsFound) {
+					msg = "не удалось определить область имени на скане — загрузите более чёткое изображение или заполните поля вручную"
+				}
+				slog.Warn("scan redact failed", "tourist_id", touristID, "err", redactErr)
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+					"id":           "",
+					"tourist_id":   touristID,
+					"file_path":    savedPath,
+					"redact_error": msg,
+					"error":        msg,
+				})
+				return
+			}
+			uploadBytes := redacted.RedactedBytes
+			uploadName := privacy.OutputFilename(header.Filename, redacted.OutputPath)
+
+			// Upload the REDACTED copy to Anthropic (non-fatal — inline
+			// fallback at parse time).
+			if fid, err := ai.UploadFileToAnthropic(apiKey, uploadName, uploadBytes); err != nil {
+				slog.Warn("anthropic file upload failed, will use inline fallback", "err", err)
+			} else {
+				anthropicFileID = fid
+			}
 		}
+		// Ticket path (Yandex): nothing to do here — the raw scan stays on
+		// disk and ParseTouristUpload reads it directly at parse time.
 
 		tid := touristID
 		uploadID, err := db.InsertUpload(r.Context(), pool, orgID, groupID, &tid, fileType, savedPath)
@@ -147,7 +154,14 @@ func UploadTouristFile(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript stri
 // Runs the matching AI parser (ticket or voucher) on a previously uploaded
 // file and stamps parsed_at on success. Idempotent-ish: callers may re-parse,
 // though the UI normally hides the button once parsed_at is set.
-func ParseTouristUpload(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript string) http.HandlerFunc {
+//
+// Provider routing per file_type:
+//   - "ticket": Yandex pipeline (Vision OCR → YandexGPT). Reads the raw
+//     scan from disk and passes it to ai.ParseTicketScan; no redaction
+//     because the call stays inside RU-resident Yandex Cloud.
+//   - "voucher": Anthropic (until Task 1.C2). Uses the cached file_id if
+//     UploadTouristFile pre-uploaded; otherwise re-redacts and inlines.
+func ParseTouristUpload(pool *pgxpool.Pool, ocr ai.OCRRecognizer, translator ai.Translator, uploadsDir, apiKey, redactScript string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := middleware.OrgID(r.Context())
 		touristID := chi.URLParam(r, "id")
@@ -174,37 +188,6 @@ func ParseTouristUpload(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript str
 			return
 		}
 
-		// Build the FileInput. Prefer the cached Anthropic file ID; if it
-		// wasn't uploaded (Anthropic was down at upload time), re-read the
-		// original from disk and re-redact on the fly for an inline fallback.
-		fileInput := ai.FileInput{}
-		if up.AnthropicFileID != nil && *up.AnthropicFileID != "" {
-			fileInput.AnthropicFileID = *up.AnthropicFileID
-			fileInput.Name = filenameFromPath(up.FilePath)
-		} else {
-			origBytes, err := os.ReadFile(up.FilePath)
-			if err != nil {
-				slog.Error("read upload for parse", "err", err)
-				writeError(w, http.StatusInternalServerError, "failed to read upload file")
-				return
-			}
-			redacted, redactErr := privacy.RedactScan(r.Context(), redactScript, filenameFromPath(up.FilePath), origBytes)
-			if redactErr != nil {
-				msg := redactErr.Error()
-				if errors.Is(redactErr, privacy.ErrNoLabelsFound) {
-					msg = "не удалось определить область имени на скане — загрузите более чёткое изображение или заполните поля вручную"
-				}
-				writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-					"id":           up.ID,
-					"redact_error": msg,
-					"error":        msg,
-				})
-				return
-			}
-			fileInput.Name = privacy.OutputFilename(filenameFromPath(up.FilePath), redacted.OutputPath)
-			fileInput.Data = redacted.RedactedBytes
-		}
-
 		sgID := ""
 		if subgroupID != nil {
 			sgID = *subgroupID
@@ -220,13 +203,49 @@ func ParseTouristUpload(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript str
 
 		switch up.FileType {
 		case "ticket":
-			if parseErr := parseTicketAndPersist(aiCtx, pool, apiKey, orgID, touristID, fileInput); parseErr != nil {
+			// Yandex path: read raw bytes, detect mime, no redaction.
+			scanBytes, err := os.ReadFile(up.FilePath)
+			if err != nil {
+				slog.Error("read upload for ticket parse", "err", err)
+				writeError(w, http.StatusInternalServerError, "failed to read upload file")
+				return
+			}
+			mime := detectScanMime(up.FilePath, scanBytes)
+			if parseErr := parseTicketAndPersistYandex(aiCtx, pool, ocr, translator, orgID, touristID, scanBytes, mime); parseErr != nil {
 				slog.Warn("ticket parse failed", "tourist_id", touristID, "err", parseErr)
 				resp["parse_error"] = parseErr.Error()
 				writeJSON(w, http.StatusOK, resp)
 				return
 			}
 		case "voucher":
+			// Anthropic path: prefer cached file_id; otherwise re-redact and inline.
+			fileInput := ai.FileInput{}
+			if up.AnthropicFileID != nil && *up.AnthropicFileID != "" {
+				fileInput.AnthropicFileID = *up.AnthropicFileID
+				fileInput.Name = filenameFromPath(up.FilePath)
+			} else {
+				origBytes, err := os.ReadFile(up.FilePath)
+				if err != nil {
+					slog.Error("read upload for parse", "err", err)
+					writeError(w, http.StatusInternalServerError, "failed to read upload file")
+					return
+				}
+				redacted, redactErr := privacy.RedactScan(r.Context(), redactScript, filenameFromPath(up.FilePath), origBytes)
+				if redactErr != nil {
+					msg := redactErr.Error()
+					if errors.Is(redactErr, privacy.ErrNoLabelsFound) {
+						msg = "не удалось определить область имени на скане — загрузите более чёткое изображение или заполните поля вручную"
+					}
+					writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+						"id":           up.ID,
+						"redact_error": msg,
+						"error":        msg,
+					})
+					return
+				}
+				fileInput.Name = privacy.OutputFilename(filenameFromPath(up.FilePath), redacted.OutputPath)
+				fileInput.Data = redacted.RedactedBytes
+			}
 			if parseErr := parseVoucherAndPersist(aiCtx, pool, apiKey, orgID, up.GroupID, subgroupID, fileInput); parseErr != nil {
 				slog.Warn("voucher parse failed", "tourist_id", touristID, "err", parseErr)
 				resp["parse_error"] = parseErr.Error()
@@ -247,6 +266,50 @@ func ParseTouristUpload(pool *pgxpool.Pool, uploadsDir, apiKey, redactScript str
 	}
 }
 
+// detectScanMime returns one of "application/pdf", "image/jpeg", or
+// "image/png" based on the file extension, falling back to
+// http.DetectContentType for ambiguous filenames. The Yandex Vision OCR
+// client only accepts these three; anything else will be rejected
+// upstream.
+func detectScanMime(path string, head []byte) string {
+	switch strings.ToLower(extOf(path)) {
+	case ".pdf":
+		return "application/pdf"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	}
+	if len(head) > 512 {
+		head = head[:512]
+	}
+	ct := http.DetectContentType(head)
+	switch {
+	case strings.HasPrefix(ct, "application/pdf"):
+		return "application/pdf"
+	case strings.HasPrefix(ct, "image/jpeg"):
+		return "image/jpeg"
+	case strings.HasPrefix(ct, "image/png"):
+		return "image/png"
+	default:
+		return ct
+	}
+}
+
+// extOf returns the lowercased dot-prefixed extension of path, or "" if
+// none.
+func extOf(path string) string {
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '.' {
+			return path[i:]
+		}
+		if path[i] == '/' || path[i] == '\\' {
+			return ""
+		}
+	}
+	return ""
+}
+
 // filenameFromPath pulls the last path segment (works for both / and \\).
 func filenameFromPath(p string) string {
 	for i := len(p) - 1; i >= 0; i-- {
@@ -257,10 +320,12 @@ func filenameFromPath(p string) string {
 	return p
 }
 
-// parseTicketAndPersist calls the ticket parser and writes the result into
-// tourists.flight_data (scoped to org).
-func parseTicketAndPersist(ctx context.Context, pool *pgxpool.Pool, apiKey, orgID, touristID string, input ai.FileInput) error {
-	flights, err := ai.ParseTicket(ctx, apiKey, []ai.FileInput{input})
+// parseTicketAndPersistYandex runs the two-step Yandex pipeline (Vision
+// OCR → YandexGPT) on the given scan and writes the parsed flights into
+// tourists.flight_data (scoped to org). Replaces the old Anthropic-based
+// parseTicketAndPersist as of Task 1.C1.
+func parseTicketAndPersistYandex(ctx context.Context, pool *pgxpool.Pool, ocr ai.OCRRecognizer, translator ai.Translator, orgID, touristID string, scan []byte, mime string) error {
+	flights, err := ai.ParseTicketScan(ctx, ocr, translator, scan, mime)
 	if err != nil {
 		return err
 	}
