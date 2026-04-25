@@ -20,21 +20,27 @@ func NewGenerationID() string {
 		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// CallLog is the shape of one audit-log entry for a single Anthropic call.
-// Written via Logger.Log inside callClaude — every HTTP call to Claude is
-// observed so nothing can leak out unrecorded.
+// CallLog is the shape of one audit-log entry for a single AI provider call.
+// Written via Logger.Log inside the per-provider HTTP seam (e.g. callClaude)
+// — every outbound AI request is observed so nothing can leak out unrecorded.
 type CallLog struct {
 	OrgID        string          // org_id of the calling tenant; "" if request is not org-scoped
 	GroupID      string          // group_id this generation belongs to; "" if not applicable
 	SubgroupID   string          // subgroup_id if the call targets one subgroup
 	GenerationID string          // UUID grouping every call inside one /generate or /finalize run
 	FunctionName string          // "translate" | "programme" | "ticket_parser" | "voucher_parser"
-	Model        string          // claude model id
-	RequestJSON  json.RawMessage // anthropicRequest marshalled, with image bytes redacted
-	ResponseText string          // raw text reply from Claude (empty on error)
+	// Provider names the AI vendor that served this call. Required on every
+	// row. Allowed values mirror the DB CHECK constraint
+	// (migration 000019): "anthropic", "yandex-gpt", "yandex-vision".
+	// Validation is delegated to the DB so future providers can be added by
+	// migration alone — the Go code records the value verbatim.
+	Provider     string
+	Model        string          // model id (provider-specific, e.g. claude-haiku-4-5)
+	RequestJSON  json.RawMessage // request marshalled, with image bytes redacted
+	ResponseText string          // raw text reply from the provider (empty on error)
 	Status       string          // "success" | "error"
 	ErrorMsg     string          // non-empty on failure
-	InputTokens  int             // future: parse from Anthropic response
+	InputTokens  int             // future: parse from provider response
 	OutputTokens int
 	StartedAt    time.Time
 	FinishedAt   time.Time

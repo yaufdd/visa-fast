@@ -92,6 +92,7 @@ func callClaude(ctx context.Context, apiKey string, reqBody anthropicRequest) (s
 		SubgroupID:   SubgroupIDFromContext(ctx),
 		GenerationID: GenerationIDFromContext(ctx),
 		FunctionName: FunctionNameFromContext(ctx),
+		Provider:     "anthropic",
 		Model:        reqBody.Model,
 		RequestJSON:  redactRequestForLog(reqBody),
 		StartedAt:    started,

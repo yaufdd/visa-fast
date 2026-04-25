@@ -89,6 +89,9 @@ func TestCallClaude_writesAuditLog_success(t *testing.T) {
 	if entry.FunctionName != "translate" {
 		t.Errorf("function_name = %q", entry.FunctionName)
 	}
+	if entry.Provider != "anthropic" {
+		t.Errorf("provider = %q, want anthropic", entry.Provider)
+	}
 	if entry.OrgID != "org-xyz" || entry.GenerationID != "gen-123" || entry.GroupID != "group-abc" {
 		t.Errorf("ctx fields not captured: %+v", entry)
 	}
@@ -135,6 +138,9 @@ func TestCallClaude_writesAuditLog_error(t *testing.T) {
 	}
 	if entry.ErrorMsg == "" {
 		t.Error("error_msg empty on failed call")
+	}
+	if entry.Provider != "anthropic" {
+		t.Errorf("provider = %q on error path, want anthropic", entry.Provider)
 	}
 }
 

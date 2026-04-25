@@ -24,9 +24,11 @@ func NewPgxAILogger(pool *pgxpool.Pool) *PgxAILogger {
 	return &PgxAILogger{Pool: pool}
 }
 
-// Log implements ai.Logger. Rows missing org_id OR generation_id are
-// skipped silently (test harness calls, one-off utilities) rather than
-// failing the NOT NULL constraint.
+// Log implements ai.Logger. Rows missing org_id, generation_id, or provider
+// are skipped silently (test harness calls, one-off utilities) rather than
+// failing the NOT NULL / CHECK constraints. Provider validity is enforced
+// by the DB CHECK constraint (migration 000019); an unknown value yields a
+// logged warning here but never aborts the AI call.
 func (l *PgxAILogger) Log(ctx context.Context, e ai.CallLog) error {
 	if l == nil || l.Pool == nil {
 		return nil
@@ -34,9 +36,14 @@ func (l *PgxAILogger) Log(ctx context.Context, e ai.CallLog) error {
 	if e.OrgID == "" || e.GenerationID == "" {
 		return nil
 	}
+	if e.Provider == "" {
+		slog.Warn("ai_call_logs insert skipped: empty provider",
+			"function", e.FunctionName, "generation_id", e.GenerationID)
+		return nil
+	}
 	// The calling request's ctx may already be cancelled by the time the
-	// deferred Log runs (e.g. client disconnects right after Claude returns).
-	// Use a detached Background ctx so the audit row still lands.
+	// deferred Log runs (e.g. client disconnects right after the provider
+	// returns). Use a detached Background ctx so the audit row still lands.
 	bg, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -48,19 +55,19 @@ func (l *PgxAILogger) Log(ctx context.Context, e ai.CallLog) error {
 	_, err := l.Pool.Exec(bg, `
 		INSERT INTO ai_call_logs (
 			org_id, group_id, subgroup_id, generation_id,
-			function_name, model, request_json, response_text,
+			function_name, provider, model, request_json, response_text,
 			status, error_msg, input_tokens, output_tokens,
 			started_at, finished_at, duration_ms
 		) VALUES (
 			$1, $2, $3, $4,
-			$5, $6, $7, $8,
-			$9, $10, $11, $12,
-			$13, $14, $15
+			$5, $6, $7, $8, $9,
+			$10, $11, $12, $13,
+			$14, $15, $16
 		)`,
 		e.OrgID,
 		nullUUID(e.GroupID), nullUUID(e.SubgroupID),
 		e.GenerationID,
-		e.FunctionName, e.Model, reqJSON, nullString(e.ResponseText),
+		e.FunctionName, e.Provider, e.Model, reqJSON, nullString(e.ResponseText),
 		e.Status, nullString(e.ErrorMsg),
 		nullInt(e.InputTokens), nullInt(e.OutputTokens),
 		e.StartedAt, e.FinishedAt, e.DurationMs,
@@ -95,21 +102,22 @@ func nullInt(i int) any {
 
 // AICallLogRow is one row returned by ListAICallLogsForGroup.
 type AICallLogRow struct {
-	ID           string           `json:"id"`
-	GenerationID string           `json:"generation_id"`
-	GroupID      sql.NullString   `json:"-"`
-	SubgroupID   sql.NullString   `json:"-"`
-	FunctionName string           `json:"function_name"`
-	Model        string           `json:"model"`
-	RequestJSON  json.RawMessage  `json:"request_json"`
-	ResponseText sql.NullString   `json:"-"`
-	Status       string           `json:"status"`
-	ErrorMsg     sql.NullString   `json:"-"`
-	InputTokens  sql.NullInt32    `json:"-"`
-	OutputTokens sql.NullInt32    `json:"-"`
-	StartedAt    time.Time        `json:"started_at"`
-	FinishedAt   sql.NullTime     `json:"-"`
-	DurationMs   int              `json:"duration_ms"`
+	ID           string          `json:"id"`
+	GenerationID string          `json:"generation_id"`
+	GroupID      sql.NullString  `json:"-"`
+	SubgroupID   sql.NullString  `json:"-"`
+	FunctionName string          `json:"function_name"`
+	Provider     string          `json:"provider"`
+	Model        string          `json:"model"`
+	RequestJSON  json.RawMessage `json:"request_json"`
+	ResponseText sql.NullString  `json:"-"`
+	Status       string          `json:"status"`
+	ErrorMsg     sql.NullString  `json:"-"`
+	InputTokens  sql.NullInt32   `json:"-"`
+	OutputTokens sql.NullInt32   `json:"-"`
+	StartedAt    time.Time       `json:"started_at"`
+	FinishedAt   sql.NullTime    `json:"-"`
+	DurationMs   int             `json:"duration_ms"`
 }
 
 // MarshalJSON flattens the sql.Null* fields so the wire JSON is friendly
@@ -171,7 +179,7 @@ func PurgeOldAICallLogs(ctx context.Context, pool *pgxpool.Pool, days int) (int6
 func ListAICallLogsForGroup(ctx context.Context, pool *pgxpool.Pool, orgID, groupID string) ([]AICallLogRow, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT id, generation_id, group_id, subgroup_id,
-		       function_name, model, request_json, response_text,
+		       function_name, provider, model, request_json, response_text,
 		       status, error_msg, input_tokens, output_tokens,
 		       started_at, finished_at, duration_ms
 		  FROM ai_call_logs
@@ -188,7 +196,7 @@ func ListAICallLogsForGroup(ctx context.Context, pool *pgxpool.Pool, orgID, grou
 		var r AICallLogRow
 		if err := rows.Scan(
 			&r.ID, &r.GenerationID, &r.GroupID, &r.SubgroupID,
-			&r.FunctionName, &r.Model, &r.RequestJSON, &r.ResponseText,
+			&r.FunctionName, &r.Provider, &r.Model, &r.RequestJSON, &r.ResponseText,
 			&r.Status, &r.ErrorMsg, &r.InputTokens, &r.OutputTokens,
 			&r.StartedAt, &r.FinishedAt, &r.DurationMs,
 		); err != nil {
