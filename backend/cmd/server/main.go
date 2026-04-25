@@ -31,6 +31,20 @@ func main() {
 	}
 	_ = appSecret // currently unused — will be consumed when Tier 2 adds token signing
 
+	// Yandex Cloud credentials for the upcoming Russian-services migration
+	// (Phase 1 of docs/superpowers/plans/2026-04-25-russian-services-migration.md).
+	// During migration both Anthropic and Yandex coexist; these vars are
+	// read but NOT required so existing deployments keep booting. Subsequent
+	// tasks (1.A2 … 1.D1) will wire actual callers and eventually flip the
+	// fatal-required switch once Anthropic is removed.
+	yandexFolderID := os.Getenv("YANDEX_FOLDER_ID")
+	yandexSAKeyJSON := os.Getenv("YANDEX_SA_KEY_JSON")
+	if yandexFolderID == "" || yandexSAKeyJSON == "" {
+		slog.Info("yandex env not configured — Yandex AI features disabled")
+	}
+	_ = yandexFolderID  // wired in a later migration task
+	_ = yandexSAKeyJSON // wired in a later migration task (parsed as authorized_key.json)
+
 	// Resolve uploads dir to absolute path relative to cwd.
 	if !filepath.IsAbs(uploadsDir) {
 		cwd, err := os.Getwd()

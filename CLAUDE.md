@@ -81,6 +81,14 @@ DOCGEN_SCRIPT=../../docgen/generate.py
 DOCGEN_PDF_TEMPLATE=./templates/anketa_template.pdf
 REDACT_SCAN_SCRIPT=../../docgen/redact_scan.py  # Python OCR redactor for ticket/voucher scans
 AI_LOG_RETENTION_DAYS=30  # ai_call_logs auto-cleanup; 0 disables
+
+# Yandex Cloud — required for the Yandex AI features wired in later migration tasks
+# (Phase 1 of docs/superpowers/plans/2026-04-25-russian-services-migration.md).
+# Currently read but not required — backend boots without them and logs an info
+# line that Yandex AI features are disabled. Will become required once Anthropic
+# is removed in task 1.D1.
+YANDEX_FOLDER_ID=b1gv...                 # Yandex Cloud folder id
+YANDEX_SA_KEY_JSON={"id":"...","service_account_id":"...","private_key":"..."}  # full authorized_key.json contents
 ```
 
 Backend **refuses to start** without `APP_SECRET` set.
