@@ -347,7 +347,7 @@ func runPipeline(ctx context.Context, pool *pgxpool.Pool, translator ai.Translat
 		return nil
 	})
 	g.Go(func() error {
-		p, err := ai.GenerateProgramme(gctx, apiKey, programmeInput)
+		p, err := ai.GenerateProgramme(gctx, translator, programmeInput)
 		if err != nil {
 			return fmt.Errorf("programme: %w", err)
 		}

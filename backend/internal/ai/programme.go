@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"fujitravel-admin/backend/internal/ai/yandex"
 )
 
 // FlightBrief is the minimal flight info needed for the programme.
@@ -23,8 +25,10 @@ type HotelBrief struct {
 	CheckOut string `json:"check_out"`
 }
 
-// ProgrammeInput is the full payload sent to Claude Opus for the
+// ProgrammeInput is the full payload sent to YandexGPT for the
 // itinerary. No tourist PII — only dates, hotels, one contact phone.
+// The single contact_phone is a guide phone (already on the no-PII
+// side per CLAUDE.md "AI Privacy" section), not a tourist phone.
 type ProgrammeInput struct {
 	ArrivalDate     string       `json:"arrival_date"`
 	DepartureDate   string       `json:"departure_date,omitempty"`
@@ -115,10 +119,27 @@ MANAGER NOTES (manager_notes field on the input):
   default rules alone.
 
 OUTPUT SCHEMA (array only, no wrapper):
-[ { "date": "YYYY-DD-MM", "activity": "...", "contact": "...", "accommodation": "..." } ]`
+[ { "date": "YYYY-DD-MM", "activity": "...", "contact": "...", "accommodation": "..." } ]
 
-// GenerateProgramme asks Claude Opus to produce the programme day rows.
-func GenerateProgramme(ctx context.Context, apiKey string, in ProgrammeInput) ([]ProgrammeDay, error) {
+STRICT FACTUALITY:
+- Every place name MUST be a real, well-known landmark verifiable on Google Maps.
+- If even slightly unsure, choose a more famous alternative.
+- NEVER use hedging phrases like "if time allows" — those are red flags that you are guessing. Output places with full confidence or do not output them at all.
+- Do NOT invent fictional districts, neighborhoods, or attractions. If a city has fewer than 3 famous landmarks for a given day, prefer to repeat a generic activity over fabricating a place.`
+
+// GenerateProgramme asks YandexGPT to produce the programme day rows.
+//
+// PII contract: ProgrammeInput carries only dates, flights, hotels, the
+// guide contact phone, and free-form manager notes — none of which are
+// classified as PII per CLAUDE.md "AI Privacy" section. Tourist names,
+// passport data, dates of birth, home/registration addresses and tourist
+// phones must NOT be added to ProgrammeInput; the audit log records the
+// full system + user payload verbatim, so leakage here would breach the
+// 152-ФЗ contract documented on yandexGPTAdapter.
+func GenerateProgramme(ctx context.Context, t Translator, in ProgrammeInput) ([]ProgrammeDay, error) {
+	if t == nil {
+		return nil, fmt.Errorf("programme: nil translator")
+	}
 	ctx = WithFunctionName(ctx, "programme")
 	body, err := json.MarshalIndent(in, "", "  ")
 	if err != nil {
@@ -127,25 +148,15 @@ func GenerateProgramme(ctx context.Context, apiKey string, in ProgrammeInput) ([
 
 	userMsg := "Trip data:\n\n```json\n" + string(body) + "\n```\n\nProduce the programme array."
 
-	// Note: claude-opus-4-7 deprecates the `temperature` parameter; the
-	// model uses its default sampling. `omitempty` on the struct field
-	// would also drop `0`, but omitting the line entirely makes the
-	// intent explicit.
-	req := anthropicRequest{
-		Model:     ModelOpusProgramme,
-		MaxTokens: 4096,
-		System:    programmeSystemPrompt,
-		Messages: []anthropicMessage{{
-			Role: "user",
-			Content: []anthropicContent{
-				{Type: "text", Text: userMsg},
-			},
-		}},
-	}
-
-	raw, err := callClaude(ctx, apiKey, req)
+	raw, err := t.Chat(ctx, yandex.ChatRequest{
+		System:      programmeSystemPrompt,
+		User:        userMsg,
+		MaxTokens:   4096,
+		Temperature: 0,
+		JSONOutput:  true,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("programme claude call: %w", err)
+		return nil, fmt.Errorf("programme yandex call: %w", err)
 	}
 
 	js := extractJSON(raw)
