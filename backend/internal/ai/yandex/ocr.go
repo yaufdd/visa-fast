@@ -119,7 +119,7 @@ func (c *OCRClient) Recognize(ctx context.Context, content []byte, mime string) 
 	if mime != "application/pdf" {
 		text, err := c.recognizeOnce(ctx, content, mime)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("yandex ocr: %w", err)
 		}
 		return []string{text}, nil
 	}
@@ -136,7 +136,7 @@ func (c *OCRClient) Recognize(ctx context.Context, content []byte, mime string) 
 	if pageCount == 1 {
 		text, err := c.recognizeOnce(ctx, content, mime)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("yandex ocr: %w", err)
 		}
 		return []string{text}, nil
 	}
@@ -149,7 +149,7 @@ func (c *OCRClient) Recognize(ctx context.Context, content []byte, mime string) 
 		}
 		text, err := c.recognizeOnce(ctx, pageBytes, mime)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("yandex ocr: page %d: %w", i, err)
 		}
 		results = append(results, text)
 	}
@@ -174,10 +174,15 @@ func extractSinglePage(pdfBytes []byte, pageNr int) ([]byte, error) {
 // error. Empty / missing textAnnotation is logged at warn but not
 // treated as a failure: a multi-page PDF where one page is blank should
 // still produce results for the other pages.
+//
+// Errors returned here are deliberately PREFIX-FREE — the caller
+// (Recognize) adds either "yandex ocr: " or "yandex ocr: page N: "
+// depending on context, so we don't end up with strings like
+// "yandex ocr: yandex ocr: status 503".
 func (c *OCRClient) recognizeOnce(ctx context.Context, content []byte, mime string) (string, error) {
 	bearer, err := c.bearer(ctx)
 	if err != nil {
-		return "", fmt.Errorf("yandex ocr: obtain iam token: %w", err)
+		return "", fmt.Errorf("obtain iam token: %w", err)
 	}
 
 	body := ocrRequestBody{
@@ -188,13 +193,13 @@ func (c *OCRClient) recognizeOnce(ctx context.Context, content []byte, mime stri
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
-		return "", fmt.Errorf("yandex ocr: marshal request: %w", err)
+		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
 	url := c.endpoint + "/ocr/v1/recognizeText"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
 	if err != nil {
-		return "", fmt.Errorf("yandex ocr: build request: %w", err)
+		return "", fmt.Errorf("build request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+bearer)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -202,21 +207,21 @@ func (c *OCRClient) recognizeOnce(ctx context.Context, content []byte, mime stri
 
 	resp, err := ocrHTTPClient.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("yandex ocr: round-trip: %w", err)
+		return "", fmt.Errorf("round-trip: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("yandex ocr: read response: %w", err)
+		return "", fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("yandex ocr: status %d: %s", resp.StatusCode, truncate(string(respBody), 512))
+		return "", fmt.Errorf("status %d: %s", resp.StatusCode, truncate(string(respBody), 512))
 	}
 
 	var out ocrResponseBody
 	if err := json.Unmarshal(respBody, &out); err != nil {
-		return "", fmt.Errorf("yandex ocr: decode response: %w", err)
+		return "", fmt.Errorf("decode response: %w", err)
 	}
 	text := out.Result.TextAnnotation.FullText
 	if text == "" {

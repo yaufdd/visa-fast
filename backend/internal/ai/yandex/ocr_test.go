@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -290,5 +293,104 @@ func TestOCR_DefaultEndpointWhenEmpty(t *testing.T) {
 	}
 	if len(pages) != 1 || pages[0] != "default-ocr-ok" {
 		t.Errorf("pages = %v, want [default-ocr-ok]", pages)
+	}
+}
+
+// dirSnapshot returns a stable, comparable string of the entries in dir,
+// or "<missing>" if dir does not exist. It is used to detect whether
+// pdfcpu silently writes config files to a directory between two
+// observations.
+func dirSnapshot(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "<missing>"
+	}
+	if err != nil {
+		t.Fatalf("readdir %s: %v", dir, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	return strings.Join(names, ",")
+}
+
+// TestNoPDFCPUConfigSideEffects guards the api.DisableConfigDir() call in
+// pdfcpu_init.go. Without that init, pdfcpu would lazily create
+// ~/Library/Application Support/pdfcpu/{config.yml,fonts/,certs/} on the
+// first multi-page PDF call — which breaks read-only container
+// filesystems and pollutes CI sandboxes.
+//
+// The test is idempotent: if the pdfcpu directory was already created by
+// a prior tool run on the developer's machine, the snapshot will compare
+// equal because we only check that the OCR call did not ADD entries.
+func TestNoPDFCPUConfigSideEffects(t *testing.T) {
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		t.Skip("UserConfigDir unavailable")
+	}
+	pdfcpuDir := filepath.Join(cfgDir, "pdfcpu")
+
+	before := dirSnapshot(t, pdfcpuDir)
+
+	// Drive a multi-page OCR using the committed two-page fixture; the
+	// httptest server makes this hermetic. Result is discarded — we only
+	// care about disk side-effects of the pdfcpu split.
+	pdfBytes := fixturePDF(t, "two-page.pdf")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOCRResponse(t, w, "side-effect-test")
+	}))
+	defer srv.Close()
+
+	c := NewOCRClient("test-token", "test-folder", srv.URL)
+	if _, err := c.Recognize(context.Background(), pdfBytes, "application/pdf"); err != nil {
+		t.Fatalf("Recognize: %v", err)
+	}
+
+	after := dirSnapshot(t, pdfcpuDir)
+	if before != after {
+		t.Fatalf("pdfcpu dir mutated despite DisableConfigDir(): before=%q after=%q", before, after)
+	}
+}
+
+// TestOCR_MultiPagePDF_ErrorIncludesPageIndex verifies that when a
+// per-page OCR call fails, the wrapped error names the offending page.
+// We arrange for page 1 to succeed and page 2 to return 503; the
+// returned error must contain both "page 2" and the upstream status
+// code so a manager triaging logs can identify the bad page.
+//
+// It also guards against the double-prefix regression
+// ("yandex ocr: yandex ocr: status 503").
+func TestOCR_MultiPagePDF_ErrorIncludesPageIndex(t *testing.T) {
+	pdfBytes := fixturePDF(t, "two-page.pdf")
+
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		if n == 1 {
+			writeOCRResponse(t, w, "page1-ok")
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, "upstream busy")
+	}))
+	defer srv.Close()
+
+	c := NewOCRClient("test-token", "test-folder", srv.URL)
+	_, err := c.Recognize(context.Background(), pdfBytes, "application/pdf")
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "page 2") {
+		t.Errorf("error = %q, want substring \"page 2\"", msg)
+	}
+	if !strings.Contains(msg, "503") {
+		t.Errorf("error = %q, want substring \"503\"", msg)
+	}
+	if strings.Contains(msg, "yandex ocr: yandex ocr:") {
+		t.Errorf("error = %q, double-prefixed (regression)", msg)
 	}
 }
