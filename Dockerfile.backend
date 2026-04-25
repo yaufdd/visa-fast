@@ -20,8 +20,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM python:3.12-slim
 
-# Layer 1 — stable apt deps (rarely change). Separating from OCR/opencv
-# lets the pdftk-java download (~200MB OpenJDK) stay cached across most builds.
+# Apt deps — pdftk-java is required by docgen/generate.py for PDF
+# field-flattening on the anketa template. The OCR/opencv stack used by
+# the (now-deleted) redact_scan.py was removed in Task 1.D1: scan PII
+# stays inside RU-resident Yandex Cloud, so on-prem redaction is no
+# longer needed.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
@@ -29,23 +32,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get install -y --no-install-recommends --no-install-suggests \
         pdftk-java
 
-# Layer 2 — OCR + PDF image stack for redact_scan.py (newer, may churn).
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && \
-    apt-get install -y --no-install-recommends --no-install-suggests \
-        tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng \
-        poppler-utils libgl1 libglib2.0-0
-
-# Python deps — split into stable (docx/fillpdf) and OCR (pytesseract/opencv)
-# so the pip-cache mount + layer caching pays off on incremental rebuilds.
+# Python deps for docgen/generate.py.
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install python-docx fillpdf
-
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install \
-        pytesseract==0.3.13 pdf2image==1.17.0 \
-        pillow==11.1.0 opencv-python-headless==4.10.0.84
 
 WORKDIR /app
 
@@ -64,7 +53,6 @@ COPY templates/ ./templates/
 ENV PORT=8081
 ENV UPLOADS_DIR=/app/uploads
 ENV DOCGEN_SCRIPT=/app/docgen/generate.py
-ENV REDACT_SCAN_SCRIPT=/app/docgen/redact_scan.py
 ENV MIGRATIONS_DIR=/app/migrations
 ENV DOCGEN_TEMPLATES_DIR=/app/templates
 ENV DOCGEN_PDF_TEMPLATE=/app/templates/anketa_template.pdf

@@ -9,7 +9,7 @@ import (
 )
 
 // NewGenerationID returns a fresh UUID-v4 string. Use at the start of every
-// /generate or /finalize run to correlate all nested Claude calls into one
+// /generate or /finalize run to correlate all nested provider calls into one
 // audit trail.
 func NewGenerationID() string {
 	var b [16]byte
@@ -21,8 +21,9 @@ func NewGenerationID() string {
 }
 
 // CallLog is the shape of one audit-log entry for a single AI provider call.
-// Written via Logger.Log inside the per-provider HTTP seam (e.g. callClaude)
-// — every outbound AI request is observed so nothing can leak out unrecorded.
+// Written via Logger.Log inside the per-provider HTTP seam (yandexGPTAdapter,
+// yandexOCRAdapter) — every outbound AI request is observed so nothing can
+// leak out unrecorded.
 type CallLog struct {
 	OrgID        string          // org_id of the calling tenant; "" if request is not org-scoped
 	GroupID      string          // group_id this generation belongs to; "" if not applicable
@@ -31,11 +32,12 @@ type CallLog struct {
 	FunctionName string          // "translate" | "programme" | "ticket_parser" | "voucher_parser"
 	// Provider names the AI vendor that served this call. Required on every
 	// row. Allowed values mirror the DB CHECK constraint
-	// (migration 000019): "anthropic", "yandex-gpt", "yandex-vision".
-	// Validation is delegated to the DB so future providers can be added by
-	// migration alone — the Go code records the value verbatim.
+	// (migration 000019): "anthropic" (legacy rows), "yandex-gpt",
+	// "yandex-vision". Validation is delegated to the DB so future
+	// providers can be added by migration alone — the Go code records the
+	// value verbatim.
 	Provider     string
-	Model        string          // model id (provider-specific, e.g. claude-haiku-4-5)
+	Model        string          // model id (provider-specific, e.g. yandexgpt/latest)
 	RequestJSON  json.RawMessage // request marshalled, with image bytes redacted
 	ResponseText string          // raw text reply from the provider (empty on error)
 	Status       string          // "success" | "error"
@@ -71,7 +73,8 @@ const (
 	ctxKeyFunctionName
 )
 
-// WithLogger returns a ctx whose callClaude will write audit rows via `l`.
+// WithLogger returns a ctx whose AI provider seams will write audit rows
+// via `l`.
 func WithLogger(ctx context.Context, l Logger) context.Context {
 	return context.WithValue(ctx, ctxKeyLogger, l)
 }
@@ -84,7 +87,7 @@ func LoggerFromContext(ctx context.Context) Logger {
 	return NopLogger{}
 }
 
-// WithGenerationID tags all nested callClaude rows with the same generation_id.
+// WithGenerationID tags all nested provider rows with the same generation_id.
 // Callers should set one UUID per /generate or /finalize run so a manager can
 // inspect "everything that left the server for that generation" in one query.
 func WithGenerationID(ctx context.Context, id string) context.Context {
@@ -110,8 +113,8 @@ func WithSubgroupID(ctx context.Context, id string) context.Context {
 }
 func SubgroupIDFromContext(ctx context.Context) string { return ctxString(ctx, ctxKeySubgroupID) }
 
-// WithFunctionName tags subsequent callClaude rows with a stable name for
-// the calling high-level function ("translate", "programme", etc.). Each
+// WithFunctionName tags subsequent provider rows with a stable name for the
+// calling high-level function ("translate", "programme", etc.). Each
 // high-level function is expected to set this at its own entry so the audit
 // row carries the call-site label.
 func WithFunctionName(ctx context.Context, name string) context.Context {
@@ -126,42 +129,4 @@ func ctxString(ctx context.Context, key ctxKey) string {
 		return v
 	}
 	return ""
-}
-
-// redactRequestForLog returns a JSON-encoded copy of the anthropicRequest
-// where raw image/PDF bytes inside content blocks are replaced with a
-// placeholder. Keeps the row small and avoids persisting multi-MB base64
-// blobs alongside every parse.
-func redactRequestForLog(req anthropicRequest) json.RawMessage {
-	clone := anthropicRequest{
-		Model:       req.Model,
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		System:      req.System,
-		Messages:    make([]anthropicMessage, len(req.Messages)),
-	}
-	for i, m := range req.Messages {
-		clone.Messages[i] = anthropicMessage{
-			Role:    m.Role,
-			Content: make([]anthropicContent, len(m.Content)),
-		}
-		for j, c := range m.Content {
-			copy := c
-			if copy.Source != nil && copy.Source.Data != "" {
-				size := len(copy.Source.Data)
-				copy.Source = &contentSource{
-					Type:      copy.Source.Type,
-					MediaType: copy.Source.MediaType,
-					FileID:    copy.Source.FileID,
-					Data:      fmt.Sprintf("[%s redacted, %d bytes base64]", copy.Source.MediaType, size),
-				}
-			}
-			clone.Messages[i].Content[j] = copy
-		}
-	}
-	b, err := json.Marshal(clone)
-	if err != nil {
-		return json.RawMessage(`{"error":"marshal_failed"}`)
-	}
-	return b
 }

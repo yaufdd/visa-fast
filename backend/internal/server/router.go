@@ -17,12 +17,12 @@ import (
 // Used by both main.go and integration tests.
 //
 // translator is the Yandex-backed Translator wired in cmd/server/main.go.
-// ocrClient is the Yandex Vision OCR seam used by the migrated scan
-// parsers (ticket today; voucher / passport in follow-up tasks). Tests
-// that don't exercise the /generate or /uploads-parse paths can pass
-// nil — the router simply forwards both to the handlers, which only
-// dereference them inside the relevant codepaths.
-func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRecognizer, anthropicKey, uploadsDir, pythonScript, redactScript string) http.Handler {
+// ocrClient is the Yandex Vision OCR seam used by the scan parsers
+// (ticket / voucher / passport). Tests that don't exercise the /generate
+// or /uploads-parse paths can pass nil — the router simply forwards both
+// to the handlers, which only dereference them inside the relevant
+// codepaths.
+func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRecognizer, uploadsDir, pythonScript string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.RealIP)
 	r.Use(chimw.RequestID)
@@ -101,7 +101,7 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 			r.Put("/tourists/{id}/subgroup", api.AssignTouristSubgroup(pool))
 			r.Get("/subgroups/{id}/hotels", api.ListSubgroupHotels(pool))
 			r.Post("/subgroups/{id}/hotels", api.UpsertSubgroupHotels(pool))
-			r.Post("/subgroups/{id}/generate", api.GenerateSubgroupDocuments(pool, translator, anthropicKey, uploadsDir, pythonScript))
+			r.Post("/subgroups/{id}/generate", api.GenerateSubgroupDocuments(pool, translator, uploadsDir, pythonScript))
 			r.Get("/subgroups/{id}/download", api.DownloadSubgroupZIP(pool, uploadsDir))
 
 			// Tourists
@@ -119,14 +119,14 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 			r.Post("/groups/{id}/hotels", api.UpsertGroupHotels(pool))
 
 			// Document generation (AI Pass 2 + Python)
-			r.Post("/groups/{id}/generate", api.GenerateDocuments(pool, translator, anthropicKey, uploadsDir, pythonScript))
-			r.Post("/groups/{id}/finalize", api.FinalizeGroup(pool, anthropicKey, uploadsDir, pythonScript))
+			r.Post("/groups/{id}/generate", api.GenerateDocuments(pool, translator, uploadsDir, pythonScript))
+			r.Post("/groups/{id}/finalize", api.FinalizeGroup(pool, uploadsDir, pythonScript))
 			r.Get("/groups/{id}/documents", api.GetDocuments(pool))
 			r.Get("/groups/{id}/download", api.DownloadZIP(pool))
 			r.Get("/groups/{id}/download/final", api.DownloadFinalZIP(pool, uploadsDir))
 			r.Get("/groups/{id}/final/status", api.FinalStatus(pool, uploadsDir))
 
-			// AI audit log — every Claude call made on behalf of this group.
+			// AI audit log — every provider call made on behalf of this group.
 			r.Get("/groups/{id}/ai_logs", api.ListGroupAILogs(pool))
 
 			// Submissions (form-based workflow)

@@ -37,7 +37,7 @@ type yandexOCRAdapter struct {
 // Yandex Vision calls. Audit logging is performed by reading the Logger
 // the caller installs in ctx via WithLogger; if no logger is installed
 // the NopLogger silently swallows the row, matching the behaviour of
-// callClaude and yandexGPTAdapter.
+// yandexGPTAdapter.
 //
 // PII CONTRACT (152-ФЗ): the audit row records the input mime type, byte
 // length, and the recognized text per page. The input bytes themselves
@@ -52,11 +52,10 @@ func NewYandexOCRAdapter(client yandexOCRClient) OCRRecognizer {
 
 // Recognize performs one Vision OCR call and emits one audit row.
 //
-// Mirrors the contract of callClaude / yandexGPTAdapter.Chat: every code
-// path (success or error) writes exactly one CallLog entry via the
-// Logger installed in ctx. The deferred closure assigns the final fields
-// just before the row is persisted, so an early return cannot skip the
-// audit.
+// Mirrors the contract of yandexGPTAdapter.Chat: every code path (success
+// or error) writes exactly one CallLog entry via the Logger installed in
+// ctx. The deferred closure assigns the final fields just before the row
+// is persisted, so an early return cannot skip the audit.
 func (a *yandexOCRAdapter) Recognize(ctx context.Context, content []byte, mime string) ([]string, error) {
 	started := time.Now()
 

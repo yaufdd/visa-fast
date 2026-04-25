@@ -21,7 +21,7 @@ import (
 
 func startTestServer(t *testing.T, pool *pgxpool.Pool) *httptest.Server {
 	t.Helper()
-	handler := server.NewRouter(pool, nil, nil, "dummy-ai-key", t.TempDir(), "/tmp/generate.py", "/tmp/redact_scan.py")
+	handler := server.NewRouter(pool, nil, nil, t.TempDir(), "/tmp/generate.py")
 	return httptest.NewServer(handler)
 }
 

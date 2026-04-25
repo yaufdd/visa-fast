@@ -21,8 +21,7 @@ type yandexClient interface {
 // audit row per Chat call. It is the production implementation of
 // Translator: see NewYandexAdapter for construction. We keep the audit
 // instrumentation here (not in the yandex package) so the yandex client
-// stays dependency-free and reusable; the audit shape lives next to the
-// other AI seam (callClaude in client.go) for symmetry.
+// stays dependency-free and reusable.
 type yandexGPTAdapter struct {
 	client yandexClient
 }
@@ -30,8 +29,7 @@ type yandexGPTAdapter struct {
 // NewYandexAdapter wires a *yandex.GPTClient through ai_call_logs as the
 // audit-log seam for all YandexGPT calls. Audit logging is performed by
 // reading the Logger that the caller installs in ctx via WithLogger; if
-// no logger is installed the NopLogger silently swallows the row,
-// matching callClaude's behaviour.
+// no logger is installed the NopLogger silently swallows the row.
 //
 // PII CONTRACT (152-ФЗ): the audit row records the FULL request body
 // including ChatRequest.User and ChatRequest.System. Callers MUST NOT
@@ -48,10 +46,10 @@ func NewYandexAdapter(client *yandex.GPTClient) Translator {
 
 // Chat performs one Yandex completion and emits one audit row.
 //
-// Mirrors the contract of callClaude: every code path (success or
-// error) writes exactly one CallLog entry via the Logger installed in
-// ctx. The deferred closure assigns the final fields just before the
-// row is persisted, so an early return cannot skip the audit.
+// Audit contract: every code path (success or error) writes exactly one
+// CallLog entry via the Logger installed in ctx. The deferred closure
+// assigns the final fields just before the row is persisted, so an early
+// return cannot skip the audit.
 func (a *yandexGPTAdapter) Chat(ctx context.Context, req yandex.ChatRequest) (string, error) {
 	started := time.Now()
 	model := req.Model

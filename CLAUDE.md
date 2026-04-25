@@ -17,7 +17,8 @@ fujitravel-admin/
 │   ├── internal/
 │   │   ├── api/        — HTTP handlers (auth, public slug, groups, subgroups, hotels, submissions, tourists, flight_data, generate, uploads)
 │   │   ├── auth/       — argon2id password hashing, session tokens, org slug generation
-│   │   ├── ai/         — Claude API (ticket_parser.go, voucher_parser.go) + YandexGPT seam (translate.go, programme.go, doverenost_clean.go, assembler.go)
+│   │   ├── ai/         — Yandex Cloud seam (translate.go, programme.go, doverenost_clean.go, ticket_parser.go, voucher_parser.go, passport_parser.go, assembler.go) + adapters (yandex_adapter.go, yandex_ocr_adapter.go) + audit log (logger.go)
+│   │   ├── ai/yandex/  — low-level Yandex Cloud HTTP clients (GPT, Vision OCR, IAM token source)
 │   │   ├── consent/    — consent / form-submission helpers
 │   │   ├── db/         — tenant-aware repository functions (every query takes orgID)
 │   │   ├── docgen/     — document generation (calls Python)
@@ -59,7 +60,7 @@ fujitravel-admin/
 | Database | PostgreSQL 16 (Docker) |
 | Migrations | golang-migrate |
 | Frontend | React + Vite |
-| AI | Anthropic Claude API — Haiku 4.5 for `translate.go`, Opus 4.7 for `programme.go`, Opus 4.6 for scan parsers (`ticket_parser.go`, `voucher_parser.go`) |
+| AI | Yandex Cloud — YandexGPT 5 Pro for text (`translate.go`, `programme.go`, `doverenost_clean.go`, GPT half of the scan parsers), Yandex Vision OCR for scan recognition (`ticket_parser.go`, `voucher_parser.go`, `passport_parser.go`) |
 | Doc generation | python-docx + fillpdf (Python subprocess) |
 | Auth | session cookie + argon2id passwords, row-level multi-tenancy via `org_id` |
 
@@ -70,8 +71,13 @@ fujitravel-admin/
 ```env
 # Required
 DATABASE_URL=postgres://fuji:fuji123@localhost:5435/fujitravel?sslmode=disable
-ANTHROPIC_API_KEY=...
 APP_SECRET=<32-byte-base64 from `openssl rand -base64 32`>
+YANDEX_FOLDER_ID=b1gv...                 # Yandex Cloud folder id
+YANDEX_SA_KEY_JSON='{"id":"...","service_account_id":"...","private_key":"..."}'
+# ↑ Full authorized_key.json contents on a single line. WRAP IN SINGLE QUOTES
+#   — the value contains double quotes and `\n` escapes from the PEM private
+#   key, and shell / .env parsers will mangle it without single-quote
+#   wrapping.
 
 # Optional
 APP_ENV=production      # dev|production — controls Secure cookie flag
@@ -79,19 +85,13 @@ UPLOADS_DIR=./uploads
 PORT=8080
 DOCGEN_SCRIPT=../../docgen/generate.py
 DOCGEN_PDF_TEMPLATE=./templates/anketa_template.pdf
-REDACT_SCAN_SCRIPT=../../docgen/redact_scan.py  # Python OCR redactor for ticket/voucher scans
 AI_LOG_RETENTION_DAYS=30  # ai_call_logs auto-cleanup; 0 disables
-
-# Yandex Cloud — required for the Yandex AI features wired in later migration tasks
-# (Phase 1 of docs/superpowers/plans/2026-04-25-russian-services-migration.md).
-# Currently read but not required — backend boots without them and logs an info
-# line that Yandex AI features are disabled. Will become required once Anthropic
-# is removed in task 1.D1.
-YANDEX_FOLDER_ID=b1gv...                 # Yandex Cloud folder id
-YANDEX_SA_KEY_JSON={"id":"...","service_account_id":"...","private_key":"..."}  # full authorized_key.json contents
 ```
 
-Backend **refuses to start** without `APP_SECRET` set.
+Backend **refuses to start** without `APP_SECRET`, `YANDEX_FOLDER_ID`, or
+`YANDEX_SA_KEY_JSON` set — every AI call now goes through Yandex Cloud, so
+missing credentials would yield a 500 at the first `/generate`. Failing
+fast at boot makes that misconfiguration loud.
 
 > PostgreSQL runs on port **5435** locally (non-standard, 5432/5433 were occupied).
 > Inside docker-compose.prod.yml the backend reaches it via the service name `db:5432`.
@@ -143,8 +143,9 @@ that agency.
    - Uploads voucher scan → auto-parsed by voucher_parser.go → group_hotels rows.
    - Or enters flight data manually via FlightDataForm (PUT /api/tourists/:id/flight_data).
 4. Manager clicks "Сгенерировать документы":
-   - Backend translates free-text fields in one batched Haiku call (translate.go)
-   - Opus generates the programme from dates + hotels + flights (programme.go)
+   - Backend translates free-text fields in one batched YandexGPT call (translate.go)
+   - YandexGPT generates the programme from dates + hotels + flights (programme.go)
+   - YandexGPT canonicalises доверенность address fields (doverenost_clean.go)
    - Go code (assembler.go) composes the final pass2.json deterministically
    - Python docgen builds .docx and .pdf files
 5. "Сформировать финальные документы" generates group-level docs.
@@ -153,16 +154,14 @@ that agency.
 ### AI Privacy
 
 FujiTravel is a Russian legal entity → 152-ФЗ compliance is mandatory. The
-guiding principle: **PII must never leave the Russian Federation.** Two
-provider tiers exist:
+guiding principle: **PII must never leave the Russian Federation.**
 
-- **YandexGPT** (RU-resident processing, no cross-border transfer) — may
-  receive PII when necessary for canonicalisation / programme building.
-- **Anthropic Claude** (US-based) — receives only "dry" (non-identifying)
-  fields, batched across multiple tourists so no single entry can be linked
-  to an individual.
+Every AI call now flows through **Yandex Cloud** — RU-resident processing,
+no cross-border transfer. Because there is no foreign provider in the
+pipeline, the 152-ФЗ trans-border restriction does not apply: PII (names,
+passports, addresses) MAY now flow through Yandex services.
 
-**What YandexGPT sees today:**
+**What YandexGPT (`yandexgpt/latest`) sees:**
 
 - `translate.go` — batch of Russian→English strings for non-PII fields:
   `place_of_birth_ru`, `issued_by_ru` (foreign passport authority),
@@ -170,62 +169,45 @@ provider tiers exist:
   `previous_visits_ru`, `nationality_ru`. Strings are de-duplicated across
   all tourists in the batch.
 - `programme.go` — dates, flights, hotels, single contact phone, manager
-  notes. No tourist names. No passport data.
-- `doverenost_clean.go` — batch of Russian free-text fields requiring
+  notes. (No tourist names / passport data are sent — those are not
+  needed for the programme content even though they would be permitted.)
+- `doverenost_clean.go` — batch of Russian free-text PII fields requiring
   canonical formatting (lower/upper-casing, dotted abbreviations, commas):
-  `home_address_ru`, `reg_address_ru`, `internal_issued_by_ru`. These are
-  PII; routing them through YandexGPT is permitted under 152-ФЗ because
-  there is no cross-border transfer. Output stays in Russian. Dedup is
-  identical to translate (`collectDoverenostFreeText` in `api/generate.go`).
+  `home_address_ru`, `reg_address_ru`, `internal_issued_by_ru`. Output
+  stays in Russian. Dedup is identical to translate
+  (`collectDoverenostFreeText` in `api/generate.go`).
+- `ticket_parser.go` — text recognized by Vision OCR from a ticket scan,
+  asked to extract structured flight JSON.
+- `voucher_parser.go` — text recognized by Vision OCR from a hotel
+  voucher scan, asked to extract a structured array of hotels.
+- `passport_parser.go` — text recognized by Vision OCR from a passport
+  scan, asked to extract MRZ-derived fields.
 
-**What Claude (Anthropic) sees today:**
+**What Yandex Vision OCR sees:**
 
-- `ticket_parser.go` / `voucher_parser.go` — redacted (passenger-name
-  masked) ticket and voucher scans. See "Ticket / voucher scan
-  redaction" below.
+- Raw PDF / JPEG / PNG bytes of ticket, voucher, and passport scans.
+  Names and passport numbers reach the OCR pass — this is acceptable
+  because Vision OCR is a Yandex Cloud service running inside Russia.
 
 **What no AI sees at all (formatted locally on the server):**
 
-- Full name (`name_cyr`, `name_lat`, `maiden_name_ru`) — used for the
-  доверенность Russian text and the anketa via `translit.RuToLatICAO`.
-- Passport numbers (internal series/number, foreign passport number).
-- Date of birth.
 - Phone numbers (other than the single guide contact phone in programme).
-
-The `HomeAddress` field on the anketa PDF is the YandexGPT-cleaned
-`home_address_ru` followed by deterministic ICAO transliteration
-(`translit.RuToLatICAO`). The transliteration step stays local because it
-is purely deterministic.
-
-**Ticket / voucher scan redaction:** `UploadTouristFile` calls
-`backend/internal/privacy.RedactScan` which shells to
-`docgen/redact_scan.py` — local Tesseract OCR finds name labels
-("Passenger", "Пассажир", "Имя пассажира", "Гость", "ФИО", ...) and black-boxes
-the label + the next several tokens on that text line via OpenCV. The
-original scan stays on disk for the manager's reference, but only the
-redacted copy is uploaded to Anthropic and used for `ticket_parser` /
-`voucher_parser`. Multi-page PDFs are processed page-by-page; the output
-is a multi-page PDF when the input was. **Fail-loud policy**: if any page
-has no detectable name label, redaction fails and the HTTP response
-returns 422 with `redact_error` — we refuse to send a partially-redacted
-scan to AI.
-
-Configured via `REDACT_SCAN_SCRIPT` env var (default
-`../../docgen/redact_scan.py`).
-
-Passport scans (`docgen/passport_parser.py`, planned — see
-`docs/superpowers/plans/2026-04-22-passport-scan-parser.md`) are parsed
-fully locally and never reach Claude.
+- The deterministic ICAO transliteration of addresses for the anketa PDF
+  (`HomeAddress` = YandexGPT-cleaned `home_address_ru` →
+  `translit.RuToLatICAO`). The transliteration step stays local because
+  it is purely deterministic and there is no need to involve a service.
 
 ### AI Audit Log
 
-Every call to Anthropic is persisted to the `ai_call_logs` table as an
-observational record (request JSON with image bytes redacted, response text,
-status, duration, model). Rows are scoped to `org_id` + `group_id` +
-`generation_id` (one UUID per `/generate`, `/finalize`, or scan-upload run).
-The log is wired at the `callClaude` seam in `backend/internal/ai/client.go`
-so no high-level function can forget to log — `ai.WithLogger(ctx, ...)` +
-`ai.WithGenerationID(ctx, ...)` at the handler entry are enough.
+Every AI provider call is persisted to the `ai_call_logs` table as an
+observational record (request JSON, response text, status, duration,
+model, **provider** — `yandex-gpt` or `yandex-vision`). Rows are scoped
+to `org_id` + `group_id` + `generation_id` (one UUID per `/generate`,
+`/finalize`, or scan-upload run). The log is wired at the per-provider
+HTTP seams in `backend/internal/ai/yandex_adapter.go` and
+`backend/internal/ai/yandex_ocr_adapter.go` so no high-level function can
+forget to log — `ai.WithLogger(ctx, ...)` + `ai.WithGenerationID(ctx, ...)`
+at the handler entry are enough.
 
 Managers can inspect the log via the "Аудит-лог ИИ-вызовов" expandable
 section on the Documents tab of each group (UI component

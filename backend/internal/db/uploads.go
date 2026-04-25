@@ -10,15 +10,14 @@ import (
 )
 
 type Upload struct {
-	ID              string     `json:"id"`
-	GroupID         string     `json:"group_id"`
-	TouristID       *string    `json:"tourist_id"`
-	SubgroupID      *string    `json:"subgroup_id"`
-	FileType        string     `json:"file_type"`
-	FilePath        string     `json:"file_path"`
-	AnthropicFileID *string    `json:"anthropic_file_id"`
-	CreatedAt       time.Time  `json:"created_at"`
-	ParsedAt        *time.Time `json:"parsed_at"`
+	ID         string     `json:"id"`
+	GroupID    string     `json:"group_id"`
+	TouristID  *string    `json:"tourist_id"`
+	SubgroupID *string    `json:"subgroup_id"`
+	FileType   string     `json:"file_type"`
+	FilePath   string     `json:"file_path"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ParsedAt   *time.Time `json:"parsed_at"`
 }
 
 func InsertUpload(ctx context.Context, pool *pgxpool.Pool, orgID, groupID string, touristID *string, fileType, filePath string) (string, error) {
@@ -34,7 +33,7 @@ func InsertUpload(ctx context.Context, pool *pgxpool.Pool, orgID, groupID string
 func ListTouristUploads(ctx context.Context, pool *pgxpool.Pool, orgID, touristID string) ([]Upload, error) {
 	rows, err := pool.Query(ctx,
 		`SELECT id, group_id, tourist_id, subgroup_id, file_type, file_path,
-		        anthropic_file_id, created_at, parsed_at
+		        created_at, parsed_at
 		   FROM uploads WHERE tourist_id = $1 AND org_id = $2
 		   ORDER BY created_at DESC`, touristID, orgID)
 	if err != nil {
@@ -45,19 +44,12 @@ func ListTouristUploads(ctx context.Context, pool *pgxpool.Pool, orgID, touristI
 	for rows.Next() {
 		var u Upload
 		if err := rows.Scan(&u.ID, &u.GroupID, &u.TouristID, &u.SubgroupID, &u.FileType,
-			&u.FilePath, &u.AnthropicFileID, &u.CreatedAt, &u.ParsedAt); err != nil {
+			&u.FilePath, &u.CreatedAt, &u.ParsedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
 	}
 	return out, nil
-}
-
-func SetUploadAnthropicID(ctx context.Context, pool *pgxpool.Pool, orgID, uploadID, fileID string) error {
-	_, err := pool.Exec(ctx,
-		`UPDATE uploads SET anthropic_file_id = $1 WHERE id = $2 AND org_id = $3`,
-		fileID, uploadID, orgID)
-	return err
 }
 
 // GetTouristUpload loads one upload row scoped to org + tourist. Returns
@@ -66,12 +58,12 @@ func GetTouristUpload(ctx context.Context, pool *pgxpool.Pool, orgID, touristID,
 	var u Upload
 	err := pool.QueryRow(ctx,
 		`SELECT id, group_id, tourist_id, subgroup_id, file_type, file_path,
-		        anthropic_file_id, created_at, parsed_at
+		        created_at, parsed_at
 		   FROM uploads
 		  WHERE id = $1 AND org_id = $2 AND tourist_id = $3`,
 		uploadID, orgID, touristID,
 	).Scan(&u.ID, &u.GroupID, &u.TouristID, &u.SubgroupID, &u.FileType,
-		&u.FilePath, &u.AnthropicFileID, &u.CreatedAt, &u.ParsedAt)
+		&u.FilePath, &u.CreatedAt, &u.ParsedAt)
 	return u, err
 }
 

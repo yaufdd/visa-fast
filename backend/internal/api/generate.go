@@ -29,10 +29,10 @@ var (
 	errNoHotelsForPipe = errors.New("no hotels configured")
 )
 
-// withAuditCtx wraps parent with the values that ai.callClaude uses to write
-// an audit row: a fresh generation_id, the org, optional group/subgroup, and
-// a Logger backed by the given pool. One generation_id per call — each
-// runPipeline invocation is its own auditable unit.
+// withAuditCtx wraps parent with the values that the AI provider seams use
+// to write an audit row: a fresh generation_id, the org, optional
+// group/subgroup, and a Logger backed by the given pool. One generation_id
+// per call — each runPipeline invocation is its own auditable unit.
 func withAuditCtx(parent context.Context, pool *pgxpool.Pool, orgID, groupID, subgroupID string) context.Context {
 	ctx := ai.WithGenerationID(parent, ai.NewGenerationID())
 	ctx = ai.WithOrgID(ctx, orgID)
@@ -344,14 +344,14 @@ func buildProgrammeInput(payloads []map[string]any, flights []map[string]any, ho
 	return in
 }
 
-// runPipeline executes the NEW AI pipeline for one subgroup (or whole group if
+// runPipeline executes the AI pipeline for one subgroup (or whole group if
 // subgroupID=="") and returns the marshaled pass2 JSON bytes.
 //
-// translator is the Yandex-backed Translator used for translate.go's batch
-// of dry Russian → English fields; apiKey is the Anthropic key still used
-// by the not-yet-migrated programme path. Once tasks 1.B2 / 1.C* land,
-// apiKey will be replaced by Yandex-shaped clients for those paths too.
-func runPipeline(ctx context.Context, pool *pgxpool.Pool, translator ai.Translator, apiKey, orgID, groupID, subgroupID, guidePhone string, now time.Time) ([]byte, error) {
+// translator is the Yandex-backed Translator used by translate.go's batch
+// of dry Russian → English fields, ai.GenerateProgramme, and
+// ai.CleanDoverenostFields — every provider call now flows through Yandex
+// Cloud (RU-resident, 152-ФЗ-compliant).
+func runPipeline(ctx context.Context, pool *pgxpool.Pool, translator ai.Translator, orgID, groupID, subgroupID, guidePhone string, now time.Time) ([]byte, error) {
 	rows, err := loadTouristRowsForSubgroup(ctx, pool, orgID, groupID, subgroupID)
 	if err != nil {
 		return nil, fmt.Errorf("load tourists: %w", err)
@@ -469,7 +469,7 @@ func runPipeline(ctx context.Context, pool *pgxpool.Pool, translator ai.Translat
 
 // GenerateDocuments handles POST /api/groups/:id/generate
 // Supports subgroups: each subgroup gets its own folder in output.zip.
-func GenerateDocuments(pool *pgxpool.Pool, translator ai.Translator, apiKey, uploadsDir, pythonScript string) http.HandlerFunc {
+func GenerateDocuments(pool *pgxpool.Pool, translator ai.Translator, uploadsDir, pythonScript string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := middleware.OrgID(r.Context())
 		groupID := chi.URLParam(r, "id")
@@ -522,7 +522,7 @@ func GenerateDocuments(pool *pgxpool.Pool, translator ai.Translator, apiKey, upl
 
 		for _, sg := range subgroups {
 			aiCtx := withAuditCtx(r.Context(), pool, orgID, groupID, sg.id)
-			pass2JSON, err := runPipeline(aiCtx, pool, translator, apiKey, orgID, groupID, sg.id, guidePhone, now)
+			pass2JSON, err := runPipeline(aiCtx, pool, translator, orgID, groupID, sg.id, guidePhone, now)
 			if err != nil {
 				if errors.Is(err, errNoTourists) {
 					slog.Warn("subgroup has no tourists, skipping", "subgroup", sg.name)
@@ -576,7 +576,7 @@ func GenerateDocuments(pool *pgxpool.Pool, translator ai.Translator, apiKey, upl
 
 // GenerateSubgroupDocuments handles POST /api/subgroups/:id/generate
 // Generates docs for a single subgroup and returns a per-subgroup ZIP.
-func GenerateSubgroupDocuments(pool *pgxpool.Pool, translator ai.Translator, apiKey, uploadsDir, pythonScript string) http.HandlerFunc {
+func GenerateSubgroupDocuments(pool *pgxpool.Pool, translator ai.Translator, uploadsDir, pythonScript string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := middleware.OrgID(r.Context())
 		subgroupID := chi.URLParam(r, "id")
@@ -604,7 +604,7 @@ func GenerateSubgroupDocuments(pool *pgxpool.Pool, translator ai.Translator, api
 		_ = os.RemoveAll(subDocsDir)
 
 		aiCtx := withAuditCtx(r.Context(), pool, orgID, groupID, subgroupID)
-		pass2JSON, err := runPipeline(aiCtx, pool, translator, apiKey, orgID, groupID, subgroupID, guidePhone, now)
+		pass2JSON, err := runPipeline(aiCtx, pool, translator, orgID, groupID, subgroupID, guidePhone, now)
 		if err != nil {
 			if errors.Is(err, errNoTourists) {
 				writeError(w, http.StatusBadRequest, "no tourists in this subgroup")
@@ -793,7 +793,7 @@ func translitLatToCyr(s string) string {
 // Generates group-level docs (для Инны в ВЦ, заявка ВЦ) for ALL tourists across
 // ALL subgroups in the подача. Skips AI — builds the list from DB directly
 // and reuses the latest subgroup's pass2_json as a template for trip-level fields.
-func FinalizeGroup(pool *pgxpool.Pool, apiKey, uploadsDir, pythonScript string) http.HandlerFunc {
+func FinalizeGroup(pool *pgxpool.Pool, uploadsDir, pythonScript string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orgID := middleware.OrgID(r.Context())
 		groupID := chi.URLParam(r, "id")

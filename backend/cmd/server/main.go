@@ -28,32 +28,19 @@ func main() {
 
 	// ── Environment ───────────────────────────────────────────────────────────
 	dbURL := mustEnv("DATABASE_URL")
-	// ANTHROPIC_API_KEY is still required while programme.go and the scan
-	// parsers (ticket_parser, voucher_parser) live on Anthropic — those are
-	// migrated in tasks 1.B2, 1.C1, 1.C2. Once those land this read should
-	// be removed.
-	anthropicKey := mustEnv("ANTHROPIC_API_KEY")
 	uploadsDir := envOrDefault("UPLOADS_DIR", "./uploads")
 	port := envOrDefault("PORT", "8080")
 
-	appSecret := os.Getenv("APP_SECRET")
-	if appSecret == "" {
-		slog.Error("APP_SECRET environment variable is required")
-		os.Exit(1)
-	}
+	appSecret := mustEnv("APP_SECRET")
 	_ = appSecret // currently unused — will be consumed when Tier 2 adds token signing
 
-	// Yandex Cloud credentials. As of task 1.B1 the translate.go path is
-	// served by YandexGPT, so a Yandex service-account key + folder are
-	// MANDATORY for the server to boot — running without them would yield
-	// a 500 at the first /generate. Anthropic is still required in
-	// parallel for the not-yet-migrated paths (programme, parsers).
-	yandexFolderID := os.Getenv("YANDEX_FOLDER_ID")
-	yandexSAKeyJSON := os.Getenv("YANDEX_SA_KEY_JSON")
-	if yandexFolderID == "" || yandexSAKeyJSON == "" {
-		slog.Error("YANDEX_FOLDER_ID and YANDEX_SA_KEY_JSON are required — translate.go is served by YandexGPT")
-		os.Exit(1)
-	}
+	// Yandex Cloud credentials. As of Task 1.D1 every AI call (translate,
+	// programme, doverenost cleanup, ticket / voucher / passport parsers)
+	// runs on Yandex Cloud — RU-resident processing, no cross-border
+	// transfer per 152-ФЗ. The server refuses to boot without these so
+	// the failure is loud at startup instead of at the first /generate.
+	yandexFolderID := mustEnv("YANDEX_FOLDER_ID")
+	yandexSAKeyJSON := mustEnv("YANDEX_SA_KEY_JSON")
 	tokenSource, err := yandex.NewTokenSource([]byte(yandexSAKeyJSON))
 	if err != nil {
 		slog.Error("yandex token source init", "err", err)
@@ -89,11 +76,6 @@ func main() {
 	// Python docgen script lives next to the backend directory.
 	// Adjust this path if the project layout changes.
 	pythonScript := envOrDefault("DOCGEN_SCRIPT", filepath.Join(uploadsDir, "../../docgen/generate.py"))
-
-	// Python redactor used to black-out the passenger/guest name on ticket
-	// and voucher scans BEFORE the file is uploaded to Anthropic. Must never
-	// be unset in production — see server.NewRouter for the fail-loud guard.
-	redactScript := envOrDefault("REDACT_SCAN_SCRIPT", filepath.Join(uploadsDir, "../../docgen/redact_scan.py"))
 
 	// ── Database ──────────────────────────────────────────────────────────────
 	pool, err := pgxpool.New(ctx, dbURL)
@@ -133,7 +115,7 @@ func main() {
 	}
 
 	// ── Router ────────────────────────────────────────────────────────────────
-	r := server.NewRouter(pool, translator, ocrClient, anthropicKey, uploadsDir, pythonScript, redactScript)
+	r := server.NewRouter(pool, translator, ocrClient, uploadsDir, pythonScript)
 
 	slog.Info("starting server", "port", port)
 	if err := http.ListenAndServe(":"+port, r); err != nil {

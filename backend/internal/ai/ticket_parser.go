@@ -116,11 +116,10 @@ func NormalizeJapaneseAirport(s string) string {
 //  1. Yandex Vision OCR converts the scan to plain text per page.
 //  2. YandexGPT receives the joined text and emits structured JSON.
 //
-// PII (152-ФЗ): both calls stay inside RU-resident Yandex Cloud, so we no
-// longer redact passenger names locally before calling AI — the privacy
-// guarantee is provided by the residency of the provider rather than by
-// the on-prem redactor that the Anthropic path used. Two audit rows are
-// produced per call (one yandex-vision, one yandex-gpt).
+// PII (152-ФЗ): both calls stay inside RU-resident Yandex Cloud, so we do
+// not redact passenger names locally before calling AI — the privacy
+// guarantee is provided by the residency of the provider. Two audit rows
+// are produced per call (one yandex-vision, one yandex-gpt).
 func ParseTicketScan(ctx context.Context, ocr OCRRecognizer, t Translator, scan []byte, mime string) (TicketFlights, error) {
 	if ocr == nil {
 		return TicketFlights{}, fmt.Errorf("ticket parse: nil ocr client")

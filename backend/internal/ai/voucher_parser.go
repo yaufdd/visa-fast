@@ -62,10 +62,9 @@ RULES:
 //  1. Yandex Vision OCR converts the scan to plain text per page.
 //  2. YandexGPT receives the joined text and emits a structured JSON array.
 //
-// PII (152-ФЗ): both calls stay inside RU-resident Yandex Cloud, so we no
-// longer redact guest names locally before calling AI — the privacy
-// guarantee is provided by the residency of the provider rather than by
-// the on-prem redactor that the Anthropic path used. Two audit rows are
+// PII (152-ФЗ): both calls stay inside RU-resident Yandex Cloud, so we do
+// not redact guest names locally before calling AI — the privacy guarantee
+// is provided by the residency of the provider. Two audit rows are
 // produced per call (one yandex-vision, one yandex-gpt).
 func ParseVoucherScan(ctx context.Context, ocr OCRRecognizer, t Translator, scan []byte, mime string) ([]VoucherHotel, error) {
 	if ocr == nil {

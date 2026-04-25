@@ -251,8 +251,8 @@ func TestYandexAdapter_DefaultModel_ExplicitOverride(t *testing.T) {
 }
 
 func TestYandexAdapter_NoLoggerInCtx_NoPanic(t *testing.T) {
-	// Mirror the callClaude no-logger test: missing Logger in ctx
-	// must fall through to NopLogger without panicking.
+	// Missing Logger in ctx must fall through to NopLogger without
+	// panicking — every adapter must tolerate audit-less callers.
 	fake := &fakeYandexClient{}
 	adapter := newAdapterWithFake(fake)
 

@@ -88,8 +88,9 @@ func UploadTouristFile(pool *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 		}
 
 		// Both ticket and voucher paths use Yandex (RU-resident) — no
-		// on-prem redaction, no Anthropic Files pre-upload. The raw scan
-		// stays on disk and ParseTouristUpload reads it at parse time.
+		// on-prem redaction, no provider-side file pre-upload. The raw
+		// scan stays on disk and ParseTouristUpload reads it at parse
+		// time.
 
 		tid := touristID
 		uploadID, err := db.InsertUpload(r.Context(), pool, orgID, groupID, &tid, fileType, savedPath)
@@ -266,8 +267,7 @@ func filenameFromPath(p string) string {
 
 // parseTicketAndPersistYandex runs the two-step Yandex pipeline (Vision
 // OCR → YandexGPT) on the given scan and writes the parsed flights into
-// tourists.flight_data (scoped to org). Replaces the old Anthropic-based
-// parseTicketAndPersist as of Task 1.C1.
+// tourists.flight_data (scoped to org).
 func parseTicketAndPersistYandex(ctx context.Context, pool *pgxpool.Pool, ocr ai.OCRRecognizer, translator ai.Translator, orgID, touristID string, scan []byte, mime string) error {
 	flights, err := ai.ParseTicketScan(ctx, ocr, translator, scan, mime)
 	if err != nil {
@@ -309,10 +309,8 @@ func parseDate(s string) time.Time {
 
 // parseVoucherAndPersistYandex runs the two-step Yandex pipeline (Vision
 // OCR → YandexGPT) on the given voucher scan and, for each hotel found,
-// looks up (or creates, scoped to this org) the hotels row and inserts
-// a group_hotels row scoped to the tourist's group_id/subgroup_id and
-// org. Replaces the old Anthropic-based parseVoucherAndPersist as of
-// Task 1.C2.
+// looks up (or creates, scoped to this org) the hotels row and inserts a
+// group_hotels row scoped to the tourist's group_id/subgroup_id and org.
 func parseVoucherAndPersistYandex(ctx context.Context, pool *pgxpool.Pool, ocr ai.OCRRecognizer, translator ai.Translator, orgID, groupID string, subgroupID *string, scan []byte, mime string) error {
 	hotels, err := ai.ParseVoucherScan(ctx, ocr, translator, scan, mime)
 	if err != nil {
