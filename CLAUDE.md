@@ -17,7 +17,7 @@ fujitravel-admin/
 │   ├── internal/
 │   │   ├── api/        — HTTP handlers (auth, public slug, groups, subgroups, hotels, submissions, tourists, flight_data, generate, uploads)
 │   │   ├── auth/       — argon2id password hashing, session tokens, org slug generation
-│   │   ├── ai/         — Claude API (translate.go, programme.go, assembler.go, ticket_parser.go, voucher_parser.go)
+│   │   ├── ai/         — Claude API (ticket_parser.go, voucher_parser.go) + YandexGPT seam (translate.go, programme.go, doverenost_clean.go, assembler.go)
 │   │   ├── consent/    — consent / form-submission helpers
 │   │   ├── db/         — tenant-aware repository functions (every query takes orgID)
 │   │   ├── docgen/     — document generation (calls Python)
@@ -153,31 +153,49 @@ that agency.
 ### AI Privacy
 
 FujiTravel is a Russian legal entity → 152-ФЗ compliance is mandatory. The
-principle: **PII never goes to Claude API.** "Dry" (non-identifying) fields
-may, batched across multiple tourists so no single entry can be linked to an
-individual.
+guiding principle: **PII must never leave the Russian Federation.** Two
+provider tiers exist:
+
+- **YandexGPT** (RU-resident processing, no cross-border transfer) — may
+  receive PII when necessary for canonicalisation / programme building.
+- **Anthropic Claude** (US-based) — receives only "dry" (non-identifying)
+  fields, batched across multiple tourists so no single entry can be linked
+  to an individual.
+
+**What YandexGPT sees today:**
+
+- `translate.go` — batch of Russian→English strings for non-PII fields:
+  `place_of_birth_ru`, `issued_by_ru` (foreign passport authority),
+  `occupation_ru`, `employer_ru`, `employer_address_ru`,
+  `previous_visits_ru`, `nationality_ru`. Strings are de-duplicated across
+  all tourists in the batch.
+- `programme.go` — dates, flights, hotels, single contact phone, manager
+  notes. No tourist names. No passport data.
+- `doverenost_clean.go` — batch of Russian free-text fields requiring
+  canonical formatting (lower/upper-casing, dotted abbreviations, commas):
+  `home_address_ru`, `reg_address_ru`, `internal_issued_by_ru`. These are
+  PII; routing them through YandexGPT is permitted under 152-ФЗ because
+  there is no cross-border transfer. Output stays in Russian. Dedup is
+  identical to translate (`collectDoverenostFreeText` in `api/generate.go`).
 
 **What Claude (Anthropic) sees today:**
 
-- `translate.go` (Haiku 4.5) — batch of Russian→English strings for these
-  non-PII fields: `place_of_birth_ru`, `issued_by_ru` (foreign passport
-  authority), `occupation_ru`, `employer_ru`, `employer_address_ru`,
-  `previous_visits_ru`, `nationality_ru`. Strings are de-duplicated across
-  all tourists in the batch, so there is no stable per-tourist index.
-- `programme.go` (Opus 4.7) — dates, flights, hotels, single contact phone,
-  manager notes. No tourist names. No passport data.
+- `ticket_parser.go` / `voucher_parser.go` — redacted (passenger-name
+  masked) ticket and voucher scans. See "Ticket / voucher scan
+  redaction" below.
 
-**What Claude does NOT see (PII-protected):**
+**What no AI sees at all (formatted locally on the server):**
 
-- Full name (`name_cyr`, `name_lat`, `maiden_name_ru`)
-- Passport numbers (internal series/number, foreign passport number)
-- Date of birth
-- Home address (`home_address_ru`) — formatted locally via
-  `backend/internal/format` + `translit.RuToLatICAO`.
-- Registration address (`reg_address_ru`) — formatted locally (same package).
-- Internal-passport issuing authority (`internal_issued_by_ru`) — formatted
-  locally (same package).
-- Phone numbers.
+- Full name (`name_cyr`, `name_lat`, `maiden_name_ru`) — used for the
+  доверенность Russian text and the anketa via `translit.RuToLatICAO`.
+- Passport numbers (internal series/number, foreign passport number).
+- Date of birth.
+- Phone numbers (other than the single guide contact phone in programme).
+
+The `HomeAddress` field on the anketa PDF is the YandexGPT-cleaned
+`home_address_ru` followed by deterministic ICAO transliteration
+(`translit.RuToLatICAO`). The transliteration step stays local because it
+is purely deterministic.
 
 **Ticket / voucher scan redaction:** `UploadTouristFile` calls
 `backend/internal/privacy.RedactScan` which shells to

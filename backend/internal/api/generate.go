@@ -46,12 +46,13 @@ func withAuditCtx(parent context.Context, pool *pgxpool.Pool, orgID, groupID, su
 }
 
 // freeTextKeys lists the submission_snapshot fields that are free-text Russian
-// strings requiring translation before they land in the final pass2 JSON.
-// The set mirrors what ai.AssembleTourist feeds through the translations map.
+// strings requiring TRANSLATION (Russian → English) before they land in the
+// final pass2 JSON. The set mirrors what ai.AssembleTourist feeds through
+// the translations map.
 //
-// Note: home_address_ru is intentionally NOT here — it is PII and must not
-// leave the server. AssembleTourist formats it locally via
-// backend/internal/format + translit.RuToLatICAO.
+// Note: home_address_ru / reg_address_ru / internal_issued_by_ru are NOT
+// here — they are PII fields that go through doverenostCleanKeys instead
+// (canonicalisation, not translation: output stays Russian).
 var freeTextKeys = []string{
 	"place_of_birth_ru",
 	"issued_by_ru",
@@ -60,6 +61,21 @@ var freeTextKeys = []string{
 	"employer_address_ru",
 	"previous_visits_ru",
 	"nationality_ru",
+}
+
+// doverenostCleanKeys lists the submission_snapshot fields that need
+// canonical Russian formatting (lower/upper-casing, dotted abbreviations,
+// commas) before they appear inside the доверенность and the anketa PDF
+// (after ICAO transliteration for HomeAddress).
+//
+// These are PII fields per CLAUDE.md "AI Privacy" — they are routed through
+// YandexGPT (RU-resident processing, no cross-border transfer per 152-ФЗ)
+// rather than the deleted local backend/internal/format package. See the
+// PII note on ai.CleanDoverenostFields.
+var doverenostCleanKeys = []string{
+	"home_address_ru",
+	"reg_address_ru",
+	"internal_issued_by_ru",
 }
 
 // touristRow is the minimal shape loaded from tourists for the pipeline.
@@ -236,6 +252,51 @@ func buildTranslationMaps(perTourist []map[string]int, translations []string) []
 	return out
 }
 
+// collectDoverenostFreeText walks the tourist payloads collecting distinct
+// non-empty values for the doverenost-specific Russian fields (home/reg
+// addresses, internal_issued_by_ru). Returns the unique strings in stable
+// order; the caller passes them to ai.CleanDoverenostFields and feeds the
+// result back as a raw → cleaned map via buildDoverenostCleanMap.
+//
+// The function intentionally mirrors collectFreeText (translate path) so
+// the dedup behaviour and stability guarantees are identical.
+func collectDoverenostFreeText(payloads []map[string]any, keys []string) []string {
+	uniques := make([]string, 0, 8)
+	seen := map[string]struct{}{}
+	for _, payload := range payloads {
+		for _, k := range keys {
+			v, ok := payload[k].(string)
+			if !ok || v == "" {
+				continue
+			}
+			if _, dup := seen[v]; dup {
+				continue
+			}
+			seen[v] = struct{}{}
+			uniques = append(uniques, v)
+		}
+	}
+	return uniques
+}
+
+// buildDoverenostCleanMap pairs the raw uniques with their cleaned
+// counterparts (same length, same order). Empty / mismatched cleaned
+// slices yield an empty map — the assembler then falls back to the raw
+// value (see ai.cleanedLookup).
+func buildDoverenostCleanMap(raw, cleaned []string) map[string]string {
+	if len(raw) == 0 || len(cleaned) == 0 || len(raw) != len(cleaned) {
+		return nil
+	}
+	m := make(map[string]string, len(raw))
+	for i, r := range raw {
+		if cleaned[i] == "" {
+			continue
+		}
+		m[r] = cleaned[i]
+	}
+	return m
+}
+
 // buildProgrammeInput picks the first tourist with a populated outbound flight
 // as the "lead ticket" (programme shows one shared activity cell) and packages
 // the non-PII trip data needed by ai.GenerateProgramme.
@@ -328,14 +389,17 @@ func runPipeline(ctx context.Context, pool *pgxpool.Pool, translator ai.Translat
 	uniques, perTourist := collectFreeText(payloads, freeTextKeys)
 	programmeInput := buildProgrammeInput(payloads, flights, hotels, guidePhone, programmeNotes)
 
-	// Doverenost free-text fields (internal_issued_by_ru, reg_address_ru) are
-	// formatted LOCALLY by ai.AssembleDoverenost via backend/internal/format.
-	// They used to go through Claude Haiku (CleanDoverenostFields) — removed
-	// because these fields are PII-adjacent and must not leave the server.
+	// Doverenost free-text fields (home_address_ru, reg_address_ru,
+	// internal_issued_by_ru) are PII. They are canonicalised by
+	// ai.CleanDoverenostFields (YandexGPT, RU-resident). Dedup via
+	// collectDoverenostFreeText so each unique value is sent only once
+	// per generation, matching the translate path.
+	doverenostUniques := collectDoverenostFreeText(payloads, doverenostCleanKeys)
 
 	var (
-		translations []string
-		programme    []ai.ProgrammeDay
+		translations    []string
+		programme       []ai.ProgrammeDay
+		doverenostClean []string
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
@@ -354,11 +418,20 @@ func runPipeline(ctx context.Context, pool *pgxpool.Pool, translator ai.Translat
 		programme = p
 		return nil
 	})
+	g.Go(func() error {
+		c, err := ai.CleanDoverenostFields(gctx, translator, doverenostUniques)
+		if err != nil {
+			return fmt.Errorf("doverenost clean: %w", err)
+		}
+		doverenostClean = c
+		return nil
+	})
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
 
 	trMaps := buildTranslationMaps(perTourist, translations)
+	doverenostCleanMap := buildDoverenostCleanMap(doverenostUniques, doverenostClean)
 
 	// Best-effort cache of per-tourist translations back into DB.
 	for i, row := range rows {
@@ -380,6 +453,7 @@ func runPipeline(ctx context.Context, pool *pgxpool.Pool, translator ai.Translat
 	pass2 := ai.AssemblePass2(
 		payloads,
 		trMaps,
+		doverenostCleanMap,
 		flights,
 		programme,
 		hotels,

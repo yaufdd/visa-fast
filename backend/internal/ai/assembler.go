@@ -5,15 +5,39 @@ import (
 	"strings"
 	"time"
 
-	"fujitravel-admin/backend/internal/format"
 	"fujitravel-admin/backend/internal/translit"
 )
+
+// cleanedLookup returns m[s] when present and non-empty, otherwise s
+// itself. Used by AssembleTourist / AssembleDoverenost to pick up the
+// pre-cleaned doverenost free-text fields produced by
+// CleanDoverenostFields. A nil map or missing key is the no-op
+// fallback so unit tests that do not exercise the cleaner still work.
+func cleanedLookup(m map[string]string, s string) string {
+	if s == "" {
+		return ""
+	}
+	if m != nil {
+		if c, ok := m[s]; ok && c != "" {
+			return c
+		}
+	}
+	return s
+}
 
 // AssembleTourist builds one Pass2Tourist from the submission payload,
 // translations map, and flight_data.
 // Arguments use untyped maps because they come from JSONB columns — the
 // caller (orchestrator) already has them as map[string]any.
-func AssembleTourist(payload map[string]any, translations map[string]string, flight map[string]any) Pass2Tourist {
+//
+// cleanedDoverenost is a raw → canonical map of free-text Russian
+// fields (home/registration addresses, internal-passport issuing
+// authority) produced by CleanDoverenostFields once per /generate run
+// upstream. Pass nil in tests that do not exercise that path: the
+// lookup falls back to the raw string (CLAUDE.md explicitly notes this
+// is no longer canonical Russian, but the rest of the assembler is
+// orthogonal to cleanup so unit tests still get deterministic output).
+func AssembleTourist(payload map[string]any, translations map[string]string, cleanedDoverenost map[string]string, flight map[string]any) Pass2Tourist {
 	get := func(k string) string {
 		if v, ok := payload[k]; ok {
 			if s, ok := v.(string); ok {
@@ -54,27 +78,29 @@ func AssembleTourist(payload map[string]any, translations map[string]string, fli
 	stayDays := ComputeIntendedStayDays(strGet(arrival, "date"), strGet(departure, "date"))
 
 	return Pass2Tourist{
-		NameLat:               firstNonEmpty(get("name_lat"), translit.RuToLatICAO(get("name_cyr"))),
-		NameCyr:               get("name_cyr"),
-		PassportNumber:        get("passport_number"),
-		BirthDate:             get("birth_date"),
-		Nationality:           strings.ToUpper(tr("nationality_ru")),
-		PlaceOfBirth:          tr("place_of_birth_ru"),
-		IssueDate:             get("issue_date"),
-		ExpiryDate:            get("expiry_date"),
-		FormerNationality:     ComputeFormerNationality(get("former_nationality_ru"), get("place_of_birth_ru"), get("birth_date")),
-		Gender:                gender,
-		MaritalStatus:         marital,
-		PassportType:          passportType,
-		IssuedBy:              tr("issued_by_ru"),
-		HomeAddress:           translit.RuToLatICAO(format.FormatAddress(get("home_address_ru"))),
+		NameLat:           firstNonEmpty(get("name_lat"), translit.RuToLatICAO(get("name_cyr"))),
+		NameCyr:           get("name_cyr"),
+		PassportNumber:    get("passport_number"),
+		BirthDate:         get("birth_date"),
+		Nationality:       strings.ToUpper(tr("nationality_ru")),
+		PlaceOfBirth:      tr("place_of_birth_ru"),
+		IssueDate:         get("issue_date"),
+		ExpiryDate:        get("expiry_date"),
+		FormerNationality: ComputeFormerNationality(get("former_nationality_ru"), get("place_of_birth_ru"), get("birth_date")),
+		Gender:            gender,
+		MaritalStatus:     marital,
+		PassportType:      passportType,
+		IssuedBy:          tr("issued_by_ru"),
+		// home_address_ru is PII. It is canonicalised by
+		// CleanDoverenostFields (YandexGPT, RU-resident — see PII note in
+		// doverenost_clean.go) and transliterated via ICAO for the
+		// anketa PDF here. The transliteration step stays local because
+		// it is deterministic.
+		HomeAddress:           translit.RuToLatICAO(cleanedLookup(cleanedDoverenost, get("home_address_ru"))),
 		Phone:                 get("phone"),
 		Occupation:            occupation,
 		Employer:              tr("employer_ru"),
 		EmployerAddress:       tr("employer_address_ru"),
-		// home_address_ru is PII — we never send it to Claude. Format it
-		// locally (canonical Russian) then transliterate via ICAO for the
-		// anketa PDF. `HomeAddress` below overrides the default set earlier.
 		BeenToJapan:           MapYesNo(get("been_to_japan_ru")),
 		PreviousVisits:        tr("previous_visits_ru"),
 		CriminalRecord:        MapYesNo(get("criminal_record_ru")),
@@ -99,7 +125,13 @@ func AssembleTourist(payload map[string]any, translations map[string]string, fli
 // AssembleDoverenost builds the doverenost entries. `tourists` are already
 // assembled Pass2Tourist records. `payloads[i]` corresponds to tourists[i].
 // departureDate is DD.MM.YYYY used for minor-age detection.
-func AssembleDoverenost(tourists []Pass2Tourist, payloads []map[string]any, departureDate string) []Pass2Dov {
+//
+// cleanedDoverenost is a raw → canonical map produced by
+// CleanDoverenostFields (YandexGPT) covering home_address_ru,
+// reg_address_ru and internal_issued_by_ru across all tourists in the
+// run. A nil / missing entry falls back to the raw value so older call
+// sites and unit tests still work.
+func AssembleDoverenost(tourists []Pass2Tourist, payloads []map[string]any, cleanedDoverenost map[string]string, departureDate string) []Pass2Dov {
 	refs := make([]TouristRef, len(tourists))
 	for i, t := range tourists {
 		refs[i] = TouristRef{
@@ -120,11 +152,13 @@ func AssembleDoverenost(tourists []Pass2Tourist, payloads []map[string]any, depa
 			PassportSeries: strGet(payload, "internal_series"),
 			PassportNumber: strGet(payload, "internal_number"),
 			IssuedDate:     russianIssuedDate(strGet(payload, "internal_issued_ru")),
-			// IssuedBy + RegAddress are PII-adjacent free-text fields. They
-			// are formatted locally (no AI) per the доверенность rules —
-			// see backend/internal/format/russian_address.go.
-			IssuedBy:   format.FormatIssuingAuthority(strGet(payload, "internal_issued_by_ru")),
-			RegAddress: format.FormatAddress(strGet(payload, "reg_address_ru")),
+			// IssuedBy + RegAddress are PII-adjacent free-text fields.
+			// They are canonicalised by CleanDoverenostFields (YandexGPT,
+			// RU-resident processing — see PII note in
+			// doverenost_clean.go). The assembler simply looks the cleaned
+			// string up in the map produced by the orchestrator.
+			IssuedBy:   cleanedLookup(cleanedDoverenost, strGet(payload, "internal_issued_by_ru")),
+			RegAddress: cleanedLookup(cleanedDoverenost, strGet(payload, "reg_address_ru")),
 			IsMinor:    minor,
 		}
 		if minor {
@@ -137,8 +171,8 @@ func AssembleDoverenost(tourists []Pass2Tourist, payloads []map[string]any, depa
 				dov.PassportSeries = strGet(pp, "internal_series")
 				dov.PassportNumber = strGet(pp, "internal_number")
 				dov.IssuedDate = russianIssuedDate(strGet(pp, "internal_issued_ru"))
-				dov.IssuedBy = format.FormatIssuingAuthority(strGet(pp, "internal_issued_by_ru"))
-				dov.RegAddress = format.FormatAddress(strGet(pp, "reg_address_ru"))
+				dov.IssuedBy = cleanedLookup(cleanedDoverenost, strGet(pp, "internal_issued_by_ru"))
+				dov.RegAddress = cleanedLookup(cleanedDoverenost, strGet(pp, "reg_address_ru"))
 			}
 			// Child name in genitive case — title-case surname/first before
 			// building the genitive so "ИВАНОВ Петя" stays proper-cased.
@@ -160,9 +194,15 @@ func AssembleDoverenost(tourists []Pass2Tourist, payloads []map[string]any, depa
 // AssemblePass2 is the top-level entry point called by generate.go.
 // It composes the full pass2.json structure from already-fetched inputs.
 // todayDate: DD.MM.YYYY for the date_of_application.
+//
+// cleanedDoverenost is the raw → canonical map of free-text Russian
+// addresses + issuing-authority strings produced once per run by
+// CleanDoverenostFields (YandexGPT). Pass nil if you do not want
+// canonicalisation — the assembler falls back to the raw values.
 func AssemblePass2(
 	payloads []map[string]any,
 	translations []map[string]string,
+	cleanedDoverenost map[string]string,
 	flights []map[string]any,
 	programme []ProgrammeDay,
 	hotels []HotelBrief,
@@ -178,7 +218,7 @@ func AssemblePass2(
 		if i < len(flights) {
 			fl = flights[i]
 		}
-		tourists[i] = AssembleTourist(payloads[i], tr, fl)
+		tourists[i] = AssembleTourist(payloads[i], tr, cleanedDoverenost, fl)
 	}
 
 	var firstHotel Pass2Hotel
@@ -201,7 +241,7 @@ func AssemblePass2(
 		}
 	}
 
-	doverenost := AssembleDoverenost(tourists, payloads, dep.Date)
+	doverenost := AssembleDoverenost(tourists, payloads, cleanedDoverenost, dep.Date)
 
 	var cyrNames []string
 	for _, t := range tourists {
