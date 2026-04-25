@@ -298,6 +298,92 @@ func TestTokenSource_ConcurrentToken(t *testing.T) {
 	}
 }
 
+// setRefreshIntervalForTest swaps refreshInterval for the duration of the
+// test and restores the previous value on cleanup. Test-only — production
+// code must never call this.
+func setRefreshIntervalForTest(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := refreshInterval
+	refreshInterval = d
+	t.Cleanup(func() { refreshInterval = prev })
+}
+
+// setBackoffForTest swaps the backoff knobs and restores them on cleanup.
+func setBackoffForTest(t *testing.T, initial, max time.Duration) {
+	t.Helper()
+	prevI, prevM := refreshBackoffInitial, refreshBackoffMax
+	refreshBackoffInitial = initial
+	refreshBackoffMax = max
+	t.Cleanup(func() {
+		refreshBackoffInitial = prevI
+		refreshBackoffMax = prevM
+	})
+}
+
+// setIAMEndpointForTest swaps iamEndpoint and restores it on cleanup.
+func setIAMEndpointForTest(t *testing.T, url string) {
+	t.Helper()
+	prev := iamEndpoint
+	iamEndpoint = url
+	t.Cleanup(func() { iamEndpoint = prev })
+}
+
+// TestRefreshLoop_BackoffOnFailure verifies that a transient IAM failure
+// does not wedge the loop into the next ~11h slot. The fake server returns
+// 503 on its first request and a healthy token thereafter; with timer +
+// backoff both shrunk to ~50 ms, two requests should arrive within ~200 ms.
+func TestRefreshLoop_BackoffOnFailure(t *testing.T) {
+	keyJSON, _ := makeFixtureKeyJSON(t)
+
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		if n == 1 {
+			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		resp := map[string]string{
+			"iamToken":  fmt.Sprintf("token-%d", n),
+			"expiresAt": time.Now().Add(1 * time.Hour).Format(time.RFC3339Nano),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	setIAMEndpointForTest(t, srv.URL)
+	setRefreshIntervalForTest(t, 50*time.Millisecond)
+	setBackoffForTest(t, 50*time.Millisecond, 200*time.Millisecond)
+
+	ts, err := NewTokenSource(keyJSON)
+	if err != nil {
+		t.Fatalf("NewTokenSource: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ts.Start(ctx)
+
+	// Wait for at least 2 requests (initial 503 + at least one retry).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&calls) >= 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	got := atomic.LoadInt32(&calls)
+	if got < 2 {
+		t.Fatalf("expected loop to retry after 503, got only %d call(s)", got)
+	}
+
+	// Cancel and give the goroutine a beat to exit cleanly so the race
+	// detector has nothing in flight when t.Cleanup restores package vars.
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+}
+
 func TestNewTokenSource_RejectsMalformedJSON(t *testing.T) {
 	if _, err := NewTokenSource([]byte("{not json")); err == nil {
 		t.Errorf("expected error for malformed JSON, got nil")

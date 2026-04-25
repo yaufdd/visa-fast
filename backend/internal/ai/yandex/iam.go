@@ -43,7 +43,19 @@ const refreshThreshold = 60 * time.Second
 // refreshInterval is the period of the background refresh goroutine.
 // Yandex IAM tokens last 12h; we refresh roughly every 11h to give us a
 // generous safety margin.
-const refreshInterval = 11 * time.Hour
+//
+// Mutable (var, not const) so tests can shrink it to a test-friendly value
+// via setRefreshIntervalForTest. Production code must not reassign.
+var refreshInterval = 11 * time.Hour
+
+// refreshBackoffInitial / refreshBackoffMax bound the exponential backoff
+// used by refreshLoop after a refresh failure. Starting small (1m) keeps
+// the system responsive to transient blips; capping at 10m avoids
+// hammering an obviously-down IAM endpoint. Mutable for tests.
+var (
+	refreshBackoffInitial = 1 * time.Minute
+	refreshBackoffMax     = 10 * time.Minute
+)
 
 // authorizedKey is the on-disk shape of `yc iam key create --output ...`.
 type authorizedKey struct {
@@ -59,11 +71,10 @@ type TokenSource struct {
 	serviceAccountID string
 	privateKey       *rsa.PrivateKey
 
-	mu       sync.Mutex // guards token, exp, started
-	token    string
-	exp      time.Time
-	started  bool
-	stopOnce sync.Once
+	mu      sync.Mutex // guards token, exp, started
+	token   string
+	exp     time.Time
+	started bool
 }
 
 // NewTokenSource parses the contents of a Yandex authorized_key.json file
@@ -129,6 +140,15 @@ func (ts *TokenSource) Token(ctx context.Context) (string, error) {
 	return ts.token, nil
 }
 
+// refresh acquires the lock and performs one IAM exchange. Used by the
+// background refreshLoop, which must not own the lock itself (to avoid
+// blocking concurrent Token() callers for the full HTTP round trip).
+func (ts *TokenSource) refresh(ctx context.Context) error {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.refreshLocked(ctx)
+}
+
 // refreshLocked performs one JWT-for-IAM-token exchange. Caller must hold
 // ts.mu.
 func (ts *TokenSource) refreshLocked(ctx context.Context) error {
@@ -159,7 +179,11 @@ func (ts *TokenSource) refreshLocked(ctx context.Context) error {
 		return fmt.Errorf("yandex: read iam response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("yandex: iam exchange status %d: %s", resp.StatusCode, string(respBody))
+		// Cap echoed body — IAM endpoint could in pathological cases echo
+		// back the request JWT or other sensitive bytes; we don't want a
+		// 5xx page being faithfully copied into our error chain (and from
+		// there into logs).
+		return fmt.Errorf("yandex: iam exchange status %d: %s", resp.StatusCode, truncate(string(respBody), 512))
 	}
 
 	var out struct {
@@ -206,6 +230,10 @@ func (ts *TokenSource) buildSignedJWT() (string, error) {
 // refreshInterval (~11h) until ctx is cancelled. On refresh failure the
 // previous cached token is kept and a slog.Error is emitted (the SA key
 // is never logged). Idempotent — subsequent calls are no-ops.
+//
+// The loop's interval / backoff parameters are captured here (in the
+// caller's goroutine) and passed by value, so test-only mutations of
+// the package vars after Start cannot race with the loop reading them.
 func (ts *TokenSource) Start(ctx context.Context) {
 	ts.mu.Lock()
 	if ts.started {
@@ -215,26 +243,46 @@ func (ts *TokenSource) Start(ctx context.Context) {
 	ts.started = true
 	ts.mu.Unlock()
 
-	go ts.refreshLoop(ctx)
+	interval := refreshInterval
+	backoffInitial := refreshBackoffInitial
+	backoffMax := refreshBackoffMax
+	go ts.refreshLoop(ctx, interval, backoffInitial, backoffMax)
 }
 
-func (ts *TokenSource) refreshLoop(ctx context.Context) {
-	t := time.NewTimer(refreshInterval)
+// refreshLoop wakes every interval (~11h in production) and refreshes the
+// cached IAM token. On failure it does NOT wait another full interval —
+// that would leave us stale-failing for ~11h on a single transient blip,
+// which is longer than the token's own lifetime minus the refresh
+// threshold. Instead we back off exponentially from backoffInitial up to
+// backoffMax, then snap back to interval the moment a refresh succeeds.
+func (ts *TokenSource) refreshLoop(ctx context.Context, interval, backoffInitial, backoffMax time.Duration) {
+	backoff := backoffInitial
+	t := time.NewTimer(interval)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			ts.mu.Lock()
-			err := ts.refreshLocked(ctx)
-			ts.mu.Unlock()
-			if err != nil {
-				slog.Error("yandex iam refresh failed", "err", err)
+			if err := ts.refresh(ctx); err != nil {
+				slog.Error("yandex iam refresh failed", "err", err, "next_attempt", backoff)
+				t.Reset(backoff)
+				backoff = min(backoff*2, backoffMax)
 			} else {
 				slog.Info("yandex iam token refreshed")
+				t.Reset(interval)
+				backoff = backoffInitial
 			}
-			t.Reset(refreshInterval)
 		}
 	}
+}
+
+// truncate returns s capped at max bytes, appending an ellipsis marker
+// so a reader knows the value was cut. Used for HTTP response bodies in
+// error messages — see the secrets-hygiene comment in refreshLocked.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "...(truncated)"
 }
