@@ -11,6 +11,7 @@ frontend/dist/
 *.zip
 *.pdf
 !templates/anketa_template.pdf
+!backend/internal/ai/yandex/testdata/*.pdf
 .DS_Store
 .playwright-mcp/
 .serena/
