@@ -73,20 +73,40 @@ func TranslateStrings(ctx context.Context, t Translator, src []string) ([]string
 	return out, nil
 }
 
-// yandexGPTAdapter wraps a *yandex.GPTClient and writes one ai_call_logs
+// yandexClient is the small surface yandexGPTAdapter actually needs from
+// a Yandex GPT client. *yandex.GPTClient satisfies it in production; the
+// adapter tests pass a recording fake. Kept unexported because it is an
+// implementation detail of the audit-log seam, not part of the package's
+// public API.
+type yandexClient interface {
+	Chat(ctx context.Context, req yandex.ChatRequest) (string, error)
+}
+
+// yandexGPTAdapter wraps a yandexClient and writes one ai_call_logs
 // audit row per Chat call. It is the production implementation of
 // Translator: see NewYandexAdapter for construction. We keep the audit
 // instrumentation here (not in the yandex package) so the yandex client
 // stays dependency-free and reusable; the audit shape lives next to the
 // other AI seam (callClaude in client.go) for symmetry.
 type yandexGPTAdapter struct {
-	client *yandex.GPTClient
+	client yandexClient
 }
 
-// NewYandexAdapter builds a Translator backed by the given Yandex GPT
-// client. Audit logging is performed by reading the Logger that the
-// caller installs in ctx via WithLogger; if no logger is installed the
-// NopLogger silently swallows the row, matching callClaude's behaviour.
+// NewYandexAdapter wires a *yandex.GPTClient through ai_call_logs as the
+// audit-log seam for all YandexGPT calls. Audit logging is performed by
+// reading the Logger that the caller installs in ctx via WithLogger; if
+// no logger is installed the NopLogger silently swallows the row,
+// matching callClaude's behaviour.
+//
+// PII CONTRACT (152-ФЗ): the audit row records the FULL request body
+// including ChatRequest.User and ChatRequest.System. Callers MUST NOT
+// pass any of the PII fields listed in CLAUDE.md "AI Privacy" section
+// (full names, passport numbers, dates of birth, home/registration
+// addresses, phone numbers) in either field. Translate (Task 1.B1)
+// satisfies this by sending only de-duplicated dry fields. Programme
+// (Task 1.B2) satisfies this by stripping tourist names and passport
+// data before composing the prompt. New call sites must verify their
+// payloads against this contract before adding callers.
 func NewYandexAdapter(client *yandex.GPTClient) Translator {
 	return &yandexGPTAdapter{client: client}
 }
