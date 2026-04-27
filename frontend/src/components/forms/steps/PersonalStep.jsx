@@ -38,6 +38,22 @@ export default function PersonalStep({ payload, setField, errors }) {
     }
   };
 
+  // Former nationality dropdown — same shape as nationality. Anything other
+  // than 'other' syncs verbatim to former_nationality_ru. Picking 'other'
+  // clears the field so the user types a country name. Note:
+  // ComputeFormerNationality on the backend recognises only "СССР" /
+  // "Soviet" / "USSR" patterns — anything else falls through to the
+  // place-of-birth fallback or "NO". That is accepted; the form just
+  // collects what the user types.
+  const handleFormerNationalityChoice = (next) => {
+    setField('former_nationality_choice', next);
+    if (next !== 'other') {
+      setField('former_nationality_ru', next);
+    } else {
+      setField('former_nationality_ru', '');
+    }
+  };
+
   // handleCyrChange — preserves the existing one-way ICAO transliteration
   // from name_cyr → name_lat (only fires if the user is typing in Cyrillic;
   // editing the Latin field directly is supported below).
@@ -116,17 +132,26 @@ export default function PersonalStep({ payload, setField, errors }) {
       {payload.nationality_choice === 'other'
         && textField('nationality_ru', 'Гражданство (введите страну)')}
 
-      {/* Former nationality — fixed Yes/USSR select. The assembler's
-          ComputeFormerNationality only recognises "СССР" / "Soviet" /
-          "USSR" or place-of-birth fallback, so we don't expose any
-          options the backend can't act on. */}
+      {/* Former nationality dropdown — Нет / СССР / Другое. The choice is
+          UI-only state; the authoritative field the backend reads is
+          former_nationality_ru, kept in sync by handleFormerNationalityChoice. */}
       <div className="sf-hint" style={{ marginBottom: 6 }}>
         Если вы родились в СССР, выберите «СССР».
       </div>
-      {selectField('former_nationality_ru', 'Прежнее гражданство', [
-        { value: 'Нет', label: 'Нет' },
-        { value: 'СССР', label: 'СССР' },
-      ])}
+      <label className="sf-field" data-field="former_nationality_choice">
+        <span className="sf-label">Прежнее гражданство</span>
+        <select
+          value={payload.former_nationality_choice ?? 'Нет'}
+          onChange={(e) => handleFormerNationalityChoice(e.target.value)}
+        >
+          <option value="Нет">Нет</option>
+          <option value="СССР">СССР</option>
+          <option value="other">Другое (указать)</option>
+        </select>
+      </label>
+
+      {payload.former_nationality_choice === 'other'
+        && textField('former_nationality_ru', 'Прежнее гражданство (введите страну)')}
 
       {/* Yes/No toggle for previous surname. The free-text trap (typing
           "Нет" → ICAO transliterated to "NET" in the visa anketa PDF) was

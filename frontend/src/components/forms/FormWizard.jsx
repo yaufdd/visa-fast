@@ -63,9 +63,14 @@ const SELECT_DEFAULTS = {
   // changes. The "Россия" default mirrors the most common case.
   nationality_choice: 'Россия',
   nationality_ru: 'Россия',
-  // Former nationality is a Yes/USSR select on PersonalStep. Default
-  // "Нет" matches the common case; the assembler's ComputeFormerNationality
-  // recognises "СССР" specifically, so no other options exist.
+  // Former nationality dropdown defaults — Нет / СССР / Другое.
+  // former_nationality_choice is UI-only state; former_nationality_ru is
+  // the field the backend reads (kept in sync by PersonalStep). Default
+  // "Нет" matches the common case. The assembler's
+  // ComputeFormerNationality recognises only "СССР" / "Soviet" / "USSR"
+  // patterns — anything from the "Другое" branch falls through to the
+  // place-of-birth fallback or "NO". That's accepted.
+  former_nationality_choice: 'Нет',
   former_nationality_ru: 'Нет',
 };
 
@@ -74,7 +79,8 @@ const SELECT_DEFAULTS = {
 // is fine.
 const ALL_FIELDS = [
   'name_cyr', 'name_lat', 'gender_ru', 'birth_date', 'marital_status_ru',
-  'place_of_birth_ru', 'nationality_ru', 'nationality_choice', 'former_nationality_ru',
+  'place_of_birth_ru', 'nationality_ru', 'nationality_choice',
+  'former_nationality_ru', 'former_nationality_choice',
   'had_other_name', 'maiden_name_ru',
   'passport_number', 'passport_type_ru', 'issue_date', 'expiry_date', 'issued_by_ru',
   'internal_series', 'internal_number', 'internal_issued_ru', 'internal_issued_by_ru',
@@ -178,15 +184,23 @@ export default function FormWizard({
         merged.nationality_ru = 'Россия';
       }
     }
-    // Default former_nationality_ru when nothing is set. The select only
-    // accepts "Нет" / "СССР"; legacy free-text values that don't match
-    // either are coerced to "Нет" (assembler's ComputeFormerNationality
-    // ignores anything other than СССР/Soviet/USSR anyway).
-    if (!merged.former_nationality_ru) {
-      merged.former_nationality_ru = 'Нет';
-    } else if (merged.former_nationality_ru !== 'Нет' && merged.former_nationality_ru !== 'СССР') {
-      const lc = String(merged.former_nationality_ru).trim().toLowerCase();
-      merged.former_nationality_ru = (lc === 'ссср' || lc === 'soviet' || lc === 'ussr') ? 'СССР' : 'Нет';
+    // Restore former_nationality_choice from former_nationality_ru when
+    // missing. The dropdown options are Нет / СССР / Другое. Legacy
+    // free-text values that aren't exactly "Нет" / "СССР" land on
+    // "Другое" so the saved string survives — the user can keep, edit,
+    // or replace it. The assembler's ComputeFormerNationality only acts
+    // on "СССР" / "Soviet" / "USSR" patterns, so other free-text simply
+    // falls through to its place-of-birth fallback.
+    if (!merged.former_nationality_choice) {
+      const ru = String(merged.former_nationality_ru || '').trim();
+      if (ru === 'Нет' || ru === '') {
+        merged.former_nationality_choice = 'Нет';
+        merged.former_nationality_ru = 'Нет';
+      } else if (ru === 'СССР') {
+        merged.former_nationality_choice = 'СССР';
+      } else {
+        merged.former_nationality_choice = 'other';
+      }
     }
     return merged;
   }, [initialPayload, restoredBlob]);

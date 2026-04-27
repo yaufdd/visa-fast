@@ -32,6 +32,9 @@ const SELECT_DEFAULTS = {
   // is UI-only state; nationality_ru is what the backend reads.
   nationality_choice: 'Россия',
   nationality_ru: 'Россия',
+  // Former nationality dropdown — Нет / СССР / Другое. The choice is
+  // UI-only; former_nationality_ru is the persisted field.
+  former_nationality_choice: 'Нет',
   former_nationality_ru: 'Нет',
 };
 
@@ -46,7 +49,8 @@ const NATIONALITY_PRESETS = ['Россия', 'Беларусь', 'Казахст
 // submission restore the chosen category without guessing.
 const ALL_FIELDS = [
   'name_cyr', 'name_lat', 'gender_ru', 'birth_date', 'marital_status_ru',
-  'place_of_birth_ru', 'nationality_ru', 'nationality_choice', 'former_nationality_ru',
+  'place_of_birth_ru', 'nationality_ru', 'nationality_choice',
+  'former_nationality_ru', 'former_nationality_choice',
   'had_other_name', 'maiden_name_ru',
   'passport_number', 'passport_type_ru', 'issue_date', 'expiry_date', 'issued_by_ru',
   'internal_series', 'internal_number', 'internal_issued_ru', 'internal_issued_by_ru',
@@ -329,11 +333,19 @@ export default function SubmissionForm({
         merged.nationality_ru = 'Россия';
       }
     }
-    if (!merged.former_nationality_ru) {
-      merged.former_nationality_ru = 'Нет';
-    } else if (merged.former_nationality_ru !== 'Нет' && merged.former_nationality_ru !== 'СССР') {
-      const lc = String(merged.former_nationality_ru).trim().toLowerCase();
-      merged.former_nationality_ru = (lc === 'ссср' || lc === 'soviet' || lc === 'ussr') ? 'СССР' : 'Нет';
+    // Restore former_nationality_choice from former_nationality_ru when
+    // missing. Mirrors FormWizard. Legacy free-text values that aren't
+    // exactly "Нет" / "СССР" land on "Другое" so the saved string survives.
+    if (!merged.former_nationality_choice) {
+      const ru = String(merged.former_nationality_ru || '').trim();
+      if (ru === 'Нет' || ru === '') {
+        merged.former_nationality_choice = 'Нет';
+        merged.former_nationality_ru = 'Нет';
+      } else if (ru === 'СССР') {
+        merged.former_nationality_choice = 'СССР';
+      } else {
+        merged.former_nationality_choice = 'other';
+      }
     }
     return merged;
   }, [initialPayload]);
@@ -790,13 +802,35 @@ export default function SubmissionForm({
       {payload.nationality_choice === 'other'
         && textField('nationality_ru', 'Гражданство (введите страну)')}
 
+      {/* Former nationality dropdown — Нет / СССР / Другое. The choice
+          is UI-only state; the authoritative field the backend reads is
+          former_nationality_ru. */}
       <div className="sf-hint" style={{ marginBottom: 6 }}>
         Если вы родились в СССР, выберите «СССР».
       </div>
-      {selectField('former_nationality_ru', 'Прежнее гражданство', [
-        { value: 'Нет', label: 'Нет' },
-        { value: 'СССР', label: 'СССР' },
-      ])}
+      <label className="sf-field" data-field="former_nationality_choice">
+        <span className="sf-label">Прежнее гражданство</span>
+        <select
+          value={payload.former_nationality_choice ?? 'Нет'}
+          onChange={(e) => {
+            const next = e.target.value;
+            setPayload((p) => ({
+              ...p,
+              former_nationality_choice: next,
+              former_nationality_ru: next === 'other' ? '' : next,
+            }));
+            clearError('former_nationality_choice');
+            clearError('former_nationality_ru');
+          }}
+        >
+          <option value="Нет">Нет</option>
+          <option value="СССР">СССР</option>
+          <option value="other">Другое (указать)</option>
+        </select>
+      </label>
+
+      {payload.former_nationality_choice === 'other'
+        && textField('former_nationality_ru', 'Прежнее гражданство (введите страну)')}
 
       {/* Yes/No toggle (replaces the old free-text trap where typing
           "Нет" became "NET" in the visa anketa PDF). Switching to "Нет"
