@@ -824,6 +824,11 @@ export default function SubmissionForm({
 
       {payload.had_other_name === 'Да' && textField('maiden_name_ru', 'Какая фамилия была раньше?')}
 
+      {/* Phone — moved here from "Контакты" to mirror the wizard's
+          PersonalStep. Belongs with the tourist's personal contact
+          details, not with the address block. */}
+      {phoneField('phone', 'Телефон')}
+
       <h2 className="sf-heading">Загранпаспорт</h2>
 
       {passportNumberField()}
@@ -896,7 +901,6 @@ export default function SubmissionForm({
       <h2 className="sf-heading">Контакты</h2>
 
       {textareaField('home_address_ru', 'Домашний адрес')}
-      {phoneField('phone', 'Телефон')}
 
       <h2 className="sf-heading">Работа</h2>
 

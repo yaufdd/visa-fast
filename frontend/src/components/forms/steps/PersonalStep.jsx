@@ -151,17 +151,27 @@ export default function PersonalStep({ payload, setField, errors }) {
       </label>
 
       {payload.had_other_name === 'Да' && textField('maiden_name_ru', 'Какая фамилия была раньше?')}
+
+      {/* Phone moved here from TravelDocsStep — it belongs with the
+          tourist's personal contact details, not with travel documents.
+          Required (visa anketa needs a contact phone). */}
+      {phoneField('phone', 'Телефон')}
     </div>
   );
 }
 
-// Validator for PersonalStep — only the Latin name regex; everything else
-// is optional in the legacy form too.
+// Validator for PersonalStep — Latin name regex + phone required.
+// Phone migrated from TravelDocsStep; it is the visa anketa's contact
+// number and the form should not let the tourist past Step 1 without
+// providing it.
 export function validate(payload) {
   const errors = {};
   const nameLat = (payload.name_lat || '').trim();
   if (nameLat && !/^[A-Z ]+$/.test(nameLat)) {
     errors.name_lat = 'Только латинские буквы A–Z и пробелы';
+  }
+  if (!String(payload.phone || '').trim()) {
+    errors.phone = 'Укажите контактный телефон';
   }
   return errors;
 }
