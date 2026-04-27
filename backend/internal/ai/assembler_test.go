@@ -226,6 +226,43 @@ func TestAssembleDoverenost_FallbackToRawWhenMissing(t *testing.T) {
 	}
 }
 
+func TestAssembleTourist_OccupationCategories(t *testing.T) {
+	// The Работа section in the form maps a small set of Russian markers
+	// to fixed English values without going through the translator.
+	cases := []struct {
+		ru   string
+		want string
+	}{
+		{"ИП", "INDIVIDUAL ENTREPRENEUR"},
+		{"ип", "INDIVIDUAL ENTREPRENEUR"}, // case-insensitive
+		{"Пенсионер", "PENSIONER"},
+		{"Домохозяйка", "HOUSEWIFE"},
+		{"Безработный", "UNEMPLOYED"},
+		{"Студент", "STUDENT"},
+		{"Школьник", "STUDENT"}, // visa form doesn't distinguish
+	}
+	for _, c := range cases {
+		t.Run(c.ru, func(t *testing.T) {
+			payload := map[string]any{
+				"name_cyr":         "Иванов Петр",
+				"gender_ru":        "Мужской",
+				"passport_type_ru": "Обычный",
+				"birth_date":       "10.06.1990",
+				"occupation_ru":    c.ru,
+			}
+			// Translator entry would normally win, but the switch must take
+			// precedence for these categories.
+			translations := map[string]string{
+				c.ru: "WRONG_TRANSLATION",
+			}
+			got := AssembleTourist(payload, translations, nil, nil)
+			if got.Occupation != c.want {
+				t.Errorf("occupation_ru=%q → Occupation=%q, want %q", c.ru, got.Occupation, c.want)
+			}
+		})
+	}
+}
+
 func TestAssembleTourist_OneWay(t *testing.T) {
 	payload := map[string]any{
 		"name_cyr":         "Сидоров Петр",

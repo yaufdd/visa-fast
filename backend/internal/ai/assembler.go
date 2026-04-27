@@ -91,13 +91,29 @@ func AssembleTourist(payload map[string]any, translations map[string]string, cle
 	marital := MapMaritalStatus(get("marital_status_ru"))
 	passportType := MapPassportType(get("passport_type_ru"))
 
-	// "ИП" is a self-employment marker entered via the form checkbox — the
-	// anketa PDF expects the full English term in caps, and we don't want
-	// to hand this deterministic phrase to the translator (which may
-	// produce "IE", "Individual Entrepreneur", etc.).
+	// The form's Работа section sets occupation_ru to a small fixed set of
+	// Russian markers ("ИП", "Пенсионер", "Домохозяйка", "Безработный",
+	// "Студент", "Школьник") for the self-employment / no-employment /
+	// student categories. The anketa PDF expects the full English term in
+	// caps, and we don't want to hand these deterministic phrases to the
+	// translator (which may produce inconsistent variants like "IE",
+	// "Individual Entrepreneur", "Retired", etc.). Match case-insensitively
+	// so user typos in case don't break the mapping.
 	occupation := tr("occupation_ru")
-	if strings.EqualFold(strings.TrimSpace(get("occupation_ru")), "ИП") {
+	switch {
+	case strings.EqualFold(strings.TrimSpace(get("occupation_ru")), "ИП"):
 		occupation = "INDIVIDUAL ENTREPRENEUR"
+	case strings.EqualFold(strings.TrimSpace(get("occupation_ru")), "Пенсионер"):
+		occupation = "PENSIONER"
+	case strings.EqualFold(strings.TrimSpace(get("occupation_ru")), "Домохозяйка"):
+		occupation = "HOUSEWIFE"
+	case strings.EqualFold(strings.TrimSpace(get("occupation_ru")), "Безработный"):
+		occupation = "UNEMPLOYED"
+	case strings.EqualFold(strings.TrimSpace(get("occupation_ru")), "Студент"):
+		occupation = "STUDENT"
+	case strings.EqualFold(strings.TrimSpace(get("occupation_ru")), "Школьник"):
+		// Visa form doesn't distinguish school from university.
+		occupation = "STUDENT"
 	}
 
 	arrival := subMap(flight, "arrival")
