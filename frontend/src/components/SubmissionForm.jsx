@@ -120,13 +120,16 @@ function sanitizeLatin(value) {
 }
 
 // Map a passport-parser response (ai.PassportFields, JSON-decoded) to the
-// form payload shape. Only "internal" passports are wired in this batch
-// — foreign passports come in a follow-up. We never overwrite a field
-// the user has already typed; the caller is responsible for the merge.
+// form payload shape. The `type` parameter selects between the internal
+// (general-civil) field set and the foreign (travel) field set — these
+// share the personal-data part (name, gender, birth date, place of birth)
+// but diverge on which passport-specific fields are populated. We never
+// overwrite a field the user has already typed; the caller is responsible
+// for the merge.
 //
 // Returns:
 //   { mapped: {field: value}, filled: ["field", ...] }
-function mapPassportFieldsToPayload(fields, payload) {
+function mapPassportFieldsToPayload(fields, payload, type = 'internal') {
   const mapped = {};
   const filled = [];
   const empty = (name) => !String(payload?.[name] ?? '').trim();
@@ -139,19 +142,7 @@ function mapPassportFieldsToPayload(fields, payload) {
     }
   };
 
-  // ── Series + number ──
-  // Strip whitespace defensively — the parser returns clean digits but the
-  // OCR text it consumed sometimes has spaces.
-  if (fields.series) {
-    const series = String(fields.series).replace(/\s+/g, '');
-    if (/^\d{4}$/.test(series)) set('internal_series', series);
-  }
-  if (fields.number) {
-    const number = String(fields.number).replace(/\s+/g, '');
-    if (/^\d{6}$/.test(number)) set('internal_number', number);
-  }
-
-  // ── Name ──
+  // ── Name (shared) ──
   // Backend gives us last/first/patronymic separately; rebuild the
   // single-string format the form uses ("Bamba Erik Sergeevich").
   const nameParts = [fields.last_name, fields.first_name, fields.patronymic]
@@ -170,23 +161,64 @@ function mapPassportFieldsToPayload(fields, payload) {
       }
     }
   }
+  // Foreign passports carry an MRZ-derived Latin name string. When present
+  // it is the authoritative spelling printed on the data page — override
+  // the ICAO best-guess we just produced (but still respect a manual user
+  // entry: only overwrite if name_lat hasn't been set by the user before
+  // this call). To check that we look at the *original* payload, not the
+  // one we may have just mutated above.
+  if (type === 'foreign' && fields.name_latin) {
+    const lat = String(fields.name_latin).trim().toUpperCase();
+    if (lat && empty('name_lat')) {
+      mapped.name_lat = lat;
+      if (!filled.includes('name_lat')) filled.push('name_lat');
+    }
+  }
 
-  // ── Gender ──
+  // ── Gender (shared) ──
   // Parser returns the MRZ-style "МУЖ"/"ЖЕН"; the form select uses
   // "Мужской"/"Женский" (see selectField('gender_ru', ...) below).
   if (fields.gender === 'МУЖ') set('gender_ru', 'Мужской');
   else if (fields.gender === 'ЖЕН') set('gender_ru', 'Женский');
 
-  // ── Dates ── parser → "YYYY-MM-DD"; form stores → "DD.MM.YYYY".
+  // ── Birth date / place of birth (shared) ──
   if (fields.birth_date) set('birth_date', isoToDmy(fields.birth_date));
-  if (fields.issue_date) set('internal_issued_ru', isoToDmy(fields.issue_date));
-
-  // ── Plain text ──
   if (fields.place_of_birth) set('place_of_birth_ru', fields.place_of_birth);
-  if (fields.issuing_authority) set('internal_issued_by_ru', fields.issuing_authority);
-  if (fields.reg_address) set('reg_address_ru', fields.reg_address);
 
-  // department_code has no form field in the public-form payload — ignored.
+  if (type === 'foreign') {
+    // ── Foreign passport number ──
+    // Parser returns the 9-character document number as printed; the
+    // form stores it as a single string in passport_number (the segmented
+    // input below splits it 2+7 visually).
+    if (fields.number) {
+      const num = String(fields.number).replace(/\s+/g, '');
+      if (num.length === 9) set('passport_number', num);
+    }
+    // ── Foreign passport dates ──
+    if (fields.issue_date) set('issue_date', isoToDmy(fields.issue_date));
+    if (fields.expiry_date) set('expiry_date', isoToDmy(fields.expiry_date));
+    // ── Issuing authority ──
+    if (fields.issuing_authority) set('issued_by_ru', fields.issuing_authority);
+    // department_code / reg_address are not present on a foreign passport.
+  } else {
+    // ── Internal passport: series + number ──
+    // Strip whitespace defensively — the parser returns clean digits but
+    // the OCR text it consumed sometimes has spaces.
+    if (fields.series) {
+      const series = String(fields.series).replace(/\s+/g, '');
+      if (/^\d{4}$/.test(series)) set('internal_series', series);
+    }
+    if (fields.number) {
+      const number = String(fields.number).replace(/\s+/g, '');
+      if (/^\d{6}$/.test(number)) set('internal_number', number);
+    }
+    // ── Internal passport date / authority / reg address ──
+    if (fields.issue_date) set('internal_issued_ru', isoToDmy(fields.issue_date));
+    if (fields.issuing_authority) set('internal_issued_by_ru', fields.issuing_authority);
+    if (fields.reg_address) set('reg_address_ru', fields.reg_address);
+    // department_code has no form field in the public-form payload — ignored.
+  }
+
   return { mapped, filled };
 }
 
@@ -262,9 +294,15 @@ export default function SubmissionForm({
   const [apiError, setApiError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // Phase 3 — keyed by file_type ("passport_internal" | …) so adding the
-  // foreign / ticket / voucher widgets in the next batch is a one-liner.
-  const [files, setFiles] = useState({});
+  // Phase 3 — keyed by file_type. All four document slots are initialised
+  // explicitly (default null) so the shape is uniform regardless of which
+  // widgets the parent surfaces (slug-gated).
+  const [files, setFiles] = useState({
+    passport_internal: null,
+    passport_foreign: null,
+    ticket: null,
+    voucher: null,
+  });
   const [autoFillNotice, setAutoFillNotice] = useState('');
 
   useEffect(() => {
@@ -322,10 +360,11 @@ export default function SubmissionForm({
   // Auto-fill from a /parse-passport response. Only empty fields are
   // touched — anything the user has already typed wins. We use the
   // functional setState form so the latest payload is read inside the
-  // updater (avoids races against concurrent typing).
-  const handlePassportAutoFill = (fields) => {
+  // updater (avoids races against concurrent typing). `type` switches
+  // between the internal-passport and foreign-passport field maps.
+  const handlePassportAutoFill = (type) => (fields) => {
     setPayload((p) => {
-      const { mapped, filled } = mapPassportFieldsToPayload(fields, p);
+      const { mapped, filled } = mapPassportFieldsToPayload(fields, p, type);
       if (filled.length === 0) {
         setAutoFillNotice('Все поля уже заполнены.');
         return p;
@@ -684,6 +723,29 @@ export default function SubmissionForm({
       {dateField('expiry_date', 'Дата окончания')}
       {boxedField('issued_by_ru', 'Кем выдан')}
 
+      {/* Foreign passport upload — placed AFTER manual fields so the
+          tourist who already typed everything still sees a clear
+          "or upload a scan" affordance. Auto-fill targets the same
+          загранпаспорт fields above plus name / gender / birth date. */}
+      {slug && (
+        <FileUploadField
+          label="Скан загранпаспорта (необязательно)"
+          fileType="passport_foreign"
+          slug={slug}
+          submissionId={submissionId}
+          currentFile={files.passport_foreign || null}
+          onUploaded={(meta) => setFiles((f) => ({ ...f, passport_foreign: meta }))}
+          onDeleted={() => setFiles((f) => {
+            const next = { ...f };
+            delete next.passport_foreign;
+            return next;
+          })}
+          onAutoFill={handlePassportAutoFill('foreign')}
+          parseType="foreign"
+          acceptMime="application/pdf,image/jpeg,image/png"
+        />
+      )}
+
       <h2 className="sf-heading">Внутренний паспорт РФ</h2>
 
       {internalPassportField()}
@@ -709,7 +771,7 @@ export default function SubmissionForm({
             delete next.passport_internal;
             return next;
           })}
-          onAutoFill={handlePassportAutoFill}
+          onAutoFill={handlePassportAutoFill('internal')}
           parseType="internal"
           acceptMime="application/pdf,image/jpeg,image/png"
         />
@@ -760,6 +822,51 @@ export default function SubmissionForm({
         <p className="sf-hint sf-occupation-note">
           Поля раздела «Работа» заполнятся автоматически.
         </p>
+      )}
+
+      {slug && (
+        <>
+          <h2 className="sf-heading">Документы поездки</h2>
+
+          {/* Ticket and voucher uploads — no Распознать button. Managers
+              run the parsers when attaching the submission to a group, so
+              we just persist the bytes here. */}
+          <FileUploadField
+            label="Авиабилет(ы)"
+            fileType="ticket"
+            slug={slug}
+            submissionId={submissionId}
+            currentFile={files.ticket || null}
+            onUploaded={(meta) => setFiles((f) => ({ ...f, ticket: meta }))}
+            onDeleted={() => setFiles((f) => {
+              const next = { ...f };
+              delete next.ticket;
+              return next;
+            })}
+            acceptMime="application/pdf,image/jpeg,image/png"
+          />
+          <span className="sf-hint">
+            Менеджер распознает скан автоматически после прикрепления к туру.
+          </span>
+
+          <FileUploadField
+            label="Ваучер на отель(и)"
+            fileType="voucher"
+            slug={slug}
+            submissionId={submissionId}
+            currentFile={files.voucher || null}
+            onUploaded={(meta) => setFiles((f) => ({ ...f, voucher: meta }))}
+            onDeleted={() => setFiles((f) => {
+              const next = { ...f };
+              delete next.voucher;
+              return next;
+            })}
+            acceptMime="application/pdf,image/jpeg,image/png"
+          />
+          <span className="sf-hint">
+            Менеджер распознает скан автоматически после прикрепления к туру.
+          </span>
+        </>
       )}
 
       <h2 className="sf-heading">История</h2>
