@@ -86,7 +86,7 @@ export function makeFieldFactories({ payload, errors, setField }) {
     );
   };
 
-  const selectField = (name, label, options) => {
+  const selectField = (name, label, options, extra = {}) => {
     const err = errors[name];
     return (
       <label className={`sf-field${err ? ' has-error' : ''}`} data-field={name}>
@@ -99,6 +99,7 @@ export function makeFieldFactories({ payload, errors, setField }) {
             <option key={opt.value} value={opt.value}>{opt.label}</option>
           ))}
         </select>
+        {extra.hint && !err && <span className="sf-hint">{extra.hint}</span>}
         {err && <span className="sf-error">{err}</span>}
       </label>
     );

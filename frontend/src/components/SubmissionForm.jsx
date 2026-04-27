@@ -804,10 +804,9 @@ export default function SubmissionForm({
 
       {/* Former nationality dropdown — Нет / СССР / Другое. The choice
           is UI-only state; the authoritative field the backend reads is
-          former_nationality_ru. */}
-      <div className="sf-hint" style={{ marginBottom: 6 }}>
-        Если вы родились в СССР, выберите «СССР».
-      </div>
+          former_nationality_ru. Hint sits under the field — when "Другое"
+          is chosen the hint moves to the free-text input below so it
+          always trails the active control. */}
       <label className="sf-field" data-field="former_nationality_choice">
         <span className="sf-label">Прежнее гражданство</span>
         <select
@@ -827,10 +826,15 @@ export default function SubmissionForm({
           <option value="СССР">СССР</option>
           <option value="other">Другое (указать)</option>
         </select>
+        {payload.former_nationality_choice !== 'other' && (
+          <span className="sf-hint">Если вы родились в СССР, выберите «СССР».</span>
+        )}
       </label>
 
       {payload.former_nationality_choice === 'other'
-        && textField('former_nationality_ru', 'Прежнее гражданство (введите страну)')}
+        && textField('former_nationality_ru', 'Прежнее гражданство (введите страну)', {
+          hint: 'Если вы родились в СССР, выберите «СССР».',
+        })}
 
       {/* Yes/No toggle (replaces the old free-text trap where typing
           "Нет" became "NET" in the visa anketa PDF). Switching to "Нет"

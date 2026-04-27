@@ -134,10 +134,9 @@ export default function PersonalStep({ payload, setField, errors }) {
 
       {/* Former nationality dropdown — Нет / СССР / Другое. The choice is
           UI-only state; the authoritative field the backend reads is
-          former_nationality_ru, kept in sync by handleFormerNationalityChoice. */}
-      <div className="sf-hint" style={{ marginBottom: 6 }}>
-        Если вы родились в СССР, выберите «СССР».
-      </div>
+          former_nationality_ru, kept in sync by handleFormerNationalityChoice.
+          Hint sits under the field — when "Другое" is chosen the hint moves
+          to the free-text input below so it always trails the active control. */}
       <label className="sf-field" data-field="former_nationality_choice">
         <span className="sf-label">Прежнее гражданство</span>
         <select
@@ -148,10 +147,15 @@ export default function PersonalStep({ payload, setField, errors }) {
           <option value="СССР">СССР</option>
           <option value="other">Другое (указать)</option>
         </select>
+        {payload.former_nationality_choice !== 'other' && (
+          <span className="sf-hint">Если вы родились в СССР, выберите «СССР».</span>
+        )}
       </label>
 
       {payload.former_nationality_choice === 'other'
-        && textField('former_nationality_ru', 'Прежнее гражданство (введите страну)')}
+        && textField('former_nationality_ru', 'Прежнее гражданство (введите страну)', {
+          hint: 'Если вы родились в СССР, выберите «СССР».',
+        })}
 
       {/* Yes/No toggle for previous surname. The free-text trap (typing
           "Нет" → ICAO transliterated to "NET" in the visa anketa PDF) was
