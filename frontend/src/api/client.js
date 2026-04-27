@@ -422,6 +422,102 @@ export async function deleteSubmissionFileAdmin(submissionId, fileId) {
   if (!res.ok) throw await errFromRes(res);
 }
 
+// createDraftSubmission allocates an empty draft row owned by the
+// authenticated manager's org so the dashboard wizard has something to
+// attach scans to before the manager finalises the payload. Mirrors the
+// public /start endpoint. Returns { submission_id }.
+export async function createDraftSubmission() {
+  const res = await apiFetch('/submissions/draft', {
+    method: 'POST',
+    body: '{}',
+  });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+// uploadSubmissionFileAdmin attaches a file (passport / ticket / voucher)
+// to a submission via the session-authenticated endpoint. If onProgress
+// is provided we use XHR so the upload-progress event fires (fetch can't
+// surface upload progress in browsers); otherwise plain fetch.
+//
+// Same friendly status-code mapping as the public sibling — keeps the
+// wizard's error UX identical regardless of which adapter it's wired to.
+export async function uploadSubmissionFileAdmin(submissionId, fileType, file, onProgress) {
+  const url = `${API}/submissions/${encodeURIComponent(submissionId)}/files/${encodeURIComponent(fileType)}`;
+  const fd = new FormData();
+  fd.append('file', file);
+
+  const friendly = (status, fallback) => {
+    if (status === 413) return new Error('Файл слишком большой (>50 МБ)');
+    if (status === 429) return new Error('Слишком много загрузок, подождите минуту');
+    if (status === 401) {
+      // Mirror apiFetch's redirect-on-401 so an expired session boots the
+      // manager back to /login instead of leaving them with a cryptic
+      // "request failed" toast inside the wizard.
+      window.location.href = '/login';
+    }
+    return fallback;
+  };
+
+  if (typeof onProgress === 'function') {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      // Session cookie carries auth — XHR includes it on same-origin by default.
+      xhr.withCredentials = true;
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          onProgress(pct);
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch {
+            reject(new Error('invalid JSON response'));
+          }
+          return;
+        }
+        let err;
+        try {
+          const data = JSON.parse(xhr.responseText);
+          err = new Error(data?.error || `request failed (${xhr.status})`);
+        } catch {
+          err = new Error(`${xhr.status} ${xhr.statusText}`);
+        }
+        reject(friendly(xhr.status, err));
+      };
+      xhr.onerror = () => reject(new Error('Сетевая ошибка при загрузке'));
+      xhr.onabort = () => reject(new Error('Загрузка отменена'));
+      xhr.send(fd);
+    });
+  }
+
+  const res = await apiFetch(`/submissions/${encodeURIComponent(submissionId)}/files/${encodeURIComponent(fileType)}`, {
+    method: 'POST',
+    body: fd,
+  });
+  if (!res.ok) {
+    const baseErr = await errFromRes(res);
+    throw friendly(res.status, baseErr);
+  }
+  return res.json();
+}
+
+// parseSubmissionPassportAdmin runs the Yandex Vision + YandexGPT pipeline
+// on a previously-uploaded passport scan and returns the structured fields
+// the wizard merges into its payload. `type` is "internal" or "foreign".
+export async function parseSubmissionPassportAdmin(submissionId, fileId, type) {
+  const res = await apiFetch(`/submissions/${encodeURIComponent(submissionId)}/parse-passport`, {
+    method: 'POST',
+    body: JSON.stringify({ file_id: fileId, type }),
+  });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
 // Returns { "<submission_id>": <count>, ... } for every tourist in the
 // group whose submission has at least one file attached. Tourists with
 // no submission_id (manager-created manually) and submissions with zero
