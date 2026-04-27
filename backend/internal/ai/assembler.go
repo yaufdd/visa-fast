@@ -103,6 +103,12 @@ func AssembleTourist(payload map[string]any, translations map[string]string, cle
 	switch {
 	case strings.EqualFold(strings.TrimSpace(get("occupation_ru")), "ИП"):
 		occupation = "INDIVIDUAL ENTREPRENEUR"
+	case strings.EqualFold(strings.TrimSpace(get("occupation_ru")), "Владелец ООО"):
+		// LLC owner — the visa form expects the canonical English title.
+		// Frontend's OccupationStep pins occupation_ru to "Владелец ООО"
+		// when the tourist picks the business_owner category, so this
+		// match is exact (case-insensitive for safety).
+		occupation = "BUSINESS OWNER"
 	case strings.EqualFold(strings.TrimSpace(get("occupation_ru")), "Пенсионер"):
 		occupation = "PENSIONER"
 	case strings.EqualFold(strings.TrimSpace(get("occupation_ru")), "Домохозяйка"):

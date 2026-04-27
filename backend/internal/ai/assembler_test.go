@@ -283,6 +283,8 @@ func TestAssembleTourist_OccupationCategories(t *testing.T) {
 	}{
 		{"ИП", "INDIVIDUAL ENTREPRENEUR"},
 		{"ип", "INDIVIDUAL ENTREPRENEUR"}, // case-insensitive
+		{"Владелец ООО", "BUSINESS OWNER"},
+		{"владелец ооо", "BUSINESS OWNER"}, // case-insensitive
 		{"Пенсионер", "PENSIONER"},
 		{"Домохозяйка", "HOUSEWIFE"},
 		{"Безработный", "UNEMPLOYED"},

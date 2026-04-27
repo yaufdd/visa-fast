@@ -14,11 +14,23 @@ export const BLANK_OCCUPATION_TYPES = new Set(['ip', 'pensioner', 'housewife', '
 // fixed.
 export const STUDENT_OCCUPATION_TYPES = new Set(['student', 'schoolchild']);
 
+// Categories where the user must NOT type their own occupation_ru —
+// the visa office expects a canonical title (e.g. "Владелец ООО",
+// "Студент", "Школьник"). The text input is hidden; auto-fill pins
+// the value at submit time.
+export const LOCKED_OCCUPATION_TITLE_TYPES = new Set([
+  'business_owner', 'student', 'schoolchild',
+]);
+
 export const OCCUPATION_DEFAULT = 'employed';
 
 export const OCCUPATION_OPTIONS = [
   { value: 'employed', label: 'Работаю по найму' },
   { value: 'ip', label: 'Индивидуальный предприниматель' },
+  // Owner of an LLC / ООО — same employer fields as 'employed' (LLC name,
+  // registered address, contact phone), but occupation_ru is locked to
+  // "Владелец ООО" because the visa office wants the canonical title.
+  { value: 'business_owner', label: 'Владелец ООО' },
   { value: 'pensioner', label: 'Пенсионер' },
   { value: 'housewife', label: 'Домохозяйка' },
   { value: 'unemployed', label: 'Безработный' },
@@ -39,6 +51,13 @@ export function applyOccupationAutoFill(payload) {
       out.employer_ru = lastName ? `ИП ${lastName}` : 'ИП';
       out.employer_address_ru = payload.home_address_ru || payload.reg_address_ru || '';
       out.employer_phone = payload.phone || '';
+      break;
+    case 'business_owner':
+      // Same employer-fields layout as 'employed' (LLC name + registered
+      // address + contact phone, all user-typed). Only the title is
+      // pinned — the visa office expects "Владелец ООО" verbatim, mapped
+      // by the assembler to "BUSINESS OWNER" in English.
+      out.occupation_ru = 'Владелец ООО';
       break;
     case 'pensioner':
       out.occupation_ru = 'Пенсионер';
@@ -92,6 +111,19 @@ export default function OccupationStep({ payload, setField, errors }) {
       {type === 'employed' && (
         <>
           {textField('occupation_ru', 'Должность')}
+          {textField('employer_ru', 'Название организации')}
+          {textareaField('employer_address_ru', 'Адрес организации')}
+          {phoneField('employer_phone', 'Телефон организации')}
+        </>
+      )}
+
+      {/* Владелец ООО — occupation_ru is auto-pinned to "Владелец ООО"
+          (see applyOccupationAutoFill), so the title input is hidden.
+          The three employer fields keep their "Название организации /
+          Адрес организации / Телефон организации" labels because
+          they're filled with the LLC's data, exactly as in 'employed'. */}
+      {type === 'business_owner' && (
+        <>
           {textField('employer_ru', 'Название организации')}
           {textareaField('employer_address_ru', 'Адрес организации')}
           {phoneField('employer_phone', 'Телефон организации')}

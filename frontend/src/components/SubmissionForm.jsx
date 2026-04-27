@@ -70,6 +70,10 @@ const STUDENT_OCCUPATION_TYPES = new Set(['student', 'schoolchild']);
 const OCCUPATION_OPTIONS = [
   { value: 'employed', label: 'Работаю по найму' },
   { value: 'ip', label: 'Индивидуальный предприниматель' },
+  // Same employer-fields layout as 'employed' (LLC name + address +
+  // phone, all user-typed). Only the title is pinned to "Владелец ООО"
+  // by applyOccupationAutoFill below.
+  { value: 'business_owner', label: 'Владелец ООО' },
   { value: 'pensioner', label: 'Пенсионер' },
   { value: 'housewife', label: 'Домохозяйка' },
   { value: 'unemployed', label: 'Безработный' },
@@ -93,6 +97,11 @@ function applyOccupationAutoFill(payload) {
       out.employer_ru = lastName ? `ИП ${lastName}` : 'ИП';
       out.employer_address_ru = payload.home_address_ru || payload.reg_address_ru || '';
       out.employer_phone = payload.phone || '';
+      break;
+    case 'business_owner':
+      // employer_ru / employer_address_ru / employer_phone left as the
+      // user typed (LLC name / registered address / contact phone).
+      out.occupation_ru = 'Владелец ООО';
       break;
     case 'pensioner':
       out.occupation_ru = 'Пенсионер';
@@ -906,6 +915,16 @@ export default function SubmissionForm({
       {(payload.occupation_type || OCCUPATION_DEFAULT) === 'employed' && (
         <>
           {textField('occupation_ru', 'Должность')}
+          {textField('employer_ru', 'Название организации')}
+          {textareaField('employer_address_ru', 'Адрес организации')}
+          {phoneField('employer_phone', 'Телефон организации')}
+        </>
+      )}
+
+      {/* Владелец ООО — same employer fields as 'employed', but the
+          title is auto-pinned to "Владелец ООО" so we hide the input. */}
+      {(payload.occupation_type || OCCUPATION_DEFAULT) === 'business_owner' && (
+        <>
           {textField('employer_ru', 'Название организации')}
           {textareaField('employer_address_ru', 'Адрес организации')}
           {phoneField('employer_phone', 'Телефон организации')}
