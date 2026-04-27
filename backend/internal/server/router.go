@@ -165,6 +165,11 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 			r.Get("/submissions/{id}/files/{file_id}/download", api.DownloadSubmissionFile(pool))
 			r.Delete("/submissions/{id}/files/{file_id}", api.DeleteSubmissionFile(pool))
 
+			// Manager-side wizard: upload + parse-passport (mirrors the
+			// public siblings, used by the dashboard's submission editor).
+			r.Post("/submissions/{id}/files/{type}", api.UploadSubmissionFile(pool, uploadsDir))
+			r.Post("/submissions/{id}/parse-passport", api.ParseSubmissionPassport(pool, ocrClient, translator))
+
 			// Flight data
 			r.Put("/tourists/{id}/flight_data", api.UpdateFlightData(pool))
 			r.Post("/tourists/{id}/flight_data/apply_to_subgroup", api.ApplyFlightDataToSubgroup(pool))
