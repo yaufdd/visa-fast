@@ -66,6 +66,13 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 		r.Get("/public/org/{slug}", api.PublicOrg(pool))
 		r.With(publicRL.Middleware()).Post("/public/submissions/{slug}", api.PublicSubmit(pool))
 
+		// Public — draft submission + scan attachments. Same rate-limiter
+		// as PublicSubmit so the four-endpoint flow shares one bucket.
+		r.With(publicRL.Middleware()).Post("/public/submissions/{slug}/start", api.PublicSubmissionStart(pool))
+		r.With(publicRL.Middleware()).Post("/public/submissions/{slug}/files/{type}", api.PublicUploadSubmissionFile(pool, uploadsDir))
+		r.With(publicRL.Middleware()).Get("/public/submissions/{slug}/files", api.PublicListSubmissionFiles(pool))
+		r.With(publicRL.Middleware()).Delete("/public/submissions/{slug}/files/{id}", api.PublicDeleteSubmissionFile(pool, uploadsDir))
+
 		// Public — consent text
 		r.Get("/consent/text", api.GetConsentText())
 
