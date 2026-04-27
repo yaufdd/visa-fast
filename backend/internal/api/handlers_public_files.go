@@ -1,11 +1,14 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -94,6 +97,20 @@ func PublicSubmissionStart(pool *pgxpool.Pool) http.HandlerFunc {
 // the corresponding submission_files row. If a previous file existed for
 // the same (submission, type) and lived at a different path, the old file
 // is removed best-effort.
+//
+// Bytes are streamed through MultipartReader -> a sibling temp file
+// (".tmp.<rand>.<ext>") rather than buffered in memory, so peak per-
+// request RSS stays at the 512-byte mime-sniff buffer regardless of the
+// 50 MB body cap. After the DB upsert decides the winning metadata, the
+// tmp file is os.Rename'd into place — atomic on the same filesystem.
+//
+// Concurrency note: two concurrent uploads for the same (submission_id,
+// file_type) can both write tmp files; the DB upsert serialises which
+// metadata wins, so on-disk bytes match the winning row at the moment
+// of rename. There is still a deeper race (A renames, then B's later
+// rename overwrites disk while DB still points at A) — fixing that
+// would need pg_advisory_xact_lock around the upsert; punted for the
+// MVP public form, where the same tourist is filling their own draft.
 func PublicUploadSubmissionFile(pool *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slug := chi.URLParam(r, "slug")
@@ -103,61 +120,204 @@ func PublicUploadSubmissionFile(pool *pgxpool.Pool, uploadsDir string) http.Hand
 			return
 		}
 
-		// Cap incoming body BEFORE ParseMultipartForm to enforce the size
-		// limit at the network layer, not just at the form-field level.
-		r.Body = http.MaxBytesReader(w, r.Body, maxSubmissionFileSize)
-		if err := r.ParseMultipartForm(maxSubmissionFileSize); err != nil {
-			// Detect MaxBytesReader exhaustion and return 413 instead of
-			// the generic 400; the chi router doesn't surface a typed err.
-			if err.Error() == "http: request body too large" {
-				writeError(w, http.StatusRequestEntityTooLarge, "file too large")
-				return
-			}
-			writeError(w, http.StatusBadRequest, "failed to parse multipart form")
+		// Cap the entire request body at the network layer; protects
+		// against an attacker streaming an unbounded multipart envelope.
+		// We add a small slack for the multipart boundary + the small
+		// submission_id form field.
+		r.Body = http.MaxBytesReader(w, r.Body, maxSubmissionFileSize+(1<<16))
+
+		mr, err := r.MultipartReader()
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "expected multipart/form-data")
 			return
 		}
 
-		submissionID := r.FormValue("submission_id")
+		var (
+			submissionID  string
+			origFilename  string
+			tmpPath       string
+			finalPath     string
+			sniffedMime   string
+			sizeBytes     int64
+			haveFile      bool
+		)
+		// Best-effort cleanup if we exit before the rename succeeds.
+		defer func() {
+			if tmpPath != "" {
+				if err := os.Remove(tmpPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+					slog.Warn("remove submission tmp file", "path", tmpPath, "err", err)
+				}
+			}
+		}()
+
+		for {
+			part, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				if err.Error() == "http: request body too large" {
+					writeError(w, http.StatusRequestEntityTooLarge, "file too large")
+					return
+				}
+				writeError(w, http.StatusBadRequest, "failed to read multipart")
+				return
+			}
+			switch part.FormName() {
+			case "submission_id":
+				// Cap to 1 KiB — it's a UUID, anything larger is junk.
+				b, err := io.ReadAll(io.LimitReader(part, 1<<10))
+				part.Close()
+				if err != nil {
+					writeError(w, http.StatusBadRequest, "failed to read submission_id")
+					return
+				}
+				submissionID = string(b)
+			case "file":
+				if haveFile {
+					part.Close()
+					writeError(w, http.StatusBadRequest, "duplicate 'file' part")
+					return
+				}
+				origFilename = part.FileName()
+
+				// Sniff mime from the first 512 bytes BEFORE we know the
+				// final path (the path depends on the extension, which
+				// depends on the mime if the original filename has none).
+				head := make([]byte, 512)
+				n, readErr := io.ReadFull(part, head)
+				if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
+					part.Close()
+					if readErr.Error() == "http: request body too large" {
+						writeError(w, http.StatusRequestEntityTooLarge, "file too large")
+						return
+					}
+					writeError(w, http.StatusBadRequest, "failed to read file part")
+					return
+				}
+				head = head[:n]
+				sniffedMime = detectScanMime(origFilename, head)
+				switch sniffedMime {
+				case "application/pdf", "image/jpeg", "image/png":
+				default:
+					part.Close()
+					writeError(w, http.StatusBadRequest, "unsupported mime type")
+					return
+				}
+
+				// Resolve the org now so we can place the tmp file in the
+				// correct per-org dir; we still need submissionID to be
+				// set, but the multipart spec doesn't guarantee field
+				// order. If submission_id wasn't seen yet we error out;
+				// HTML forms send fields in document order, so a
+				// well-formed client always puts submission_id first.
+				if submissionID == "" {
+					part.Close()
+					writeError(w, http.StatusBadRequest, "submission_id must precede file part")
+					return
+				}
+				orgID, _, ok := resolveDraftSubmission(r, pool, slug, submissionID)
+				if !ok {
+					part.Close()
+					writeError(w, http.StatusNotFound, "submission not found")
+					return
+				}
+
+				finalPath, err = storage.BuildSubmissionFilePath(uploadsDir, orgID, submissionID, fileType, origFilename, sniffedMime)
+				if err != nil {
+					part.Close()
+					slog.Error("build submission file path", "err", err)
+					writeError(w, http.StatusBadRequest, "invalid path component")
+					return
+				}
+				dir := filepath.Dir(finalPath)
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					part.Close()
+					slog.Error("mkdir submission dir", "err", err)
+					writeError(w, http.StatusInternalServerError, "failed to create dir")
+					return
+				}
+
+				// Sibling tmp filename: ".tmp.<8 hex>.<ext>". Dot prefix
+				// marks it as in-progress so ops glance won't confuse it
+				// with a finished upload.
+				tmpName, err := submissionTmpName(filepath.Ext(finalPath))
+				if err != nil {
+					part.Close()
+					slog.Error("submission tmp name", "err", err)
+					writeError(w, http.StatusInternalServerError, "internal error")
+					return
+				}
+				tmpPath = filepath.Join(dir, tmpName)
+
+				tmp, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+				if err != nil {
+					part.Close()
+					slog.Error("create submission tmp file", "err", err)
+					writeError(w, http.StatusInternalServerError, "failed to create file")
+					return
+				}
+
+				// Write the sniffed head, then stream the rest, capped.
+				if _, err := tmp.Write(head); err != nil {
+					tmp.Close()
+					part.Close()
+					slog.Error("write submission head", "err", err)
+					writeError(w, http.StatusInternalServerError, "failed to write")
+					return
+				}
+				// We've already consumed up to 512 bytes; the remaining
+				// budget is maxSubmissionFileSize - len(head) + 1 so
+				// io.CopyN signals an over-limit body via n > limit.
+				remaining := int64(maxSubmissionFileSize) - int64(len(head)) + 1
+				n2, err := io.CopyN(tmp, part, remaining)
+				closeErr := tmp.Close()
+				partCloseErr := part.Close()
+				_ = partCloseErr
+				if err != nil && err != io.EOF {
+					if err.Error() == "http: request body too large" {
+						writeError(w, http.StatusRequestEntityTooLarge, "file too large")
+						return
+					}
+					slog.Error("copy submission body", "err", err)
+					writeError(w, http.StatusInternalServerError, "failed to write")
+					return
+				}
+				if closeErr != nil {
+					slog.Error("close submission tmp", "err", closeErr)
+					writeError(w, http.StatusInternalServerError, "failed to write")
+					return
+				}
+				total := int64(len(head)) + n2
+				if total > int64(maxSubmissionFileSize) {
+					writeError(w, http.StatusRequestEntityTooLarge, "file too large")
+					return
+				}
+				sizeBytes = total
+				haveFile = true
+			default:
+				// Unknown field — drain and discard so the connection
+				// stays consistent.
+				_, _ = io.Copy(io.Discard, part)
+				part.Close()
+			}
+		}
+
 		if submissionID == "" {
 			writeError(w, http.StatusBadRequest, "submission_id required")
 			return
 		}
-
-		orgID, _, ok := resolveDraftSubmission(r, pool, slug, submissionID)
-		if !ok {
-			writeError(w, http.StatusNotFound, "submission not found")
-			return
-		}
-
-		file, header, err := r.FormFile("file")
-		if err != nil {
+		if !haveFile {
 			writeError(w, http.StatusBadRequest, "missing 'file' field in form")
 			return
 		}
-		defer file.Close()
 
-		fileData, err := io.ReadAll(file)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read file")
-			return
-		}
-		if int64(len(fileData)) > maxSubmissionFileSize {
-			writeError(w, http.StatusRequestEntityTooLarge, "file too large")
-			return
-		}
-
-		mime := detectScanMime(header.Filename, fileData)
-		switch mime {
-		case "application/pdf", "image/jpeg", "image/png":
-		default:
-			writeError(w, http.StatusBadRequest, "unsupported mime type")
-			return
-		}
-
-		savedPath, err := storage.SaveSubmissionFile(uploadsDir, orgID, submissionID, fileType, header.Filename, fileData, mime)
-		if err != nil {
-			slog.Error("save submission file", "err", err)
-			writeError(w, http.StatusInternalServerError, "failed to save file")
+		// Re-resolve org for the DB call (the earlier resolution was used
+		// to build the path; we need orgID here too and prefer not to
+		// thread it out of the multipart loop).
+		orgID, _, ok := resolveDraftSubmission(r, pool, slug, submissionID)
+		if !ok {
+			writeError(w, http.StatusNotFound, "submission not found")
 			return
 		}
 
@@ -165,22 +325,28 @@ func PublicUploadSubmissionFile(pool *pgxpool.Pool, uploadsDir string) http.Hand
 			OrgID:        orgID,
 			SubmissionID: submissionID,
 			FileType:     fileType,
-			FilePath:     savedPath,
-			OriginalName: header.Filename,
-			MIMEType:     mime,
-			SizeBytes:    int64(len(fileData)),
+			FilePath:     finalPath,
+			OriginalName: origFilename,
+			MIMEType:     sniffedMime,
+			SizeBytes:    sizeBytes,
 		}
 		id, oldPath, replaced, err := db.InsertOrReplaceSubmissionFile(r.Context(), pool, row)
 		if err != nil {
-			// DB write failed — try to clean up the file we just wrote.
-			if rmErr := os.Remove(savedPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-				slog.Warn("cleanup submission file after db error", "path", savedPath, "err", rmErr)
-			}
 			slog.Error("insert submission file", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
-		if replaced && oldPath != "" && oldPath != savedPath {
+
+		// Atomic publish: rename tmp -> final. After this, the deferred
+		// cleanup is a no-op because tmpPath no longer exists.
+		if err := os.Rename(tmpPath, finalPath); err != nil {
+			slog.Error("rename submission tmp", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to publish file")
+			return
+		}
+		tmpPath = ""
+
+		if replaced && oldPath != "" && oldPath != finalPath {
 			if err := os.Remove(oldPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 				slog.Warn("remove old submission file", "path", oldPath, "err", err)
 			}
@@ -190,11 +356,23 @@ func PublicUploadSubmissionFile(pool *pgxpool.Pool, uploadsDir string) http.Hand
 			"id":            id,
 			"submission_id": submissionID,
 			"file_type":     fileType,
-			"original_name": header.Filename,
-			"mime_type":     mime,
-			"size_bytes":    len(fileData),
+			"original_name": origFilename,
+			"mime_type":     sniffedMime,
+			"size_bytes":    sizeBytes,
 		})
 	}
+}
+
+// submissionTmpName returns ".tmp.<8 hex>.<ext>" for use as a sibling tmp
+// filename next to the final submission file. The dot prefix flags it as
+// in-progress; the random suffix avoids collisions between concurrent
+// uploads for the same (submission_id, file_type).
+func submissionTmpName(ext string) (string, error) {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return ".tmp." + hex.EncodeToString(b[:]) + ext, nil
 }
 
 // PublicListSubmissionFiles handles
