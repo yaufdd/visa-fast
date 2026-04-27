@@ -80,7 +80,7 @@ func PublicSubmissionStart(pool *pgxpool.Pool) http.HandlerFunc {
 		_, _ = io.Copy(io.Discard, http.MaxBytesReader(w, r.Body, 1<<10))
 
 		agreement := consent.Current()
-		id, err := db.CreateDraftSubmission(r.Context(), pool, org.ID, agreement.Version)
+		id, err := db.CreateDraftSubmission(r.Context(), pool, org.ID, agreement.Version, "tourist")
 		if err != nil {
 			slog.Error("create draft submission", "err", err)
 			writeError(w, http.StatusInternalServerError, "db")

@@ -44,23 +44,26 @@ func CreateSubmissionForOrg(ctx context.Context, pool *pgxpool.Pool, orgID strin
 	return id, err
 }
 
-// CreateDraftSubmission inserts a placeholder row used by the public form
-// before the tourist clicks "submit". The row exists only so file uploads
-// (submission_files) have a foreign key to bind to. consent_accepted is
-// FALSE — the real consent stamp happens at finalize time via
-// UpdateSubmissionPayloadByID. consent_accepted_at is NOT NULL on the
-// schema, so we write NOW() as a sentinel; finalize re-stamps it.
+// CreateDraftSubmission inserts a placeholder row used by either the
+// public form (source="tourist") or the manager-side wizard
+// (source="manager") before the row is finalised. The row exists only so
+// file uploads (submission_files) have a foreign key to bind to.
+// consent_accepted is FALSE — the real consent stamp happens at finalize
+// time via UpdateSubmissionPayloadByID. consent_accepted_at is NOT NULL
+// on the schema, so we write NOW() as a sentinel; finalize re-stamps it.
 //
-// Source is hard-coded "tourist" because drafts only originate from the
-// public slug endpoint; the manager flow always inserts a fully-formed
-// 'pending' row directly via CreateSubmissionForOrg.
-func CreateDraftSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, consentVersion string) (string, error) {
+// The source argument lets reports / audits distinguish drafts that came
+// from a tourist filling the public slug form vs. a manager creating a
+// submission directly in the dashboard. Callers should pass "tourist" or
+// "manager"; any other string is accepted by the DB as long as it passes
+// the source CHECK constraint on tourist_submissions.
+func CreateDraftSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, consentVersion, source string) (string, error) {
 	var id string
 	err := pool.QueryRow(ctx,
 		`INSERT INTO tourist_submissions
 		   (org_id, payload, consent_accepted, consent_accepted_at, consent_version, source, status)
-		 VALUES ($1, '{}'::jsonb, FALSE, NOW(), $2, 'tourist', 'draft') RETURNING id`,
-		orgID, consentVersion,
+		 VALUES ($1, '{}'::jsonb, FALSE, NOW(), $2, $3, 'draft') RETURNING id`,
+		orgID, consentVersion, source,
 	).Scan(&id)
 	return id, err
 }
