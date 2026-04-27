@@ -28,15 +28,91 @@ const SELECT_DEFAULTS = {
 
 // All fields the form touches. Phone fields aren't yet in the backend
 // assembler but are part of the payload JSONB we POST.
+// occupation_type is form-only state — the backend doesn't read it,
+// but persisting it in the JSONB lets a future load of the same
+// submission restore the chosen category without guessing.
 const ALL_FIELDS = [
   'name_cyr', 'name_lat', 'gender_ru', 'birth_date', 'marital_status_ru',
   'place_of_birth_ru', 'nationality_ru', 'former_nationality_ru', 'maiden_name_ru',
   'passport_number', 'passport_type_ru', 'issue_date', 'expiry_date', 'issued_by_ru',
   'internal_series', 'internal_number', 'internal_issued_ru', 'internal_issued_by_ru',
   'reg_address_ru', 'home_address_ru', 'phone',
-  'occupation_ru', 'employer_ru', 'employer_address_ru', 'employer_phone',
+  'occupation_type', 'occupation_ru', 'employer_ru', 'employer_address_ru', 'employer_phone',
   'been_to_japan_ru', 'previous_visits_ru', 'criminal_record_ru',
 ];
+
+// Default occupation_type when nothing was previously saved.
+const OCCUPATION_DEFAULT = 'employed';
+
+// Categories where the user types nothing in the Работа section — the
+// four employer fields are hidden and auto-filled at submit time.
+const BLANK_OCCUPATION_TYPES = new Set(['ip', 'pensioner', 'housewife', 'unemployed']);
+
+// Categories where the institution name / address / phone are still
+// shown (with re-labelled placeholders) but occupation_ru itself is
+// fixed.
+const STUDENT_OCCUPATION_TYPES = new Set(['student', 'schoolchild']);
+
+const OCCUPATION_OPTIONS = [
+  { value: 'employed', label: 'Работаю по найму' },
+  { value: 'ip', label: 'Индивидуальный предприниматель' },
+  { value: 'pensioner', label: 'Пенсионер' },
+  { value: 'housewife', label: 'Домохозяйка' },
+  { value: 'unemployed', label: 'Безработный' },
+  { value: 'student', label: 'Студент' },
+  { value: 'schoolchild', label: 'Школьник' },
+];
+
+// applyOccupationAutoFill returns a new payload with the Работа section
+// normalised to what the visa form expects. Called once at submit time
+// — keystroke-time auto-fill would create write-loops with React state
+// and stale text would also be unrecoverable when the user switches
+// categories.
+function applyOccupationAutoFill(payload) {
+  const type = payload.occupation_type || OCCUPATION_DEFAULT;
+  const dash = '—'; // em-dash, matches the convention in the visa anketa.
+  const lastName = String(payload.name_cyr || '').trim().split(/\s+/)[0] || '';
+  const out = { ...payload };
+  switch (type) {
+    case 'ip':
+      out.occupation_ru = 'ИП';
+      out.employer_ru = lastName ? `ИП ${lastName}` : 'ИП';
+      out.employer_address_ru = payload.home_address_ru || payload.reg_address_ru || '';
+      out.employer_phone = payload.phone || '';
+      break;
+    case 'pensioner':
+      out.occupation_ru = 'Пенсионер';
+      out.employer_ru = dash;
+      out.employer_address_ru = dash;
+      out.employer_phone = dash;
+      break;
+    case 'housewife':
+      out.occupation_ru = 'Домохозяйка';
+      out.employer_ru = dash;
+      out.employer_address_ru = dash;
+      out.employer_phone = dash;
+      break;
+    case 'unemployed':
+      out.occupation_ru = 'Безработный';
+      out.employer_ru = dash;
+      out.employer_address_ru = dash;
+      out.employer_phone = dash;
+      break;
+    case 'student':
+      out.occupation_ru = 'Студент';
+      // employer_ru / employer_address_ru / employer_phone left as the
+      // user typed (institution name / address / phone).
+      break;
+    case 'schoolchild':
+      out.occupation_ru = 'Школьник';
+      break;
+    case 'employed':
+    default:
+      // No auto-fill — leave whatever the user typed.
+      break;
+  }
+  return out;
+}
 
 function sanitizeLatin(value) {
   return value.toUpperCase().replace(/[^A-Z\s]/g, '');
@@ -60,6 +136,18 @@ function validate(payload) {
   if (passNum && passNum.length !== 9) {
     errors.passport_number = 'Должно быть 9 символов';
   }
+  // Студент / Школьник — institution name + address required, phone optional.
+  // ip / pensioner / housewife / unemployed — auto-filled, no validation.
+  // employed — no extra rules beyond what's already here.
+  const occType = payload.occupation_type || OCCUPATION_DEFAULT;
+  if (STUDENT_OCCUPATION_TYPES.has(occType)) {
+    if (!String(payload.employer_ru || '').trim()) {
+      errors.employer_ru = 'Укажите название учебного заведения';
+    }
+    if (!String(payload.employer_address_ru || '').trim()) {
+      errors.employer_address_ru = 'Укажите адрес учебного заведения';
+    }
+  }
   return errors;
 }
 
@@ -74,7 +162,16 @@ export default function SubmissionForm({
     for (const name of ALL_FIELDS) {
       base[name] = SELECT_DEFAULTS[name] ?? '';
     }
-    return { ...base, ...initialPayload };
+    const merged = { ...base, ...initialPayload };
+    // One-time migration: existing submissions saved before
+    // occupation_type existed will have it unset. If they used the old
+    // single "ИП" checkbox flow (occupation_ru === "ИП"), restore the
+    // ip category. Anything else defaults to employed.
+    if (!merged.occupation_type) {
+      const occRu = String(merged.occupation_ru || '').trim().toLowerCase();
+      merged.occupation_type = occRu === 'ип' ? 'ip' : OCCUPATION_DEFAULT;
+    }
+    return merged;
   }, [initialPayload]);
 
   const [payload, setPayload] = useState(initialState);
@@ -141,7 +238,13 @@ export default function SubmissionForm({
   const handleSubmit = async (e) => {
     e.preventDefault();
     setApiError('');
-    const errs = validate(payload);
+    // Normalise the Работа section once at submit time. The on-screen
+    // payload state is left as the user typed — applyOccupationAutoFill
+    // produces the final shape the visa form expects (ИП / Пенсионер /
+    // dashes / institution fields). Done before validate() so student
+    // category validation sees the user-typed strings.
+    const finalPayload = applyOccupationAutoFill(payload);
+    const errs = validate(finalPayload);
     setErrors(errs);
     if (Object.keys(errs).length > 0) {
       // Scroll the first errored field into view
@@ -156,7 +259,7 @@ export default function SubmissionForm({
     }
     setSubmitting(true);
     try {
-      await onSubmit(payload, consentChecked);
+      await onSubmit(finalPayload, consentChecked);
     } catch (err) {
       setApiError(err?.message || 'Не удалось отправить анкету.');
     } finally {
@@ -488,20 +591,42 @@ export default function SubmissionForm({
 
       <h2 className="sf-heading">Работа</h2>
 
-      <label className="sf-checkbox-row">
-        <input
-          type="checkbox"
-          checked={(payload.occupation_ru || '').trim().toLowerCase() === 'ип'}
-          onChange={(e) => setField('occupation_ru', e.target.checked ? 'ИП' : '')}
-        />
-        <span>Индивидуальный предприниматель (ИП)</span>
+      <label className="sf-field" data-field="occupation_type">
+        <span className="sf-label">Род занятий</span>
+        <select
+          value={payload.occupation_type || OCCUPATION_DEFAULT}
+          onChange={(e) => setField('occupation_type', e.target.value)}
+        >
+          {OCCUPATION_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
       </label>
 
-      {(payload.occupation_ru || '').trim().toLowerCase() !== 'ип'
-        && textField('occupation_ru', 'Должность')}
-      {textField('employer_ru', 'Название организации')}
-      {textareaField('employer_address_ru', 'Адрес организации')}
-      {phoneField('employer_phone', 'Телефон организации')}
+      {(payload.occupation_type || OCCUPATION_DEFAULT) === 'employed' && (
+        <>
+          {textField('occupation_ru', 'Должность')}
+          {textField('employer_ru', 'Название организации')}
+          {textareaField('employer_address_ru', 'Адрес организации')}
+          {phoneField('employer_phone', 'Телефон организации')}
+        </>
+      )}
+
+      {STUDENT_OCCUPATION_TYPES.has(payload.occupation_type || OCCUPATION_DEFAULT) && (
+        <>
+          {textField('employer_ru', 'Название учебного заведения')}
+          {textareaField('employer_address_ru', 'Адрес учебного заведения')}
+          {phoneField('employer_phone', 'Телефон учебного заведения')}
+        </>
+      )}
+
+      {/* ip / pensioner / housewife / unemployed — fields hidden,
+          values filled in at submit by applyOccupationAutoFill. */}
+      {BLANK_OCCUPATION_TYPES.has(payload.occupation_type) && (
+        <p className="sf-hint sf-occupation-note">
+          Поля раздела «Работа» заполнятся автоматически.
+        </p>
+      )}
 
       <h2 className="sf-heading">История</h2>
 
@@ -687,6 +812,14 @@ export default function SubmissionForm({
         .sf-consent-check input[type="checkbox"] {
           margin-top: 3px;
           accent-color: var(--accent);
+        }
+
+        .sf-occupation-note {
+          margin: 0;
+          padding: 8px 12px;
+          background: var(--gray-dark);
+          border: 1px dashed var(--border);
+          border-radius: 6px;
         }
 
         .sf-checkbox-row {
