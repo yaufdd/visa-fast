@@ -10,6 +10,7 @@ import {
   assignTouristSubgroup,
   updateGroupStatus, deleteGroup, updateGroupName,
   updateSubgroupProgrammeNotes,
+  getGroupTouristFileCounts,
 } from '../api/client';
 import StatusSection from '../components/StatusSection';
 import AddFromDBModal from '../components/AddFromDBModal';
@@ -42,7 +43,7 @@ function formatDate(iso) {
 
 // ── GroupCard ─────────────────────────────────────────────────────────────────
 
-function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, onRenamed, onDeleted }) {
+function GroupCard({ group, groupId, allTourists, fileCounts, onReload, onFilesChanged, onTouristDeleted, onRenamed, onDeleted }) {
   const [expanded, setExpanded] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -213,6 +214,8 @@ function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, on
                   <TouristCard
                     key={t.id}
                     tourist={t}
+                    fileCount={(fileCounts && t.submission_id) ? (fileCounts[t.submission_id] || 0) : 0}
+                    onFilesChanged={onFilesChanged}
                     onUpdated={onReload}
                     onDelete={async () => {
                       try { await deleteTourist(t.id); onTouristDeleted(t.id); }
@@ -317,20 +320,35 @@ function GroupCard({ group, groupId, allTourists, onReload, onTouristDeleted, on
 function GroupsTab({ groupId }) {
   const [subgroups, setSubgroups] = useState([]);
   const [tourists, setTourists] = useState([]);
+  const [fileCounts, setFileCounts] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showNewForm, setShowNewForm] = useState(false);
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
 
+  // Reloads only the file-count map. Used after the tourist files
+  // modal is closed (a delete inside the modal could have changed
+  // the count). Failures are swallowed — the badge is non-critical UI.
+  const reloadFileCounts = useCallback(async () => {
+    try {
+      const counts = await getGroupTouristFileCounts(groupId);
+      setFileCounts(counts && typeof counts === 'object' ? counts : {});
+    } catch {
+      /* ignore — keep stale counts on error */
+    }
+  }, [groupId]);
+
   const load = useCallback(async () => {
     try {
-      const [sgs, ts] = await Promise.all([
+      const [sgs, ts, counts] = await Promise.all([
         getSubgroups(groupId),
         getTourists(groupId),
+        getGroupTouristFileCounts(groupId).catch(() => ({})),
       ]);
       setSubgroups(Array.isArray(sgs) ? sgs : []);
       setTourists(Array.isArray(ts) ? ts : []);
+      setFileCounts(counts && typeof counts === 'object' ? counts : {});
     } catch (e) {
       setError(e.message);
     } finally {
@@ -415,7 +433,9 @@ function GroupsTab({ groupId }) {
               group={sg}
               groupId={groupId}
               allTourists={tourists}
+              fileCounts={fileCounts}
               onReload={load}
+              onFilesChanged={reloadFileCounts}
               onTouristDeleted={handleTouristDeleted}
               onRenamed={handleRenamed}
               onDeleted={handleDeleted}
@@ -434,6 +454,8 @@ function GroupsTab({ groupId }) {
                     key={t.id}
                     tourist={t}
                     subgroups={subgroups}
+                    fileCount={t.submission_id ? (fileCounts[t.submission_id] || 0) : 0}
+                    onFilesChanged={reloadFileCounts}
                     onUpdated={load}
                     onAssign={async (touristId, sgId) => {
                       try {

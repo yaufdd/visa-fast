@@ -422,6 +422,16 @@ export async function deleteSubmissionFileAdmin(submissionId, fileId) {
   if (!res.ok) throw await errFromRes(res);
 }
 
+// Returns { "<submission_id>": <count>, ... } for every tourist in the
+// group whose submission has at least one file attached. Tourists with
+// no submission_id (manager-created manually) and submissions with zero
+// files are omitted — frontend should treat absence as zero.
+export async function getGroupTouristFileCounts(groupId) {
+  const res = await apiFetch(`/groups/${encodeURIComponent(groupId)}/tourist_file_counts`);
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
 // ── AI audit log ──
 // Returns the latest 500 AI (Claude) calls made on behalf of this group,
 // newest first. Image/PDF bytes inside request JSONs are redacted server-side.

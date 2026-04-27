@@ -9,6 +9,7 @@ import {
 } from '../api/client';
 import FlightDataForm from './FlightDataForm';
 import ConfirmModal from './ConfirmModal';
+import TouristFilesModal from './TouristFilesModal';
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -421,10 +422,14 @@ function FlightBlock({ tourist, onUpdated }) {
 
 // ── Card header: name, DOB, subgroup picker, gray delete ─────────────────────
 
-function CardHeader({ tourist, onDelete, subgroups, onAssign }) {
+function CardHeader({ tourist, onDelete, subgroups, onAssign, fileCount, onOpenFiles }) {
   const name = getTouristName(tourist);
   const snap = snapshotOf(tourist);
   const dob = snap.birth_date || snap.date_of_birth;
+  // Only show the badge when the tourist actually has a submission_id
+  // (not a manager-created manual row) AND that submission has files.
+  // Otherwise the header stays clean — no zero-state badge.
+  const showFiles = !!tourist.submission_id && fileCount > 0;
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
       <div style={{ minWidth: 0 }}>
@@ -446,6 +451,38 @@ function CardHeader({ tourist, onDelete, subgroups, onAssign }) {
         )}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+        {showFiles && (
+          <button
+            type="button"
+            onClick={onOpenFiles}
+            title="Файлы из публичной формы"
+            aria-label={`Файлы туриста (${fileCount})`}
+            style={{
+              background: 'none',
+              border: '1px solid var(--border)',
+              borderRadius: 4,
+              color: 'var(--white-dim)',
+              fontSize: 11,
+              padding: '2px 8px',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              transition: 'color 0.15s, border-color 0.15s',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = 'var(--white)';
+              e.currentTarget.style.borderColor = 'var(--white-dim)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = 'var(--white-dim)';
+              e.currentTarget.style.borderColor = 'var(--border)';
+            }}
+          >
+            <span aria-hidden="true">📎</span>
+            <span style={{ fontVariantNumeric: 'tabular-nums' }}>{fileCount}</span>
+          </button>
+        )}
         {subgroups && subgroups.length > 0 && onAssign && (
           <select
             value=""
@@ -578,9 +615,20 @@ function CardBody({ tourist, onUpdated, hook }) {
 // ── Public API ───────────────────────────────────────────────────────────────
 
 export default function TouristCard({
-  tourist, onDelete, subgroups, onAssign, onUpdated,
+  tourist, onDelete, subgroups, onAssign, onUpdated, fileCount = 0, onFilesChanged,
 }) {
   const hook = useTouristUploads(tourist.id, onUpdated);
+  const [filesOpen, setFilesOpen] = useState(false);
+
+  // The SubmissionFilesPanel manages its own list internally, but the
+  // parent's count badge won't update unless we refetch when the modal
+  // closes. Unconditional refetch on close keeps the wiring simple —
+  // no callback threading from inside the panel — and the cost is one
+  // small JSON request per modal open/close cycle.
+  const closeFiles = () => {
+    setFilesOpen(false);
+    onFilesChanged?.();
+  };
 
   return (
     <div
@@ -594,7 +642,14 @@ export default function TouristCard({
         gap: 12,
       }}
     >
-      <CardHeader tourist={tourist} onDelete={onDelete} subgroups={subgroups} onAssign={onAssign} />
+      <CardHeader
+        tourist={tourist}
+        onDelete={onDelete}
+        subgroups={subgroups}
+        onAssign={onAssign}
+        fileCount={fileCount}
+        onOpenFiles={() => setFilesOpen(true)}
+      />
       <CardBody tourist={tourist} onUpdated={onUpdated} hook={hook} />
 
       {/* Hidden file inputs */}
@@ -628,6 +683,13 @@ export default function TouristCard({
         error={hook.confirmDeleteError}
         onConfirm={hook.confirmDelete}
         onCancel={hook.closeConfirmDelete}
+      />
+
+      <TouristFilesModal
+        open={filesOpen}
+        onClose={closeFiles}
+        submissionId={tourist.submission_id}
+        touristName={getTouristName(tourist)}
       />
     </div>
   );
