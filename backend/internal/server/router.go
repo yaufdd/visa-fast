@@ -152,6 +152,7 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 
 			// Submissions (form-based workflow)
 			r.Post("/submissions", api.CreateSubmissionByManager(pool))
+			r.Post("/submissions/draft", api.CreateDraftSubmissionAsManager(pool))
 			r.Get("/submissions", api.ListSubmissions(pool))
 			r.Get("/submissions/{id}", api.GetSubmission(pool))
 			r.Put("/submissions/{id}", api.UpdateSubmission(pool))

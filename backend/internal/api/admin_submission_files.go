@@ -13,9 +13,36 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"fujitravel-admin/backend/internal/consent"
 	"fujitravel-admin/backend/internal/db"
 	appmw "fujitravel-admin/backend/internal/middleware"
 )
+
+// CreateDraftSubmissionAsManager handles POST /api/submissions/draft.
+// Creates an empty draft submission owned by the manager's org so the
+// dashboard wizard can attach scans before the manager finalises the
+// payload (same shape as the public /start endpoint, just session-auth'd
+// and tagged source='manager' for audit/report differentiation). Body is
+// drained but otherwise ignored — reserved for future telemetry.
+func CreateDraftSubmissionAsManager(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := appmw.OrgID(r.Context())
+
+		// Drain body so the connection can be reused; cap to a tiny
+		// envelope to stop a malicious client from streaming megabytes
+		// at an endpoint that expects {} or empty.
+		_, _ = io.Copy(io.Discard, http.MaxBytesReader(w, r.Body, 1<<10))
+
+		agreement := consent.Current()
+		id, err := db.CreateDraftSubmission(r.Context(), pool, orgID, agreement.Version, "manager")
+		if err != nil {
+			slog.Error("admin create draft submission", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"submission_id": id})
+	}
+}
 
 // Manager-facing counterparts of handlers_public_files.go: list, download,
 // and (rarely) delete the files a tourist attached via the public wizard.
