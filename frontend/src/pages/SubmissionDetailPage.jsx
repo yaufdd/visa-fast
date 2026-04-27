@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import SubmissionForm from '../components/SubmissionForm';
+import SubmissionFilesPanel from '../components/SubmissionFilesPanel';
 import AttachGroupModal from '../components/AttachGroupModal';
 import ConfirmModal from '../components/ConfirmModal';
 import {
@@ -200,6 +201,8 @@ export default function SubmissionDetailPage() {
         submitLabel={isNew ? 'Создать анкету' : 'Сохранить'}
         showConsent={isNew}
       />
+
+      {!isNew && <SubmissionFilesPanel submissionId={id} />}
 
       <AttachGroupModal
         open={attachOpen}

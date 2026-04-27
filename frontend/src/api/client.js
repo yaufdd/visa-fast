@@ -393,6 +393,35 @@ export function getDoverenostTemplateDownloadUrl() {
   return `${API}/templates/doverenost/download`;
 }
 
+// ── Submission files (uploaded by tourist via the public wizard) ──────────
+// Backend: GET/DELETE /api/submissions/{id}/files[/file_id[/download]]
+// Auth: session cookie. Returns metadata only (no file_path / org_id).
+export async function listSubmissionFilesAdmin(submissionId) {
+  const res = await apiFetch(`/submissions/${encodeURIComponent(submissionId)}/files`);
+  if (res.status === 404) {
+    const err = new Error('not found');
+    err.notFound = true;
+    throw err;
+  }
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+// Synchronous URL builder so an <a href download> can stream the file
+// directly — the browser then handles Content-Disposition (incl. RFC-5987
+// filename* for Cyrillic names) without us copying bytes through JS.
+export function submissionFileDownloadUrl(submissionId, fileId) {
+  return `${API}/submissions/${encodeURIComponent(submissionId)}/files/${encodeURIComponent(fileId)}/download`;
+}
+
+export async function deleteSubmissionFileAdmin(submissionId, fileId) {
+  const res = await apiFetch(
+    `/submissions/${encodeURIComponent(submissionId)}/files/${encodeURIComponent(fileId)}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok) throw await errFromRes(res);
+}
+
 // ── AI audit log ──
 // Returns the latest 500 AI (Claude) calls made on behalf of this group,
 // newest first. Image/PDF bytes inside request JSONs are redacted server-side.
