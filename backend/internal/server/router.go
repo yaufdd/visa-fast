@@ -154,6 +154,11 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 			r.Delete("/submissions/{id}/erase", api.EraseSubmission(pool))
 			r.Post("/submissions/{id}/attach", api.AttachSubmission(pool))
 
+			// Manager view of files a tourist attached via the public form.
+			r.Get("/submissions/{id}/files", api.ListSubmissionFiles(pool))
+			r.Get("/submissions/{id}/files/{file_id}/download", api.DownloadSubmissionFile(pool))
+			r.Delete("/submissions/{id}/files/{file_id}", api.DeleteSubmissionFile(pool))
+
 			// Flight data
 			r.Put("/tourists/{id}/flight_data", api.UpdateFlightData(pool))
 			r.Post("/tourists/{id}/flight_data/apply_to_subgroup", api.ApplyFlightDataToSubgroup(pool))
