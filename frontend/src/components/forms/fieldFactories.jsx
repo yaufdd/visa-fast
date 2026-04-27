@@ -1,4 +1,5 @@
-// fieldFactories.js — shared input renderers used by SubmissionForm (manager
+/* eslint-disable react-refresh/only-export-components */
+// fieldFactories.jsx — shared input renderers used by SubmissionForm (manager
 // edit view) and the public-form wizard step components. The factories are
 // JSX-returning helpers, not React components, so each call site can pass in
 // its own `payload`, `errors`, and `setField` closures and reuse the same

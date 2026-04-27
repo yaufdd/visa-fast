@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import SubmissionForm from '../components/SubmissionForm'
+import FormWizard from '../components/forms/FormWizard'
 import { publicGetOrg, publicCreateSubmission } from '../api/client'
 import { startSubmission } from '../api/files'
 
@@ -57,7 +57,7 @@ export default function SubmissionFormPage() {
           Загрузка файлов недоступна, можно отправить анкету без сканов.
         </div>
       )}
-      <SubmissionForm
+      <FormWizard
         onSubmit={handleSubmit}
         slug={slug}
         submissionId={submissionId}
