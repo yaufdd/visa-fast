@@ -15,11 +15,17 @@ export const BLANK_OCCUPATION_TYPES = new Set(['ip', 'pensioner', 'housewife', '
 export const STUDENT_OCCUPATION_TYPES = new Set(['student', 'schoolchild']);
 
 // Categories where the user must NOT type their own occupation_ru —
-// the visa office expects a canonical title (e.g. "Владелец ООО",
-// "Студент", "Школьник"). The text input is hidden; auto-fill pins
-// the value at submit time.
+// the visa office expects a canonical title (e.g. "Студент",
+// "Школьник"). The text input is hidden; auto-fill pins the value
+// at submit time.
+//
+// Владелец ООО intentionally falls OUTSIDE this set: many LLC owners
+// are "Генеральный директор" / "Учредитель" / "Директор" and the visa
+// office expects the real title. The category soft-defaults occupation_ru
+// to "Владелец ООО" only when the user leaves the field empty — see
+// applyOccupationAutoFill below.
 export const LOCKED_OCCUPATION_TITLE_TYPES = new Set([
-  'business_owner', 'student', 'schoolchild',
+  'student', 'schoolchild',
 ]);
 
 export const OCCUPATION_DEFAULT = 'employed';
@@ -53,11 +59,15 @@ export function applyOccupationAutoFill(payload) {
       out.employer_phone = payload.phone || '';
       break;
     case 'business_owner':
-      // Same employer-fields layout as 'employed' (LLC name + registered
-      // address + contact phone, all user-typed). Only the title is
-      // pinned — the visa office expects "Владелец ООО" verbatim, mapped
-      // by the assembler to "BUSINESS OWNER" in English.
-      out.occupation_ru = 'Владелец ООО';
+      // Soft default: only fill occupation_ru when the user left the
+      // position field empty. The visa office expects the real title
+      // (e.g. "Генеральный директор", "Учредитель", "Директор") and
+      // overwriting a typed value would be wrong. The "Владелец ООО"
+      // → "BUSINESS OWNER" mapping in assembler.go still handles the
+      // empty-field case so the legacy behaviour is preserved.
+      if (!String(out.occupation_ru || '').trim()) {
+        out.occupation_ru = 'Владелец ООО';
+      }
       break;
     case 'pensioner':
       out.occupation_ru = 'Пенсионер';
@@ -117,13 +127,16 @@ export default function OccupationStep({ payload, setField, errors }) {
         </>
       )}
 
-      {/* Владелец ООО — occupation_ru is auto-pinned to "Владелец ООО"
-          (see applyOccupationAutoFill), so the title input is hidden.
-          The three employer fields keep their "Название организации /
-          Адрес организации / Телефон организации" labels because
-          they're filled with the LLC's data, exactly as in 'employed'. */}
+      {/* Владелец ООО — same employer fields as 'employed' plus a free
+          position field. occupation_ru soft-defaults to "Владелец ООО"
+          only when left empty (see applyOccupationAutoFill); typing
+          "Генеральный директор" / "Учредитель" / "Директор" overrides
+          the default and ships verbatim to the visa office. */}
       {type === 'business_owner' && (
         <>
+          {textField('occupation_ru', 'Должность', {
+            hint: 'Например: Генеральный директор / Учредитель / Владелец ООО.',
+          })}
           {textField('employer_ru', 'Название организации')}
           {textareaField('employer_address_ru', 'Адрес организации')}
           {phoneField('employer_phone', 'Телефон организации')}

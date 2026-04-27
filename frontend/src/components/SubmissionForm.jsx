@@ -103,9 +103,14 @@ function applyOccupationAutoFill(payload) {
       out.employer_phone = payload.phone || '';
       break;
     case 'business_owner':
-      // employer_ru / employer_address_ru / employer_phone left as the
-      // user typed (LLC name / registered address / contact phone).
-      out.occupation_ru = 'Владелец ООО';
+      // Soft default: only fill occupation_ru when the user left the
+      // position field empty. Many LLC owners are "Генеральный директор"
+      // / "Учредитель" / "Директор" and the visa office expects the
+      // real title. employer_ru / employer_address_ru / employer_phone
+      // are left as typed (LLC name / registered address / contact phone).
+      if (!String(out.occupation_ru || '').trim()) {
+        out.occupation_ru = 'Владелец ООО';
+      }
       break;
     case 'pensioner':
       out.occupation_ru = 'Пенсионер';
@@ -963,10 +968,16 @@ export default function SubmissionForm({
         </>
       )}
 
-      {/* Владелец ООО — same employer fields as 'employed', but the
-          title is auto-pinned to "Владелец ООО" so we hide the input. */}
+      {/* Владелец ООО — same employer fields as 'employed' plus a free
+          position field. occupation_ru soft-defaults to "Владелец ООО"
+          only when left empty (see applyOccupationAutoFill); typing a
+          real title like "Генеральный директор" / "Учредитель" /
+          "Директор" overrides the default and ships verbatim. */}
       {(payload.occupation_type || OCCUPATION_DEFAULT) === 'business_owner' && (
         <>
+          {textField('occupation_ru', 'Должность', {
+            hint: 'Например: Генеральный директор / Учредитель / Владелец ООО.',
+          })}
           {textField('employer_ru', 'Название организации')}
           {textareaField('employer_address_ru', 'Адрес организации')}
           {phoneField('employer_phone', 'Телефон организации')}
