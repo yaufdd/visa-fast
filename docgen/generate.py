@@ -69,6 +69,30 @@ _MVD_REGION_CITY = {
     "91": "Sevastopol",
 }
 
+# ── ISO 3-letter code → English label as it appears in T50's /Opt list ──
+# Mirrors backend/internal/ai/mappings.go countryISOMap. Used by the
+# pikepdf post-pass to write the LABEL ("RUSSIA") into T50 instead of
+# the raw ISO code ("RUS"), so browsers / Acrobat render the field
+# consistently regardless of whether they resolve [code, label] pairs.
+_NATIONALITY_LABELS = {
+    "RUS": "RUSSIA",
+    "BLR": "BELARUS",
+    "KAZ": "KAZAKHSTAN",
+    "UKR": "UKRAINE",
+    "UZB": "UZBEKISTAN",
+    "KGZ": "KYRGYZ REPUBLIC",
+    "TJK": "TAJIKISTAN",
+    "TKM": "TURKMENISTAN",
+    "ARM": "ARMENIA",
+    "AZE": "AZERBAIJAN",
+    "GEO": "GEORGIA",
+    "MDA": "MOLDOVA",
+    "LVA": "LATVIA",
+    "LTU": "LITHUANIA",
+    "EST": "ESTONIA",
+}
+
+
 def _mvd_to_place_of_issue(issued_by: str) -> str:
     """Convert 'MVD 54001' → 'Russia, Novosibirsk'.
     If already contains 'Russia' or city info, return as-is.
@@ -481,9 +505,16 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
     # not render combo values outside the predefined list — that's a
     # known PDFKit limitation, not a bug in this code.
     if not _HAS_PIKEPDF:
-        return  # post-pass skipped; T34 stays at fillpdf's safe placeholder
+        return  # post-pass skipped; combo fields stay at fillpdf's safe values
 
     former = tourist.get("former_nationality_text", "NO")
+    # T50 (Nationality) is a closed-list combo with [code, label] pairs in
+    # /Opt. fillpdf writes the ISO code; some viewers don't resolve the
+    # pair and just render the code ("RUS" instead of "RUSSIA"). Writing
+    # the LABEL via pikepdf is the simplest fix — it shows correctly in
+    # Chrome / Safari / Adobe Acrobat regardless of pair lookup behaviour.
+    iso = tourist.get("nationality_iso", "RUS") or "RUS"
+    nationality_label = _NATIONALITY_LABELS.get(iso, "RUSSIA")
     try:
         pdf = pikepdf.open(out_path, allow_overwriting_input=True)
         try:
@@ -491,12 +522,16 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
                 "topmostSubform[0].Page1[0].T34[0]"
             ):
                 f.set_value(former)
+            for f in pdf.acroform.get_fields_with_qualified_name(
+                "topmostSubform[0].Page1[0].T50[0]"
+            ):
+                f.set_value(nationality_label)
             pdf.save(out_path)
         finally:
             pdf.close()
     except Exception:
         # Defensive: if the patch fails for any reason, leave fillpdf's
-        # safe placeholder in place rather than break document generation.
+        # safe values in place rather than break document generation.
         # Any failure here is a rendering issue, not a data-loss one —
         # the rest of the anketa is already on disk.
         pass
