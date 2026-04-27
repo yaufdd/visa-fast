@@ -25,7 +25,16 @@ from fillpdf import fillpdfs
 # against the predefined option list and would reject "USSR" / "NO" with
 # a KeyError. pikepdf has no such validation, so we let fillpdf put a
 # safe placeholder there, then overwrite in a tiny post-pass.
-import pikepdf
+#
+# Optional dependency: if pikepdf isn't available in this Python env
+# (e.g. an older Docker image where only fillpdf was installed), the
+# post-pass is silently skipped and T34 keeps fillpdf's "  " placeholder.
+# The rest of the anketa is generated normally — no broken pipeline.
+try:
+    import pikepdf
+    _HAS_PIKEPDF = True
+except ImportError:
+    _HAS_PIKEPDF = False
 
 # ── MVD region code → English city name ──────────────────────────────────────
 _MVD_REGION_CITY = {
@@ -471,6 +480,9 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
     # Visible in browsers and Adobe Acrobat. Mac Preview's PDFKit does
     # not render combo values outside the predefined list — that's a
     # known PDFKit limitation, not a bug in this code.
+    if not _HAS_PIKEPDF:
+        return  # post-pass skipped; T34 stays at fillpdf's safe placeholder
+
     former = tourist.get("former_nationality_text", "NO")
     try:
         pdf = pikepdf.open(out_path, allow_overwriting_input=True)

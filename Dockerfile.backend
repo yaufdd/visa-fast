@@ -34,7 +34,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 # Python deps for docgen/generate.py.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install python-docx fillpdf
+    pip install python-docx fillpdf pikepdf
 
 WORKDIR /app
 
