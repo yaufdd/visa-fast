@@ -545,3 +545,128 @@
 .fw-restore-banner-close:hover {
   color: var(--white);
 }
+
+/* Mobile-only progress strip — replaces the sidebar below 720px. Hidden
+   on desktop. The strip is rendered in FormWizard.jsx as a sibling of
+   the sidebar. */
+.wizard-mobile-progress {
+  display: none;
+}
+
+/* ---------- Mobile responsive (≤ 720px) ---------- */
+@media (max-width: 720px) {
+  /* Sidebar gone, layout becomes single-column. Outer padding shrinks
+     so a 360 px viewport gets meaningful breathing room. */
+  .fw-shell {
+    flex-direction: column;
+    gap: 0;
+    padding: 12px;
+    max-width: 100%;
+  }
+
+  .fw-sidebar {
+    display: none;
+  }
+
+  /* Sticky top progress strip — visible only on mobile. */
+  .wizard-mobile-progress {
+    display: block;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--graphite);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+  }
+
+  .wizard-mobile-progress__label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--white-dim);
+    margin-bottom: 8px;
+  }
+
+  .wizard-mobile-progress__track {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--gray);
+    overflow: hidden;
+  }
+
+  .wizard-mobile-progress__fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.2s ease;
+  }
+
+  .fw-main {
+    width: 100%;
+  }
+
+  /* Buttons — wrap when narrow, fill the row, comfortable tap targets. */
+  .fw-actions {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .fw-actions-spacer {
+    display: none;
+  }
+
+  .fw-actions .fw-btn {
+    flex: 1 1 auto;
+    min-height: 44px;
+    min-width: 0;
+  }
+
+  /* Form inputs — guarantee they never overflow the viewport. The
+     desktop CSS already sets width: 100% but the passport segment
+     widths are fixed in px and would push past a 360 px screen. */
+  .fw-main .sf-field input,
+  .fw-main .sf-field textarea,
+  .fw-main .sf-field select {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* Passport series + number inputs — let them shrink and wrap so the
+     row fits a 360 px viewport. */
+  .fw-main .sf-passport-input {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .fw-main .sf-passport-seg--short,
+  .fw-main .sf-passport-seg--series {
+    width: 64px;
+  }
+
+  .fw-main .sf-passport-seg--long,
+  .fw-main .sf-passport-seg--number {
+    width: 110px;
+  }
+
+  /* Review step grid collapses to one column so labels + values stack. */
+  .fw-review-dl {
+    grid-template-columns: 1fr;
+    gap: 2px 0;
+  }
+
+  .fw-review-dl dt {
+    margin-top: 6px;
+  }
+
+  .fw-review-section {
+    padding: 12px;
+  }
+
+  /* Restore banner — wrap on small screens so the close button doesn't
+     get pushed off-screen. */
+  .fw-restore-banner {
+    flex-wrap: wrap;
+  }
+}

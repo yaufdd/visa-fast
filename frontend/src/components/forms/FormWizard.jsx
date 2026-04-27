@@ -347,6 +347,13 @@ export default function FormWizard({
     setConsentExpanded,
   };
 
+  // Mobile progress strip — sibling of the sidebar. CSS hides this on
+  // desktop and hides the sidebar on mobile; the two are mutually
+  // exclusive. Past steps remain reachable via the Back button on mobile;
+  // a clickable past-step navigation would need a dropdown / sheet and
+  // is deferred.
+  const mobileProgressPct = ((currentStep + 1) / STEPS.length) * 100;
+
   return (
     <div className="fw-shell">
       <StepSidebar
@@ -354,6 +361,18 @@ export default function FormWizard({
         currentStep={currentStep}
         onJump={handleJump}
       />
+
+      <div className="wizard-mobile-progress" aria-hidden="true">
+        <div className="wizard-mobile-progress__label">
+          Шаг {currentStep + 1} из {STEPS.length}: {STEPS[currentStep].label}
+        </div>
+        <div className="wizard-mobile-progress__track">
+          <div
+            className="wizard-mobile-progress__fill"
+            style={{ width: `${mobileProgressPct}%` }}
+          />
+        </div>
+      </div>
 
       <main className="fw-main">
         {showRestoreBanner && (
