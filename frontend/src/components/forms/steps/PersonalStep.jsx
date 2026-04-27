@@ -72,7 +72,30 @@ export default function PersonalStep({ payload, setField, errors }) {
       {textField('place_of_birth_ru', 'Место рождения')}
       {textField('nationality_ru', 'Гражданство')}
       {textField('former_nationality_ru', 'Прежнее гражданство')}
-      {textField('maiden_name_ru', 'Была ли другая фамилия? Какая?')}
+
+      {/* Yes/No toggle for previous surname. The free-text trap (typing
+          "Нет" → ICAO transliterated to "NET" in the visa anketa PDF) was
+          the original bug that motivated this control. When the tourist
+          flips back from "Да" to "Нет" we also clear maiden_name_ru so a
+          previously-typed surname doesn't ship to the PDF. */}
+      <label className="sf-field" data-field="had_other_name">
+        <span className="sf-label">Была ли другая фамилия?</span>
+        <select
+          value={payload.had_other_name ?? 'Нет'}
+          onChange={(e) => {
+            const next = e.target.value;
+            setField('had_other_name', next);
+            if (next !== 'Да') {
+              setField('maiden_name_ru', '');
+            }
+          }}
+        >
+          <option value="Нет">Нет</option>
+          <option value="Да">Да</option>
+        </select>
+      </label>
+
+      {payload.had_other_name === 'Да' && textField('maiden_name_ru', 'Какая фамилия была раньше?')}
     </div>
   );
 }

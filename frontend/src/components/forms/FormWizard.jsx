@@ -52,6 +52,11 @@ const SELECT_DEFAULTS = {
   criminal_record_ru: 'Нет',
   gender_ru: '',
   marital_status_ru: '',
+  // had_other_name is the Yes/No toggle that gates the maiden_name_ru
+  // text input on PersonalStep. Default is "Нет" — the common case —
+  // so the text input stays hidden until the tourist explicitly says
+  // they had a previous surname.
+  had_other_name: 'Нет',
 };
 
 // All fields the wizard touches. `same_address` is wizard-only state — the
@@ -59,7 +64,8 @@ const SELECT_DEFAULTS = {
 // is fine.
 const ALL_FIELDS = [
   'name_cyr', 'name_lat', 'gender_ru', 'birth_date', 'marital_status_ru',
-  'place_of_birth_ru', 'nationality_ru', 'former_nationality_ru', 'maiden_name_ru',
+  'place_of_birth_ru', 'nationality_ru', 'former_nationality_ru',
+  'had_other_name', 'maiden_name_ru',
   'passport_number', 'passport_type_ru', 'issue_date', 'expiry_date', 'issued_by_ru',
   'internal_series', 'internal_number', 'internal_issued_ru', 'internal_issued_by_ru',
   'reg_address_ru', 'home_address_ru', 'phone',
@@ -128,6 +134,22 @@ export default function FormWizard({
     if (!merged.occupation_type) {
       const occRu = String(merged.occupation_ru || '').trim().toLowerCase();
       merged.occupation_type = occRu === 'ип' ? 'ip' : OCCUPATION_DEFAULT;
+    }
+    // Backwards-compat restore for the had_other_name toggle. Submissions
+    // saved before the Yes/No control was added have neither the explicit
+    // flag nor a clean blank surname — they often store a typed "Нет"
+    // (which is exactly the bug the toggle prevents). The safe rule:
+    //   * flag already set        → respect it (user picked something).
+    //   * flag missing + non-empty maiden_name_ru → "Да" so the saved
+    //     surname stays visible and the manager can fix it manually.
+    //     This deliberately leaves a legacy literal "Нет" in the field
+    //     untouched on first load — the assembler-side resolveMaidenName
+    //     guard still produces "" so the PDF renders "NO" correctly. The
+    //     manager can flip the toggle to "Нет" to drop the literal.
+    //   * flag missing + empty maiden_name_ru → "Нет".
+    if (!merged.had_other_name) {
+      const hasMaiden = String(merged.maiden_name_ru || '').trim() !== '';
+      merged.had_other_name = hasMaiden ? 'Да' : 'Нет';
     }
     return merged;
   }, [initialPayload, restoredBlob]);

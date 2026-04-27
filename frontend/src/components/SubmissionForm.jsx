@@ -25,6 +25,9 @@ const SELECT_DEFAULTS = {
   criminal_record_ru: 'Нет',
   gender_ru: '',
   marital_status_ru: '',
+  // had_other_name gates the maiden_name_ru text input. Default "Нет"
+  // — the common case — keeps the text input hidden by default.
+  had_other_name: 'Нет',
 };
 
 // All fields the form touches. Phone fields aren't yet in the backend
@@ -34,7 +37,8 @@ const SELECT_DEFAULTS = {
 // submission restore the chosen category without guessing.
 const ALL_FIELDS = [
   'name_cyr', 'name_lat', 'gender_ru', 'birth_date', 'marital_status_ru',
-  'place_of_birth_ru', 'nationality_ru', 'former_nationality_ru', 'maiden_name_ru',
+  'place_of_birth_ru', 'nationality_ru', 'former_nationality_ru',
+  'had_other_name', 'maiden_name_ru',
   'passport_number', 'passport_type_ru', 'issue_date', 'expiry_date', 'issued_by_ru',
   'internal_series', 'internal_number', 'internal_issued_ru', 'internal_issued_by_ru',
   'reg_address_ru', 'home_address_ru', 'phone',
@@ -281,6 +285,17 @@ export default function SubmissionForm({
     if (!merged.occupation_type) {
       const occRu = String(merged.occupation_ru || '').trim().toLowerCase();
       merged.occupation_type = occRu === 'ип' ? 'ip' : OCCUPATION_DEFAULT;
+    }
+    // Backwards-compat for the had_other_name toggle (added after some
+    // submissions were already saved). When it's missing we infer it
+    // from whether maiden_name_ru carries any text. A literal "Нет"
+    // typed into the old free-text field will appear as "Да" + the
+    // saved string here — that's intentional: the assembler-side
+    // resolveMaidenName guard still produces "" for the PDF, and the
+    // manager can flip the toggle to drop the literal manually.
+    if (!merged.had_other_name) {
+      const hasMaiden = String(merged.maiden_name_ru || '').trim() !== '';
+      merged.had_other_name = hasMaiden ? 'Да' : 'Нет';
     }
     return merged;
   }, [initialPayload]);
@@ -709,7 +724,32 @@ export default function SubmissionForm({
       {textField('place_of_birth_ru', 'Место рождения')}
       {textField('nationality_ru', 'Гражданство')}
       {textField('former_nationality_ru', 'Прежнее гражданство')}
-      {textField('maiden_name_ru', 'Была ли другая фамилия? Какая?')}
+
+      {/* Yes/No toggle (replaces the old free-text trap where typing
+          "Нет" became "NET" in the visa anketa PDF). Switching to "Нет"
+          also clears any previously typed maiden_name_ru so a stale
+          surname does not ship to the PDF. */}
+      <label className="sf-field" data-field="had_other_name">
+        <span className="sf-label">Была ли другая фамилия?</span>
+        <select
+          value={payload.had_other_name ?? 'Нет'}
+          onChange={(e) => {
+            const next = e.target.value;
+            setPayload((p) => ({
+              ...p,
+              had_other_name: next,
+              ...(next === 'Да' ? {} : { maiden_name_ru: '' }),
+            }));
+            clearError('had_other_name');
+            clearError('maiden_name_ru');
+          }}
+        >
+          <option value="Нет">Нет</option>
+          <option value="Да">Да</option>
+        </select>
+      </label>
+
+      {payload.had_other_name === 'Да' && textField('maiden_name_ru', 'Какая фамилия была раньше?')}
 
       <h2 className="sf-heading">Загранпаспорт</h2>
 
