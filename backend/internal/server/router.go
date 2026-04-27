@@ -46,7 +46,13 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 	// Rate limiters.
 	registerRL := appmw.NewRateLimiter(5, 15*time.Minute)
 	loginRL := appmw.NewRateLimiter(10, 15*time.Minute)
+	// publicRL is the strict bucket for row-creation endpoints on the
+	// public form (anti-spam against bots probing the slug pool).
 	publicRL := appmw.NewRateLimiter(3, 10*time.Minute)
+	// publicFileRL covers the file CRUD path; a real tourist uploads
+	// four scans (passport_internal, passport_foreign, ticket, voucher)
+	// and may replace one or two of them, which would trip publicRL.
+	publicFileRL := appmw.NewRateLimiter(30, 10*time.Minute)
 
 	r.Route("/api", func(r chi.Router) {
 		// Health
@@ -66,12 +72,14 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 		r.Get("/public/org/{slug}", api.PublicOrg(pool))
 		r.With(publicRL.Middleware()).Post("/public/submissions/{slug}", api.PublicSubmit(pool))
 
-		// Public — draft submission + scan attachments. Same rate-limiter
-		// as PublicSubmit so the four-endpoint flow shares one bucket.
+		// Public — draft submission + scan attachments. /start uses the
+		// strict publicRL (it creates a row); /files* use the looser
+		// publicFileRL so legitimate scan uploads do not get 429'd
+		// mid-form.
 		r.With(publicRL.Middleware()).Post("/public/submissions/{slug}/start", api.PublicSubmissionStart(pool))
-		r.With(publicRL.Middleware()).Post("/public/submissions/{slug}/files/{type}", api.PublicUploadSubmissionFile(pool, uploadsDir))
-		r.With(publicRL.Middleware()).Get("/public/submissions/{slug}/files", api.PublicListSubmissionFiles(pool))
-		r.With(publicRL.Middleware()).Delete("/public/submissions/{slug}/files/{id}", api.PublicDeleteSubmissionFile(pool, uploadsDir))
+		r.With(publicFileRL.Middleware()).Post("/public/submissions/{slug}/files/{type}", api.PublicUploadSubmissionFile(pool, uploadsDir))
+		r.With(publicFileRL.Middleware()).Get("/public/submissions/{slug}/files", api.PublicListSubmissionFiles(pool))
+		r.With(publicFileRL.Middleware()).Delete("/public/submissions/{slug}/files/{id}", api.PublicDeleteSubmissionFile(pool, uploadsDir))
 
 		// Public — consent text
 		r.Get("/consent/text", api.GetConsentText())
