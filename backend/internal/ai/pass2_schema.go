@@ -22,6 +22,7 @@ type Pass2Tourist struct {
 	Occupation            string `json:"occupation"`
 	Employer              string `json:"employer"`
 	EmployerAddress       string `json:"employer_address"`
+	EmployerPhone         string `json:"employer_phone"`
 	BeenToJapan           string `json:"been_to_japan"`
 	PreviousVisits        string `json:"previous_visits"`
 	CriminalRecord        string `json:"criminal_record"`

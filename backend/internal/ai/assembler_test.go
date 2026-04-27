@@ -263,6 +263,46 @@ func TestAssembleTourist_OccupationCategories(t *testing.T) {
 	}
 }
 
+func TestAssembleTourist_EmployerPhonePassthrough(t *testing.T) {
+	// Regression net for a recurring bug: the form collects
+	// employer_phone ("Телефон организации"), but if we don't carry it
+	// through Pass2Tourist → docgen, the анкета PDF silently falls back
+	// to the template's baked-in default (the infamous "...03" number).
+	//
+	// The phone is taken raw from the submission_snapshot — no
+	// translation, no auto-fill, no formatting. Whatever the user typed
+	// (or the OccupationStep auto-filled) lands here verbatim.
+	payload := map[string]any{
+		"name_cyr":         "Иванов Петр",
+		"gender_ru":        "Мужской",
+		"passport_type_ru": "Обычный",
+		"birth_date":       "10.06.1990",
+		"employer_ru":      "ООО Ромашка",
+		"employer_phone":   "+7 999 123 4567",
+	}
+	// Translator must NOT touch employer_phone — sanity-check that even
+	// a misconfigured translations map can't corrupt the raw value.
+	translations := map[string]string{
+		"+7 999 123 4567": "WRONG_TRANSLATION",
+	}
+	got := AssembleTourist(payload, translations, nil, nil)
+	if got.EmployerPhone != "+7 999 123 4567" {
+		t.Errorf("EmployerPhone = %q, want raw passthrough %q",
+			got.EmployerPhone, "+7 999 123 4567")
+	}
+
+	// And confirm an empty source stays empty (no spurious fallback).
+	got2 := AssembleTourist(map[string]any{
+		"name_cyr":         "Иванов Петр",
+		"gender_ru":        "Мужской",
+		"passport_type_ru": "Обычный",
+		"birth_date":       "10.06.1990",
+	}, nil, nil, nil)
+	if got2.EmployerPhone != "" {
+		t.Errorf("EmployerPhone with empty payload = %q, want \"\"", got2.EmployerPhone)
+	}
+}
+
 func TestAssembleTourist_OneWay(t *testing.T) {
 	payload := map[string]any{
 		"name_cyr":         "Сидоров Петр",

@@ -412,6 +412,7 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
         "topmostSubform[0].Page1[0].T5[0]":  tourist.get("occupation", ""),
         "topmostSubform[0].Page1[0].#area[3].emp_name[0]": tourist.get("employer", ""),
         "topmostSubform[0].Page1[0].emp_adr[0]":           tourist.get("employer_address", ""),
+        "topmostSubform[0].Page1[0].#area[3].emp_tel[0]":  tourist.get("employer_phone", ""),
         "topmostSubform[0].Page1[0].T0[1]":  tourist.get("home_address", ""),
         "topmostSubform[0].Page1[0].#area[11].T3[0]": tourist.get("phone", ""),  # applicant phone
         "topmostSubform[0].Page1[0].T62[0]": "NO",                      # Certificate of Eligibility No. — always NO

@@ -149,6 +149,12 @@ func AssembleTourist(payload map[string]any, translations map[string]string, cle
 		Occupation:            occupation,
 		Employer:              tr("employer_ru"),
 		EmployerAddress:       tr("employer_address_ru"),
+		// employer_phone is taken raw from the form payload — phone numbers
+		// are not translated, and the OccupationStep auto-fill on the
+		// client side already produces the right value for every
+		// occupation_type case (IP / pensioner-housewife-unemployed em-dash
+		// / student-schoolchild institution phone / employed user input).
+		EmployerPhone:   get("employer_phone"),
 		BeenToJapan:           MapYesNo(get("been_to_japan_ru")),
 		PreviousVisits:        tr("previous_visits_ru"),
 		CriminalRecord:        MapYesNo(get("criminal_record_ru")),
