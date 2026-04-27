@@ -441,11 +441,17 @@ export async function publicGetOrg(slug) {
   return res.json()
 }
 
-export async function publicCreateSubmission(slug, payload, consentAccepted) {
+// publicCreateSubmission posts the final form payload. When `submissionId`
+// is provided (Phase 3 flow), the backend finalises an existing draft row
+// — the same id that was returned by /start and used to attach scans. Old
+// callers that omit it get the legacy "create new pending row" behaviour.
+export async function publicCreateSubmission(slug, payload, consentAccepted, submissionId) {
+  const body = { payload, consent_accepted: consentAccepted }
+  if (submissionId) body.submission_id = submissionId
   const res = await fetch(`${API}/public/submissions/${slug}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ payload, consent_accepted: consentAccepted }),
+    body: JSON.stringify(body),
   })
   if (!res.ok) throw await errFromRes(res)
   return res.json()
