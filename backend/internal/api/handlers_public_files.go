@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"fujitravel-admin/backend/internal/ai"
 	"fujitravel-admin/backend/internal/consent"
 	"fujitravel-admin/backend/internal/db"
 	"fujitravel-admin/backend/internal/storage"
@@ -470,6 +472,117 @@ func PublicDeleteSubmissionFile(pool *pgxpool.Pool, _ string) http.HandlerFunc {
 			}
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+// PublicParsePassport handles
+// POST /api/public/submissions/{slug}/parse-passport.
+//
+// Body: {"submission_id":"uuid","file_id":"uuid","type":"internal"|"foreign"}
+//
+// Streams a previously-uploaded passport scan through the same Yandex
+// pipeline used by the manager flow (Vision OCR -> YandexGPT) via
+// ai.ParsePassportScan and returns the structured PassportFields so the
+// public-form wizard can pre-fill the next step. Side-effect free: this
+// handler does NOT mutate the draft submission's payload — the form is
+// responsible for merging the response into its local state.
+//
+// Enumeration safety: same pattern as the rest of the public file handlers
+// — wrong org / wrong submission / non-draft status all collapse to 404 via
+// resolveDraftSubmission. Type/file-type mismatches are 400 (the caller
+// has a valid handle, they're just asking for the wrong thing).
+//
+// No caching: the form lets a tourist replace a passport upload mid-flow,
+// so every call re-reads the file from disk and re-runs OCR. This mirrors
+// the manager-side ParseTicketScan / ParseVoucherScan handlers.
+func PublicParsePassport(pool *pgxpool.Pool, ocr ai.OCRRecognizer, translator ai.Translator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		slug := chi.URLParam(r, "slug")
+
+		// Cap the body — it's a tiny JSON envelope, anything bigger is junk.
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<14)
+
+		var body struct {
+			SubmissionID string `json:"submission_id"`
+			FileID       string `json:"file_id"`
+			Type         string `json:"type"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		if body.SubmissionID == "" || body.FileID == "" {
+			writeError(w, http.StatusBadRequest, "submission_id and file_id required")
+			return
+		}
+
+		var (
+			pType        ai.PassportType
+			expectedType string
+		)
+		switch body.Type {
+		case "internal":
+			pType = ai.PassportInternal
+			expectedType = "passport_internal"
+		case "foreign":
+			pType = ai.PassportForeign
+			expectedType = "passport_foreign"
+		default:
+			writeError(w, http.StatusBadRequest, "type must be 'internal' or 'foreign'")
+			return
+		}
+
+		// Enumeration-safe: collapse wrong-org / wrong-id / non-draft to 404.
+		orgID, _, ok := resolveDraftSubmission(r, pool, slug, body.SubmissionID)
+		if !ok {
+			writeError(w, http.StatusNotFound, "submission not found")
+			return
+		}
+
+		f, err := db.GetSubmissionFile(r.Context(), pool, orgID, body.FileID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "file not found")
+				return
+			}
+			slog.Error("get submission file", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		// Defence-in-depth: confirm the file belongs to the parent submission
+		// the caller claims a draft handle for. Mirrors PublicDeleteSubmissionFile.
+		if f.SubmissionID != body.SubmissionID {
+			writeError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		// File must be a passport scan, AND must match the requested flavour.
+		if f.FileType != expectedType {
+			writeError(w, http.StatusBadRequest, "file is not a "+expectedType+" scan")
+			return
+		}
+
+		scanBytes, err := os.ReadFile(f.FilePath)
+		if err != nil {
+			slog.Error("read passport scan for parse", "err", err, "path", f.FilePath)
+			writeError(w, http.StatusInternalServerError, "failed to read file")
+			return
+		}
+		mime := detectScanMime(f.FilePath, scanBytes)
+
+		// Audit context — org-only (no group/subgroup yet, this runs before
+		// the submission has been attached to anything). A fresh
+		// generation_id stamps both audit rows (vision + gpt) so the manager
+		// can later trace this exact parse run.
+		aiCtx := withAuditCtx(r.Context(), pool, orgID, "", "")
+
+		fields, err := ai.ParsePassportScan(aiCtx, ocr, translator, scanBytes, mime, pType)
+		if err != nil {
+			slog.Error("public passport parse", "err", err, "type", body.Type)
+			writeError(w, http.StatusInternalServerError, "failed to parse passport")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, fields)
 	}
 }
 

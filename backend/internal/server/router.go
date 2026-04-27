@@ -80,6 +80,7 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 		r.With(publicFileRL.Middleware()).Post("/public/submissions/{slug}/files/{type}", api.PublicUploadSubmissionFile(pool, uploadsDir))
 		r.With(publicFileRL.Middleware()).Get("/public/submissions/{slug}/files", api.PublicListSubmissionFiles(pool))
 		r.With(publicFileRL.Middleware()).Delete("/public/submissions/{slug}/files/{id}", api.PublicDeleteSubmissionFile(pool, uploadsDir))
+		r.With(publicFileRL.Middleware()).Post("/public/submissions/{slug}/parse-passport", api.PublicParsePassport(pool, ocrClient, translator))
 
 		// Public — consent text
 		r.Get("/consent/text", api.GetConsentText())
