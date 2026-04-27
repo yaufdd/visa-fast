@@ -56,7 +56,36 @@ func TestAssembleTourist_MaidenNameTransliterated(t *testing.T) {
 	}
 }
 
-func TestAssembleTourist_HomeAddressUsesCleanedMap(t *testing.T) {
+func TestAssembleTourist_HomeAddressUsesTranslation(t *testing.T) {
+	// Primary path: translate batch produced an English address →
+	// анкета field is the full English, NOT the latinised Russian.
+	payload := map[string]any{
+		"name_cyr":         "Иванов Петр",
+		"gender_ru":        "Мужской",
+		"passport_type_ru": "Обычный",
+		"birth_date":       "10.06.1990",
+		"home_address_ru":  "Москва, ул. Митинская, д. 12, кв. 49",
+	}
+	translations := map[string]string{
+		"Москва, ул. Митинская, д. 12, кв. 49": "Moscow, Mitinskaya St. 12, Apt. 49",
+	}
+	// cleanedDoverenost may also contain this raw key (it's used for the
+	// доверенность Russian output) — the анкета must still pick the
+	// English version from translations.
+	cleaned := map[string]string{
+		"Москва, ул. Митинская, д. 12, кв. 49": "г. Москва, ул. Митинская, д. 12, кв. 49",
+	}
+	got := AssembleTourist(payload, translations, cleaned, nil)
+	if got.HomeAddress != "Moscow, Mitinskaya St. 12, Apt. 49" {
+		t.Errorf("HomeAddress = %q, want English translation %q",
+			got.HomeAddress, "Moscow, Mitinskaya St. 12, Apt. 49")
+	}
+}
+
+func TestAssembleTourist_HomeAddressFallsBackToCleanedICAO(t *testing.T) {
+	// Translation missing → fall back to ICAO transliteration of the
+	// cleaned (Russian) form. Used when the translator failed for this
+	// particular string but doverenost-clean still ran.
 	payload := map[string]any{
 		"name_cyr":         "Иванов Петр",
 		"gender_ru":        "Мужской",
@@ -68,17 +97,15 @@ func TestAssembleTourist_HomeAddressUsesCleanedMap(t *testing.T) {
 		"москва ул ленина д5 кв12": "г. Москва, ул. Ленина, д. 5, кв. 12",
 	}
 	got := AssembleTourist(payload, nil, cleaned, nil)
-	// HomeAddress is the cleaned Russian → ICAO transliteration. We check
-	// the prefix that the canonical form produces ("g. Moskva, ul. Lenina")
-	// rather than the full string so transliteration tweaks elsewhere
-	// don't break this test.
 	if !strings.Contains(strings.ToLower(got.HomeAddress), "moskva") ||
 		!strings.Contains(strings.ToLower(got.HomeAddress), "lenina") {
-		t.Errorf("HomeAddress = %q, expected transliteration of cleaned form", got.HomeAddress)
+		t.Errorf("HomeAddress = %q, expected ICAO of cleaned form", got.HomeAddress)
 	}
 }
 
-func TestAssembleTourist_HomeAddressFallbackWhenNoCleanedMap(t *testing.T) {
+func TestAssembleTourist_HomeAddressEmptyTranslationFallsBackToCleaned(t *testing.T) {
+	// Translation present but empty string → still treat as missing and
+	// fall back. Guards against translator returning "" for a row.
 	payload := map[string]any{
 		"name_cyr":         "Иванов Петр",
 		"gender_ru":        "Мужской",
@@ -86,7 +113,30 @@ func TestAssembleTourist_HomeAddressFallbackWhenNoCleanedMap(t *testing.T) {
 		"birth_date":       "10.06.1990",
 		"home_address_ru":  "москва ул ленина д5",
 	}
-	// nil cleaned map → falls back to raw value, then transliterated.
+	translations := map[string]string{
+		"москва ул ленина д5": "", // translator returned empty
+	}
+	cleaned := map[string]string{
+		"москва ул ленина д5": "г. Москва, ул. Ленина, д. 5",
+	}
+	got := AssembleTourist(payload, translations, cleaned, nil)
+	if got.HomeAddress == "" {
+		t.Errorf("HomeAddress empty — should fall back to cleaned + ICAO")
+	}
+	if strings.Contains(got.HomeAddress, " St.") || strings.Contains(got.HomeAddress, "Apt.") {
+		t.Errorf("HomeAddress = %q, expected ICAO fallback (no English address parts)", got.HomeAddress)
+	}
+}
+
+func TestAssembleTourist_HomeAddressFallbackWhenNoMaps(t *testing.T) {
+	// Last-resort: no translations, no cleaned map → raw Russian → ICAO.
+	payload := map[string]any{
+		"name_cyr":         "Иванов Петр",
+		"gender_ru":        "Мужской",
+		"passport_type_ru": "Обычный",
+		"birth_date":       "10.06.1990",
+		"home_address_ru":  "москва ул ленина д5",
+	}
 	got := AssembleTourist(payload, nil, nil, nil)
 	if got.HomeAddress == "" {
 		t.Errorf("HomeAddress empty — should fall back to raw + ICAO")
@@ -119,6 +169,40 @@ func TestAssembleDoverenost_UsesCleanedMap(t *testing.T) {
 	}
 	if out[0].RegAddress != "г. Москва, ул. Ленина, д. 5" {
 		t.Errorf("RegAddress = %q, want canonical form from cleaned map", out[0].RegAddress)
+	}
+}
+
+func TestAssembleDoverenost_IgnoresTranslationsMap(t *testing.T) {
+	// Regression for two-version model: even when the translate batch has
+	// an English version of the same raw address, the доверенность output
+	// must use the doverenost-clean Russian form (the translations map is
+	// not even passed to AssembleDoverenost — but documenting via test).
+	tourists := []Pass2Tourist{
+		{NameCyr: "Иванов Петр", BirthDate: "10.06.1990", Gender: "Male"},
+	}
+	payloads := []map[string]any{
+		{
+			"internal_issued_by_ru": "оуфмс россии по г москве",
+			"reg_address_ru":        "москва ул ленина д5",
+		},
+	}
+	cleaned := map[string]string{
+		"оуфмс россии по г москве": "ОУФМС России по г. Москве",
+		"москва ул ленина д5":      "г. Москва, ул. Ленина, д. 5",
+	}
+	out := AssembleDoverenost(tourists, payloads, cleaned, "")
+	// Russian-formatted, not English.
+	if out[0].IssuedBy != "ОУФМС России по г. Москве" {
+		t.Errorf("IssuedBy = %q, want canonical Russian", out[0].IssuedBy)
+	}
+	if out[0].RegAddress != "г. Москва, ул. Ленина, д. 5" {
+		t.Errorf("RegAddress = %q, want canonical Russian", out[0].RegAddress)
+	}
+	// Sanity: not an English transliteration / translation.
+	for _, s := range []string{out[0].IssuedBy, out[0].RegAddress} {
+		if strings.Contains(s, " St.") || strings.Contains(s, "Apt.") || strings.Contains(s, "Moscow") {
+			t.Errorf("доверенность field looks English: %q", s)
+		}
 	}
 }
 

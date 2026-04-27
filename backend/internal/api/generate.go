@@ -50,9 +50,14 @@ func withAuditCtx(parent context.Context, pool *pgxpool.Pool, orgID, groupID, su
 // final pass2 JSON. The set mirrors what ai.AssembleTourist feeds through
 // the translations map.
 //
-// Note: home_address_ru / reg_address_ru / internal_issued_by_ru are NOT
-// here — they are PII fields that go through doverenostCleanKeys instead
-// (canonicalisation, not translation: output stays Russian).
+// home_address_ru / reg_address_ru / internal_issued_by_ru are PII fields,
+// but with the migration to YandexGPT (RU-resident processing, 152-ФЗ
+// compliant — see "AI Privacy" in CLAUDE.md) all PII may flow through
+// translate so the анкета output reads "Moscow, Lenin St. 5, Apt. 12"
+// instead of a transliterated "g. Moskva, ul. Lenina, d. 5, kv. 12".
+// They are ALSO present in doverenostCleanKeys: that path produces the
+// Russian-formatted version used by доверенность output, while this path
+// produces the English version used by the анкета.
 var freeTextKeys = []string{
 	"place_of_birth_ru",
 	"issued_by_ru",
@@ -61,6 +66,9 @@ var freeTextKeys = []string{
 	"employer_address_ru",
 	"previous_visits_ru",
 	"nationality_ru",
+	"home_address_ru",
+	"reg_address_ru",
+	"internal_issued_by_ru",
 }
 
 // doverenostCleanKeys lists the submission_snapshot fields that need

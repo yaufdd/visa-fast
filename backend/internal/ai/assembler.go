@@ -25,6 +25,34 @@ func cleanedLookup(m map[string]string, s string) string {
 	return s
 }
 
+// addressForAnketa picks the best-quality string for the анкета (visa
+// application) version of a Russian address-shaped free-text field
+// (home_address_ru, reg_address_ru, internal_issued_by_ru — though the
+// latter two are not currently piped through Pass2Tourist).
+//
+// Preference order:
+//  1. translations[raw]           — full English from YandexGPT translate
+//     ("Moscow, Lenin St. 5, Apt. 12")
+//  2. ICAO transliteration of the YandexGPT-cleaned Russian form
+//     ("g. Moskva, ul. Lenina, d. 5, kv. 12") — legacy behaviour, used
+//     when the translation is missing for any reason.
+//  3. ICAO transliteration of the raw Russian — last-resort fallback so
+//     the анкета field is never blank.
+//
+// All three address-shaped fields go through the same translate batch
+// (see freeTextKeys in api/generate.go), so step 1 is the common path.
+func addressForAnketa(raw string, translations, cleanedDoverenost map[string]string) string {
+	if raw == "" {
+		return ""
+	}
+	if translations != nil {
+		if t, ok := translations[raw]; ok && t != "" {
+			return t
+		}
+	}
+	return translit.RuToLatICAO(cleanedLookup(cleanedDoverenost, raw))
+}
+
 // AssembleTourist builds one Pass2Tourist from the submission payload,
 // translations map, and flight_data.
 // Arguments use untyped maps because they come from JSONB columns — the
@@ -91,12 +119,16 @@ func AssembleTourist(payload map[string]any, translations map[string]string, cle
 		MaritalStatus:     marital,
 		PassportType:      passportType,
 		IssuedBy:          tr("issued_by_ru"),
-		// home_address_ru is PII. It is canonicalised by
-		// CleanDoverenostFields (YandexGPT, RU-resident — see PII note in
-		// doverenost_clean.go) and transliterated via ICAO for the
-		// anketa PDF here. The transliteration step stays local because
-		// it is deterministic.
-		HomeAddress:           translit.RuToLatICAO(cleanedLookup(cleanedDoverenost, get("home_address_ru"))),
+		// home_address_ru is PII. The анкета (visa application) shows it
+		// as full English ("Moscow, Lenin St. 5, Apt. 12"), produced by
+		// the translate batch (YandexGPT, RU-resident — see "AI Privacy"
+		// in CLAUDE.md). If the translation is missing (e.g. translator
+		// failed, empty source) we fall back to ICAO transliteration of
+		// the cleaned Russian form so the field is never blank.
+		// Note: AssembleDoverenost intentionally keeps the Russian
+		// (cleaned) form for the доверенность output — that's a different
+		// document and the two-version model is documented there.
+		HomeAddress:           addressForAnketa(get("home_address_ru"), translations, cleanedDoverenost),
 		Phone:                 get("phone"),
 		Occupation:            occupation,
 		Employer:              tr("employer_ru"),
