@@ -78,6 +78,15 @@ func extForSubmissionFile(originalFilename, mime string) string {
 	return ""
 }
 
+// SubmissionDirPerm / SubmissionFilePerm are the umask used for the public
+// submission-file tree. Public-form scans contain passport PII; we keep
+// them stricter than the existing SaveFile / SaveFileBytes (0755 / 0644)
+// which are behind auth and inside per-group dirs.
+const (
+	SubmissionDirPerm  os.FileMode = 0700
+	SubmissionFilePerm os.FileMode = 0600
+)
+
 // BuildSubmissionFilePath returns the canonical on-disk path for a public
 // submission scan, without writing anything. Used by the streaming upload
 // handler which needs the final path before the bytes are committed (it
@@ -107,10 +116,10 @@ func SaveSubmissionFile(uploadsDir, orgID, submissionID, fileType, originalFilen
 		return "", err
 	}
 	dir := filepath.Dir(destPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, SubmissionDirPerm); err != nil {
 		return "", fmt.Errorf("create submission upload dir: %w", err)
 	}
-	if err := os.WriteFile(destPath, data, 0644); err != nil {
+	if err := os.WriteFile(destPath, data, SubmissionFilePerm); err != nil {
 		return "", fmt.Errorf("write submission file: %w", err)
 	}
 	return destPath, nil

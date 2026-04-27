@@ -231,7 +231,7 @@ func PublicUploadSubmissionFile(pool *pgxpool.Pool, uploadsDir string) http.Hand
 					return
 				}
 				dir := filepath.Dir(finalPath)
-				if err := os.MkdirAll(dir, 0755); err != nil {
+				if err := os.MkdirAll(dir, storage.SubmissionDirPerm); err != nil {
 					part.Close()
 					slog.Error("mkdir submission dir", "err", err)
 					writeError(w, http.StatusInternalServerError, "failed to create dir")
@@ -250,7 +250,7 @@ func PublicUploadSubmissionFile(pool *pgxpool.Pool, uploadsDir string) http.Hand
 				}
 				tmpPath = filepath.Join(dir, tmpName)
 
-				tmp, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+				tmp, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, storage.SubmissionFilePerm)
 				if err != nil {
 					part.Close()
 					slog.Error("create submission tmp file", "err", err)
