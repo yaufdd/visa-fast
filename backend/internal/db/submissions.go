@@ -44,6 +44,53 @@ func CreateSubmissionForOrg(ctx context.Context, pool *pgxpool.Pool, orgID strin
 	return id, err
 }
 
+// CreateDraftSubmission inserts a placeholder row used by the public form
+// before the tourist clicks "submit". The row exists only so file uploads
+// (submission_files) have a foreign key to bind to. consent_accepted is
+// FALSE — the real consent stamp happens at finalize time via
+// UpdateSubmissionPayloadByID. consent_accepted_at is NOT NULL on the
+// schema, so we write NOW() as a sentinel; finalize re-stamps it.
+//
+// Source is hard-coded "tourist" because drafts only originate from the
+// public slug endpoint; the manager flow always inserts a fully-formed
+// 'pending' row directly via CreateSubmissionForOrg.
+func CreateDraftSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, consentVersion string) (string, error) {
+	var id string
+	err := pool.QueryRow(ctx,
+		`INSERT INTO tourist_submissions
+		   (org_id, payload, consent_accepted, consent_accepted_at, consent_version, source, status)
+		 VALUES ($1, '{}'::jsonb, FALSE, NOW(), $2, 'tourist', 'draft') RETURNING id`,
+		orgID, consentVersion,
+	).Scan(&id)
+	return id, err
+}
+
+// UpdateSubmissionPayloadByID flips a draft submission to 'pending' with
+// the final payload and consent stamp. Returns pgx.ErrNoRows if no row
+// matched (wrong org, wrong id, or status != 'draft' — all collapsed to
+// "not found" so the caller cannot distinguish, preventing ID enumeration
+// and preventing accidental overwrites of an already-pending submission).
+func UpdateSubmissionPayloadByID(ctx context.Context, pool *pgxpool.Pool, orgID, submissionID string, payload []byte, consentVersion string) error {
+	tag, err := pool.Exec(ctx,
+		`UPDATE tourist_submissions
+		    SET payload = $1,
+		        consent_accepted = TRUE,
+		        consent_accepted_at = NOW(),
+		        consent_version = $2,
+		        status = 'pending',
+		        updated_at = NOW()
+		  WHERE id = $3 AND org_id = $4 AND status = 'draft'`,
+		payload, consentVersion, submissionID, orgID,
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
 func ListSubmissions(ctx context.Context, pool *pgxpool.Pool, orgID, q, status string) ([]TouristSubmission, error) {
 	args := []any{orgID}
 	where := []string{"ts.org_id = $1"}
