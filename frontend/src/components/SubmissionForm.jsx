@@ -32,6 +32,7 @@ const SELECT_DEFAULTS = {
   // is UI-only state; nationality_ru is what the backend reads.
   nationality_choice: 'Россия',
   nationality_ru: 'Россия',
+  former_nationality_ru: 'Нет',
 };
 
 // Nationality preset list — keys MUST match
@@ -318,6 +319,12 @@ export default function SubmissionForm({
         merged.nationality_choice = 'Россия';
         merged.nationality_ru = 'Россия';
       }
+    }
+    if (!merged.former_nationality_ru) {
+      merged.former_nationality_ru = 'Нет';
+    } else if (merged.former_nationality_ru !== 'Нет' && merged.former_nationality_ru !== 'СССР') {
+      const lc = String(merged.former_nationality_ru).trim().toLowerCase();
+      merged.former_nationality_ru = (lc === 'ссср' || lc === 'soviet' || lc === 'ussr') ? 'СССР' : 'Нет';
     }
     return merged;
   }, [initialPayload]);
@@ -773,7 +780,14 @@ export default function SubmissionForm({
 
       {payload.nationality_choice === 'other'
         && textField('nationality_ru', 'Гражданство (введите страну)')}
-      {textField('former_nationality_ru', 'Прежнее гражданство')}
+
+      <div className="sf-hint" style={{ marginBottom: 6 }}>
+        Если вы родились в СССР, выберите «СССР».
+      </div>
+      {selectField('former_nationality_ru', 'Прежнее гражданство', [
+        { value: 'Нет', label: 'Нет' },
+        { value: 'СССР', label: 'СССР' },
+      ])}
 
       {/* Yes/No toggle (replaces the old free-text trap where typing
           "Нет" became "NET" in the visa anketa PDF). Switching to "Нет"

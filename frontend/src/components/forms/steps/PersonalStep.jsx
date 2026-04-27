@@ -115,7 +115,18 @@ export default function PersonalStep({ payload, setField, errors }) {
 
       {payload.nationality_choice === 'other'
         && textField('nationality_ru', 'Гражданство (введите страну)')}
-      {textField('former_nationality_ru', 'Прежнее гражданство')}
+
+      {/* Former nationality — fixed Yes/USSR select. The assembler's
+          ComputeFormerNationality only recognises "СССР" / "Soviet" /
+          "USSR" or place-of-birth fallback, so we don't expose any
+          options the backend can't act on. */}
+      <div className="sf-hint" style={{ marginBottom: 6 }}>
+        Если вы родились в СССР, выберите «СССР».
+      </div>
+      {selectField('former_nationality_ru', 'Прежнее гражданство', [
+        { value: 'Нет', label: 'Нет' },
+        { value: 'СССР', label: 'СССР' },
+      ])}
 
       {/* Yes/No toggle for previous surname. The free-text trap (typing
           "Нет" → ICAO transliterated to "NET" in the visa anketa PDF) was

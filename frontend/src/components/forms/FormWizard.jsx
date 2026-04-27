@@ -63,6 +63,10 @@ const SELECT_DEFAULTS = {
   // changes. The "Россия" default mirrors the most common case.
   nationality_choice: 'Россия',
   nationality_ru: 'Россия',
+  // Former nationality is a Yes/USSR select on PersonalStep. Default
+  // "Нет" matches the common case; the assembler's ComputeFormerNationality
+  // recognises "СССР" specifically, so no other options exist.
+  former_nationality_ru: 'Нет',
 };
 
 // All fields the wizard touches. `same_address` is wizard-only state — the
@@ -173,6 +177,16 @@ export default function FormWizard({
         merged.nationality_choice = 'Россия';
         merged.nationality_ru = 'Россия';
       }
+    }
+    // Default former_nationality_ru when nothing is set. The select only
+    // accepts "Нет" / "СССР"; legacy free-text values that don't match
+    // either are coerced to "Нет" (assembler's ComputeFormerNationality
+    // ignores anything other than СССР/Soviet/USSR anyway).
+    if (!merged.former_nationality_ru) {
+      merged.former_nationality_ru = 'Нет';
+    } else if (merged.former_nationality_ru !== 'Нет' && merged.former_nationality_ru !== 'СССР') {
+      const lc = String(merged.former_nationality_ru).trim().toLowerCase();
+      merged.former_nationality_ru = (lc === 'ссср' || lc === 'soviet' || lc === 'ussr') ? 'СССР' : 'Нет';
     }
     return merged;
   }, [initialPayload, restoredBlob]);
