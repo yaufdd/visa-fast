@@ -18,7 +18,24 @@ import zipfile
 from docx import Document
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
-from fillpdf import fillpdfs
+import contextlib
+import pikepdf  # Used to fill AcroForm fields and regenerate appearance
+                # streams. We picked pikepdf over fillpdf for the anketa
+                # because (a) fillpdf hard-validates combo values against
+                # the predefined option list and would reject "USSR" / "NO"
+                # for the editable T34 field, and (b) fillpdf only writes
+                # /V (the value) without /AP (the appearance stream), so
+                # the subsequent flatten step has nothing to bake into
+                # static text. pikepdf can write any string to editable
+                # combos, resolves [code, label] dropdowns (T50: "RUS" →
+                # "RUSSIA"), and regenerates appearances for every widget.
+import fitz    # PyMuPDF — used to bake (truly flatten) AcroForm widgets
+                # AFTER pikepdf has filled them. Document.bake() converts
+                # widgets to permanent page content the same way Adobe's
+                # "Flatten Form" command does, which is the only reliable
+                # way to get values to render in Apple Preview / PDFKit
+                # (PDFKit has a known issue rendering choice fields not
+                # filled by Adobe).
 
 # ── MVD region code → English city name ──────────────────────────────────────
 _MVD_REGION_CITY = {
@@ -367,6 +384,117 @@ def generate_vc_request(data, out_path):
 
 # ── Анкета PDF ────────────────────────────────────────────────────────────────
 
+# Radio button field names — values are PDF /Name objects (e.g. /0, /1,
+# /2) that have to be wrapped in pikepdf.Name. Anything not in this set
+# is treated as a plain text or combo box value.
+_RADIO_FIELDS = frozenset({
+    "topmostSubform[0].Page1[0].#area[5].#area[6].#area[7].RB1[0]",
+    "topmostSubform[0].Page1[0].#area[8].RB2[0]",
+    "topmostSubform[0].Page1[0].#area[1].#area[2].RB3[0]",
+    "topmostSubform[0].Page2[0].#area[4].RB5[0]",
+    "topmostSubform[0].Page2[0].#area[5].RB5[1]",
+    "topmostSubform[0].Page2[0].#area[6].RB5[2]",
+    "topmostSubform[0].Page2[0].#area[7].#area[8].RB5[3]",
+    "topmostSubform[0].Page2[0].#area[9].RB5[4]",
+    "topmostSubform[0].Page2[0].RB5[5]",
+})
+
+
+@contextlib.contextmanager
+def _silence_mupdf_stderr():
+    """PyMuPDF prints harmless 'argument error: not a dict (string)' lines
+    on stderr while baking some annotation appearances. The output file
+    is still correct; the messages just clutter the docgen log. We send
+    fd 2 to /dev/null for the duration of the bake call."""
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    saved = os.dup(2)
+    os.dup2(devnull, 2)
+    try:
+        yield
+    finally:
+        os.dup2(saved, 2)
+        os.close(devnull)
+        os.close(saved)
+
+
+def _fill_anketa_pdf(template_path, out_path, fields):
+    """Fill the anketa PDF template with `fields` and write a flattened
+    (un-editable) copy to `out_path`.
+
+    Pipeline:
+      1. pikepdf opens the template and DELETES the /AP (appearance)
+         stream from every text and combo-box widget. The template ships
+         with pre-baked appearance streams for default values (e.g. T50
+         already shows "RUSSIA", T37 already shows "NO"); without this
+         step the regen below would stack the new appearance ON TOP of
+         the old one, producing visibly bold/blurry text.
+      2. pikepdf sets each field's value via AcroFormField.set_value().
+         For radio buttons the value is a PDF /Name (e.g. /0, /1); for
+         text fields and combo boxes it's a plain string. Editable
+         combos (T34) accept arbitrary strings.
+      3. pikepdf.AcroForm.generate_appearances_if_needed() rebuilds the
+         /AP stream for every widget using the field's current value.
+         Without this step the values exist in /V but have no visual
+         representation, and the flatten step has nothing to bake.
+      4. PyMuPDF's Document.bake() converts every AcroForm widget into
+         permanent page content (true flatten — equivalent to Adobe's
+         "Flatten Form"). After bake the PDF has no AcroForm at all and
+         renders identically across Adobe, browsers, and Mac/iOS
+         Preview, while also being un-editable.
+    """
+    tmp_path = out_path + ".filled"
+    pdf = pikepdf.open(template_path)
+    try:
+        # Step 1: drop pre-baked appearance streams of text/combo widgets
+        # so step 3 generates clean, single-layer ones.
+        widget = pikepdf.Name("/Widget")
+        text_field = pikepdf.Name("/Tx")
+        choice_field = pikepdf.Name("/Ch")
+        for page in pdf.pages:
+            for annot in page.get("/Annots", []):
+                if annot.get("/Subtype") != widget:
+                    continue
+                ft = annot.get("/FT")
+                if ft is None and annot.get("/Parent") is not None:
+                    ft = annot["/Parent"].get("/FT")
+                if ft in (text_field, choice_field) and "/AP" in annot.keys():
+                    del annot["/AP"]
+
+        # Step 2: set values
+        for qname, value in fields.items():
+            if value is None:
+                continue
+            field_objs = pdf.acroform.get_fields_with_qualified_name(qname)
+            if not field_objs:
+                continue
+            for f in field_objs:
+                if qname in _RADIO_FIELDS:
+                    # Radio buttons: value must be a PDF /Name
+                    f.set_value(pikepdf.Name(f"/{value}"))
+                else:
+                    # Text / combo box: plain string
+                    f.set_value(str(value))
+
+        # Step 3: regenerate appearances from the new values
+        pdf.acroform.generate_appearances_if_needed()
+        pdf.save(tmp_path)
+    finally:
+        pdf.close()
+
+    # Step 4: flatten via PyMuPDF
+    try:
+        doc = fitz.open(tmp_path)
+        try:
+            with _silence_mupdf_stderr():
+                doc.bake(annots=True, widgets=True)
+                doc.save(out_path, deflate=True, garbage=4)
+        finally:
+            doc.close()
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
     # Split name_lat into first/last
     parts = tourist.get("name_lat", "").split()
@@ -392,13 +520,26 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
     except Exception:
         pass  # keep AI value as fallback
 
+    # T50 ("Nationality or citizenship") is a closed-list combo box with
+    # [code, label] pairs. Its template default is already "RUS" → which
+    # resolves to "RUSSIA" — and that is what every Russian tourist needs.
+    # We only override T50 if the tourist's ISO code is something OTHER
+    # than RUS (e.g. a future Belarus client). Skipping the no-op write
+    # avoids a stacked-text artefact where pikepdf's regenerated
+    # appearance for "RUS" sits on top of the template's pre-baked
+    # "RUSSIA" appearance, producing two overlapping glyphs.
+    nat_iso = tourist.get("nationality_iso", "RUS") or "RUS"
     fields = {
         # Page 1
         "topmostSubform[0].Page1[0].T2[0]":  last_name,
         "topmostSubform[0].Page1[0].T7[0]":  first_name,
         "topmostSubform[0].Page1[0].T49[0]": tourist.get("passport_number", ""),
-        "topmostSubform[0].Page1[0].T50[0]": tourist.get("nationality_iso", "RUS"),
-        "topmostSubform[0].Page1[0].T34[0]": "  ",  # Former nationalities — dropdown only accepts country names; blank
+        "topmostSubform[0].Page1[0].T50[0]": nat_iso if nat_iso != "RUS" else None,
+        # Former nationalities — placeholder. Will be replaced with the
+        # tourist's computed value (USSR / NO / country) in a follow-up
+        # commit. Kept as "NO" for now so the field renders something
+        # sensible after the new flatten pipeline.
+        "topmostSubform[0].Page1[0].T34[0]": "NO",
         "topmostSubform[0].Page1[0].T37[0]": "NO",  # ID No. issued by government — always NO for Russians
         "topmostSubform[0].Page1[0].#area[4].T14[0]": tourist.get("birth_date", ""),
         "topmostSubform[0].Page1[0].#area[4].T16[0]": tourist.get("place_of_birth", ""),
@@ -454,7 +595,7 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
         "topmostSubform[0].Page2[0].T16[2]": "—",
     }
 
-    fillpdfs.write_fillable_pdf(PDF_TEMPLATE, out_path, fields)
+    _fill_anketa_pdf(PDF_TEMPLATE, out_path, fields)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

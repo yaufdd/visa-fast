@@ -33,8 +33,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         pdftk-java
 
 # Python deps for docgen/generate.py.
+# - python-docx: builds the programme / доверенность / Инна / ВЦ заявка .docx files.
+# - pikepdf:     fills AcroForm fields and regenerates appearance streams of
+#                the visa anketa PDF (handles editable combos like T34 that
+#                fillpdf could not).
+# - pymupdf:     bakes (truly flattens) the filled anketa so values render
+#                in Apple Preview / PDFKit and the file becomes un-editable.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install python-docx fillpdf
+    pip install python-docx pikepdf pymupdf
 
 WORKDIR /app
 
