@@ -495,3 +495,53 @@
   margin-top: 3px;
   accent-color: var(--accent);
 }
+
+/* Draft-restore banner — shown briefly when the wizard hydrates from
+   localStorage. Dismisses after 5 s or on click of the close button. */
+.fw-restore-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  padding: 8px 12px;
+  background: var(--gray);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--white);
+}
+
+.fw-restore-banner-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fw-restore-banner-action {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 5px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: background 0.15s, color 0.15s;
+}
+
+.fw-restore-banner-action:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.fw-restore-banner-close {
+  background: transparent;
+  border: none;
+  color: var(--white-dim);
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+
+.fw-restore-banner-close:hover {
+  color: var(--white);
+}

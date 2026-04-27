@@ -5,9 +5,10 @@
 // active step's validator on Next; on the final step it runs every
 // validator and jumps back to the first one that fails.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getConsentText } from '../../api/client';
 import StepSidebar from './StepSidebar';
+import { loadWizardBlob, saveWizardBlob, clearWizardBlob } from './wizardPersistence';
 import './wizard.css';
 
 import PersonalStep, { validate as validatePersonal } from './steps/PersonalStep';
@@ -58,32 +59,79 @@ export default function FormWizard({
   initialPayload = {},
   slug = null,
   submissionId = null,
+  // onRestoreSubmissionId — invoked once when the wizard finds a saved
+  // submissionId in localStorage on mount. The parent (SubmissionFormPage)
+  // uses this to skip its `/start` call so a reload doesn't orphan the
+  // previous draft + its uploaded files.
+  onRestoreSubmissionId = null,
+  // onResetDraft — invoked when the tourist clicks "Начать заново" in the
+  // restore banner. Lets the parent issue a fresh `/start` for a new draft.
+  onResetDraft = null,
 }) {
+  // Read the persisted blob exactly once at first render. We split the
+  // load out so the initial state for every piece of wizard state can be
+  // seeded from it without an extra effect+setState round-trip (which
+  // would briefly flash the empty form).
+  const restoredBlob = useMemo(() => loadWizardBlob(slug), [slug]);
+  const wasRestored = Boolean(
+    restoredBlob !== null
+    && (
+      Object.keys(restoredBlob.payload || {}).length > 0
+      || (restoredBlob.currentStep ?? 0) > 0
+      || restoredBlob.submissionId
+      || restoredBlob.files
+    ),
+  );
+
   const initialState = useMemo(() => {
     const base = {};
     for (const name of ALL_FIELDS) {
       base[name] = SELECT_DEFAULTS[name] ?? (name === 'same_address' ? false : '');
     }
-    const merged = { ...base, ...initialPayload };
+    // Schema drift: defaults fill missing keys, restored blob wins for
+    // known keys, unknown keys from a future schema just ride along —
+    // they won't break anything because the backend ignores extras.
+    const merged = {
+      ...base,
+      ...initialPayload,
+      ...(restoredBlob?.payload || {}),
+    };
     if (!merged.occupation_type) {
       const occRu = String(merged.occupation_ru || '').trim().toLowerCase();
       merged.occupation_type = occRu === 'ип' ? 'ip' : OCCUPATION_DEFAULT;
     }
     return merged;
-  }, [initialPayload]);
+  }, [initialPayload, restoredBlob]);
 
   const [payload, setPayload] = useState(initialState);
-  const [files, setFiles] = useState({
-    passport_internal: null,
-    passport_foreign: null,
-    ticket: null,
-    voucher: null,
+  const [files, setFiles] = useState(() => {
+    const empty = {
+      passport_internal: null,
+      passport_foreign: null,
+      ticket: null,
+      voucher: null,
+    };
+    if (!restoredBlob?.files) return empty;
+    // Only carry over the four known keys; ignore anything else.
+    return {
+      passport_internal: restoredBlob.files.passport_internal ?? null,
+      passport_foreign: restoredBlob.files.passport_foreign ?? null,
+      ticket: restoredBlob.files.ticket ?? null,
+      voucher: restoredBlob.files.voucher ?? null,
+    };
   });
-  const [currentStep, setCurrentStep] = useState(0);
+  const [currentStep, setCurrentStep] = useState(() => {
+    const restored = restoredBlob?.currentStep;
+    if (Number.isInteger(restored) && restored >= 0 && restored < STEPS.length) {
+      return restored;
+    }
+    return 0;
+  });
   const [errors, setErrors] = useState({});
   const [apiError, setApiError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [autoFillNotice, setAutoFillNotice] = useState('');
+  const [showRestoreBanner, setShowRestoreBanner] = useState(wasRestored);
 
   // Consent — fetched once when the wizard mounts; rendered on the Review
   // step. Loading state surfaces inside the consent block itself.
@@ -106,6 +154,74 @@ export default function FormWizard({
     const t = setTimeout(() => setAutoFillNotice(''), 4000);
     return () => clearTimeout(t);
   }, [autoFillNotice]);
+
+  // Hand the restored submission id back to the parent ONCE so it can
+  // skip its `/start` call. We do this in an effect (not at render time)
+  // to avoid setState-during-render warnings in the parent.
+  const restoreNotifiedRef = useRef(false);
+  useEffect(() => {
+    if (restoreNotifiedRef.current) return;
+    restoreNotifiedRef.current = true;
+    if (restoredBlob?.submissionId && onRestoreSubmissionId) {
+      onRestoreSubmissionId(restoredBlob.submissionId);
+    }
+  }, [restoredBlob, onRestoreSubmissionId]);
+
+  // Auto-dismiss the restore banner after 5 s. The tourist can also
+  // dismiss it manually via the close button.
+  useEffect(() => {
+    if (!showRestoreBanner) return;
+    const t = setTimeout(() => setShowRestoreBanner(false), 5000);
+    return () => clearTimeout(t);
+  }, [showRestoreBanner]);
+
+  // Debounced persistence — re-save 250 ms after the last change to any
+  // tracked piece of state. The effect re-runs on every change, but
+  // setTimeout + cleanup means only the LAST scheduled save fires; all
+  // earlier ones are cancelled. Net result: one write per quiet 250 ms
+  // window instead of one write per keystroke.
+  useEffect(() => {
+    if (!slug) return undefined;
+    const t = setTimeout(() => {
+      saveWizardBlob(slug, {
+        payload,
+        currentStep,
+        files,
+        submissionId,
+      });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [slug, payload, currentStep, files, submissionId]);
+
+  // "Начать заново" — clears the persisted blob and resets every piece
+  // of in-memory state to defaults. The parent is asked (via callback)
+  // to issue a fresh `/start` so any uploads on the new draft land on a
+  // clean submission row.
+  const buildDefaults = () => {
+    const base = {};
+    for (const name of ALL_FIELDS) {
+      base[name] = SELECT_DEFAULTS[name] ?? (name === 'same_address' ? false : '');
+    }
+    base.occupation_type = OCCUPATION_DEFAULT;
+    return base;
+  };
+
+  const handleResetDraft = () => {
+    clearWizardBlob(slug);
+    setPayload(buildDefaults());
+    setFiles({
+      passport_internal: null,
+      passport_foreign: null,
+      ticket: null,
+      voucher: null,
+    });
+    setCurrentStep(0);
+    setErrors({});
+    setApiError('');
+    setConsentChecked(false);
+    setShowRestoreBanner(false);
+    onResetDraft?.();
+  };
 
   const clearError = (name) => {
     if (errors[name]) {
@@ -192,6 +308,10 @@ export default function FormWizard({
     setSubmitting(true);
     try {
       await onSubmit(finalPayload, consentChecked);
+      // Submission accepted — drop the persisted draft so a back-nav to
+      // /form/<slug> starts fresh. Done synchronously after onSubmit so
+      // a navigation away in the parent doesn't race the cleanup.
+      clearWizardBlob(slug);
     } catch (err) {
       setApiError(err?.message || 'Не удалось отправить анкету.');
     } finally {
@@ -236,6 +356,29 @@ export default function FormWizard({
       />
 
       <main className="fw-main">
+        {showRestoreBanner && (
+          <div className="fw-restore-banner" role="status">
+            <span className="fw-restore-banner-text">
+              Восстановили незавершённую анкету.
+            </span>
+            <button
+              type="button"
+              className="fw-restore-banner-action"
+              onClick={handleResetDraft}
+            >
+              Начать заново
+            </button>
+            <button
+              type="button"
+              className="fw-restore-banner-close"
+              onClick={() => setShowRestoreBanner(false)}
+              aria-label="Закрыть"
+            >
+              ×
+            </button>
+          </div>
+        )}
+
         <h2 className="fw-step-title">{STEPS[currentStep].label}</h2>
 
         <StepComponent {...stepProps} />
