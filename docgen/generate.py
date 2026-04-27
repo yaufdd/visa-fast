@@ -398,15 +398,7 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
         "topmostSubform[0].Page1[0].T7[0]":  first_name,
         "topmostSubform[0].Page1[0].T49[0]": tourist.get("passport_number", ""),
         "topmostSubform[0].Page1[0].T50[0]": tourist.get("nationality_iso", "RUS"),
-        # Former nationalities — editable combo box (Ff=393216 = Combo+Edit
-        # per the PDF spec) so we can write any string, not just options
-        # from the predefined country list. former_nationality_text is
-        # computed by ai/nationality.go: "USSR" for Soviet-born tourists
-        # (explicit "СССР" mention OR USSR in place_of_birth) and "NO"
-        # otherwise. Visible in browsers and Acrobat; Mac Preview does not
-        # render values outside the dropdown's predefined list — that's a
-        # known PDFKit limitation, not a bug in our code.
-        "topmostSubform[0].Page1[0].T34[0]": tourist.get("former_nationality_text", "NO"),
+        "topmostSubform[0].Page1[0].T34[0]": "  ",  # Former nationalities — dropdown only accepts country names; blank
         "topmostSubform[0].Page1[0].T37[0]": "NO",  # ID No. issued by government — always NO for Russians
         "topmostSubform[0].Page1[0].#area[4].T14[0]": tourist.get("birth_date", ""),
         "topmostSubform[0].Page1[0].#area[4].T16[0]": tourist.get("place_of_birth", ""),
