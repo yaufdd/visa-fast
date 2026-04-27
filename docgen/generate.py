@@ -20,6 +20,13 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from fillpdf import fillpdfs
 
+# pikepdf is used ONLY to overwrite T34 (former nationalities) AFTER
+# fillpdf has done the main fill. fillpdf hard-validates combo box values
+# against the predefined option list and would reject "USSR" / "NO" with
+# a KeyError. pikepdf has no such validation, so we let fillpdf put a
+# safe placeholder there, then overwrite in a tiny post-pass.
+import pikepdf
+
 # ── MVD region code → English city name ──────────────────────────────────────
 _MVD_REGION_CITY = {
     "01": "Maikop",           "02": "Ufa",               "03": "Ulan-Ude",
@@ -455,6 +462,32 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
     }
 
     fillpdfs.write_fillable_pdf(PDF_TEMPLATE, out_path, fields)
+
+    # Post-pass: overwrite T34 (Former nationalities) with the real value
+    # ("USSR" or "NO" — see assembler's ComputeFormerNationality). fillpdf
+    # rejects strings outside the dropdown's option list with KeyError;
+    # pikepdf's set_value accepts any string because the field is an
+    # editable combo box (Ff=393216 = Combo+Edit per the PDF spec).
+    # Visible in browsers and Adobe Acrobat. Mac Preview's PDFKit does
+    # not render combo values outside the predefined list — that's a
+    # known PDFKit limitation, not a bug in this code.
+    former = tourist.get("former_nationality_text", "NO")
+    try:
+        pdf = pikepdf.open(out_path, allow_overwriting_input=True)
+        try:
+            for f in pdf.acroform.get_fields_with_qualified_name(
+                "topmostSubform[0].Page1[0].T34[0]"
+            ):
+                f.set_value(former)
+            pdf.save(out_path)
+        finally:
+            pdf.close()
+    except Exception:
+        # Defensive: if the patch fails for any reason, leave fillpdf's
+        # safe placeholder in place rather than break document generation.
+        # Any failure here is a rendering issue, not a data-loss one —
+        # the rest of the anketa is already on disk.
+        pass
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
