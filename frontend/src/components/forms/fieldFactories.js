@@ -19,7 +19,7 @@ import { normalizePhone, phoneOnInput } from '../../utils/phone';
 // and common passport-code punctuation (dash, slash, dot, comma, №). No
 // length limit.
 export const ISSUED_BY_SANITIZE = (s) =>
-  s.replace(/[^a-zA-Zа-яА-ЯёЁ0-9 №.,/\-]/g, '');
+  s.replace(/[^a-zA-Zа-яА-ЯёЁ0-9 №.,/-]/g, '');
 
 export function sanitizeLatin(value) {
   return value.toUpperCase().replace(/[^A-Z\s]/g, '');
