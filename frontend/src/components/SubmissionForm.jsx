@@ -4,6 +4,7 @@ import { ruToLatICAO } from '../utils/translit';
 import { dmyToIso, isoToDmy } from '../utils/dates';
 import { normalizePhone, phoneOnInput } from '../utils/phone';
 import BoxedCharInput from './BoxedCharInput';
+import FileUploadField from './forms/FileUploadField';
 
 // Allowed characters in "кем выдан" — Cyrillic/Latin letters, digits, spaces
 // and common passport-code punctuation (dash, slash, dot, comma, №). No
@@ -118,6 +119,77 @@ function sanitizeLatin(value) {
   return value.toUpperCase().replace(/[^A-Z\s]/g, '');
 }
 
+// Map a passport-parser response (ai.PassportFields, JSON-decoded) to the
+// form payload shape. Only "internal" passports are wired in this batch
+// — foreign passports come in a follow-up. We never overwrite a field
+// the user has already typed; the caller is responsible for the merge.
+//
+// Returns:
+//   { mapped: {field: value}, filled: ["field", ...] }
+function mapPassportFieldsToPayload(fields, payload) {
+  const mapped = {};
+  const filled = [];
+  const empty = (name) => !String(payload?.[name] ?? '').trim();
+  const set = (name, value) => {
+    const v = String(value ?? '').trim();
+    if (!v) return;
+    if (empty(name)) {
+      mapped[name] = v;
+      filled.push(name);
+    }
+  };
+
+  // ── Series + number ──
+  // Strip whitespace defensively — the parser returns clean digits but the
+  // OCR text it consumed sometimes has spaces.
+  if (fields.series) {
+    const series = String(fields.series).replace(/\s+/g, '');
+    if (/^\d{4}$/.test(series)) set('internal_series', series);
+  }
+  if (fields.number) {
+    const number = String(fields.number).replace(/\s+/g, '');
+    if (/^\d{6}$/.test(number)) set('internal_number', number);
+  }
+
+  // ── Name ──
+  // Backend gives us last/first/patronymic separately; rebuild the
+  // single-string format the form uses ("Bamba Erik Sergeevich").
+  const nameParts = [fields.last_name, fields.first_name, fields.patronymic]
+    .map((s) => String(s ?? '').trim())
+    .filter(Boolean);
+  if (nameParts.length > 0) {
+    const cyr = nameParts.join(' ');
+    if (empty('name_cyr')) {
+      mapped.name_cyr = cyr;
+      filled.push('name_cyr');
+      // Mirror the typing-time cyr→lat auto-fill: only fill name_lat if
+      // it was also empty, otherwise the user's manual override survives.
+      if (empty('name_lat')) {
+        mapped.name_lat = ruToLatICAO(cyr);
+        filled.push('name_lat');
+      }
+    }
+  }
+
+  // ── Gender ──
+  // Parser returns the MRZ-style "МУЖ"/"ЖЕН"; the form select uses
+  // "Мужской"/"Женский" (see selectField('gender_ru', ...) below).
+  if (fields.gender === 'МУЖ') set('gender_ru', 'Мужской');
+  else if (fields.gender === 'ЖЕН') set('gender_ru', 'Женский');
+
+  // ── Dates ── parser → "YYYY-MM-DD"; form stores → "DD.MM.YYYY".
+  if (fields.birth_date) set('birth_date', isoToDmy(fields.birth_date));
+  if (fields.issue_date) set('internal_issued_ru', isoToDmy(fields.issue_date));
+
+  // ── Plain text ──
+  if (fields.place_of_birth) set('place_of_birth_ru', fields.place_of_birth);
+  if (fields.issuing_authority) set('internal_issued_by_ru', fields.issuing_authority);
+  if (fields.reg_address) set('reg_address_ru', fields.reg_address);
+
+  // department_code has no form field in the public-form payload — ignored.
+  return { mapped, filled };
+}
+
 function validate(payload) {
   const errors = {};
   const nameLat = (payload.name_lat || '').trim();
@@ -156,6 +228,13 @@ export default function SubmissionForm({
   initialPayload = {},
   submitLabel = 'Отправить анкету',
   showConsent = true,
+  // Phase 3 props — when both are set the form renders the public-form
+  // file-upload widgets and includes the submission_id in the final POST
+  // so the backend finalises the existing draft. If they're unset (e.g.
+  // legacy "manager-creates-submission" call sites), the form behaves
+  // exactly as it did before.
+  slug = null,
+  submissionId = null,
 }) {
   const initialState = useMemo(() => {
     const base = {};
@@ -182,6 +261,11 @@ export default function SubmissionForm({
   const [errors, setErrors] = useState({});
   const [apiError, setApiError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // Phase 3 — keyed by file_type ("passport_internal" | …) so adding the
+  // foreign / ticket / voucher widgets in the next batch is a one-liner.
+  const [files, setFiles] = useState({});
+  const [autoFillNotice, setAutoFillNotice] = useState('');
 
   useEffect(() => {
     if (!showConsent) return;
@@ -234,6 +318,29 @@ export default function SubmissionForm({
     const normalized = normalizePhone(e.target.value);
     if (normalized !== e.target.value) setField(name, normalized);
   };
+
+  // Auto-fill from a /parse-passport response. Only empty fields are
+  // touched — anything the user has already typed wins. We use the
+  // functional setState form so the latest payload is read inside the
+  // updater (avoids races against concurrent typing).
+  const handlePassportAutoFill = (fields) => {
+    setPayload((p) => {
+      const { mapped, filled } = mapPassportFieldsToPayload(fields, p);
+      if (filled.length === 0) {
+        setAutoFillNotice('Все поля уже заполнены.');
+        return p;
+      }
+      setAutoFillNotice(`Поля обновлены (${filled.length}).`);
+      return { ...p, ...mapped };
+    });
+  };
+
+  // Drop the toast after a few seconds so it doesn't accumulate visually.
+  useEffect(() => {
+    if (!autoFillNotice) return;
+    const t = setTimeout(() => setAutoFillNotice(''), 4000);
+    return () => clearTimeout(t);
+  }, [autoFillNotice]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -584,6 +691,33 @@ export default function SubmissionForm({
       {boxedField('internal_issued_by_ru', 'Кем выдан')}
       {textareaField('reg_address_ru', 'Адрес регистрации')}
 
+      {/* Phase 3 — show the upload widget only when the parent supplied
+          a slug. Without a draft id the widget renders disabled (handled
+          inside FileUploadField). The widget is intentionally placed
+          AFTER the manual fields so a tourist who already typed
+          everything sees a clear "or just upload a scan" affordance. */}
+      {slug && (
+        <FileUploadField
+          label="Скан внутреннего паспорта (необязательно)"
+          fileType="passport_internal"
+          slug={slug}
+          submissionId={submissionId}
+          currentFile={files.passport_internal || null}
+          onUploaded={(meta) => setFiles((f) => ({ ...f, passport_internal: meta }))}
+          onDeleted={() => setFiles((f) => {
+            const next = { ...f };
+            delete next.passport_internal;
+            return next;
+          })}
+          onAutoFill={handlePassportAutoFill}
+          parseType="internal"
+          acceptMime="application/pdf,image/jpeg,image/png"
+        />
+      )}
+      {autoFillNotice && (
+        <div className="sf-autofill-notice">{autoFillNotice}</div>
+      )}
+
       <h2 className="sf-heading">Контакты</h2>
 
       {textareaField('home_address_ru', 'Домашний адрес')}
@@ -819,6 +953,15 @@ export default function SubmissionForm({
           padding: 8px 12px;
           background: var(--gray-dark);
           border: 1px dashed var(--border);
+          border-radius: 6px;
+        }
+
+        .sf-autofill-notice {
+          font-size: 12px;
+          color: var(--accent);
+          background: var(--accent-dim);
+          border: 1px solid var(--accent);
+          padding: 6px 10px;
           border-radius: 6px;
         }
 

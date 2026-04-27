@@ -73,7 +73,7 @@ export async function uploadSubmissionFile(slug, submissionId, fileType, file, o
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
             resolve(JSON.parse(xhr.responseText));
-          } catch (err) {
+          } catch {
             reject(new Error('invalid JSON response'));
           }
           return;
