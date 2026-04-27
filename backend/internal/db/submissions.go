@@ -183,8 +183,18 @@ func GetSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, id string) (*
 }
 
 func UpdateSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, id string, payload []byte) (bool, error) {
+	// Status flip: when the row is still 'draft' (created via the
+	// manager-side /submissions/draft endpoint), the first PUT writing a
+	// real payload also promotes it to 'pending' — that's the same
+	// transition the public flow does via UpdateSubmissionPayloadByID.
+	// Rows already in 'pending' / 'attached' / 'archived' keep their
+	// status untouched. Done in a single statement so a manager edit can
+	// never leave a draft "stuck" with a real payload.
 	tag, err := pool.Exec(ctx,
-		`UPDATE tourist_submissions SET payload = $1, updated_at = NOW()
+		`UPDATE tourist_submissions
+		    SET payload = $1,
+		        updated_at = NOW(),
+		        status = CASE WHEN status = 'draft' THEN 'pending' ELSE status END
 		  WHERE id = $2 AND org_id = $3`, payload, id, orgID)
 	return tag.RowsAffected() > 0, err
 }
