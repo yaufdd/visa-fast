@@ -10,8 +10,33 @@
 import { ruToLatICAO } from '../../../utils/translit';
 import { makeFieldFactories, sanitizeLatin } from '../fieldFactories';
 
+// NATIONALITY_PRESETS — the small set of post-Soviet citizenships that
+// the assembler's countryISOMap recognises. Anything else falls into the
+// "Другое" branch where the tourist types the country name themselves.
+// Keys MUST match the canonical strings in
+// backend/internal/ai/mappings.go:countryISOMap so CountryISO() resolves
+// correctly downstream.
+export const NATIONALITY_PRESETS = ['Россия', 'Беларусь', 'Казахстан'];
+
 export default function PersonalStep({ payload, setField, errors }) {
-  const { textField, selectField, dateField } = makeFieldFactories({ payload, errors, setField });
+  const { textField, selectField, dateField, phoneField } = makeFieldFactories({ payload, errors, setField });
+
+  // The dropdown stores its value in nationality_choice (UI-only). The
+  // backend reads nationality_ru — we sync the two on every change so
+  // the assembler sees the canonical value the dropdown picks. Selecting
+  // "other" leaves nationality_ru for the user to type.
+  const handleNationalityChoice = (next) => {
+    setField('nationality_choice', next);
+    if (next !== 'other') {
+      setField('nationality_ru', next);
+    } else {
+      // Don't clobber whatever the user previously typed when they flip
+      // back to "Другое" — but if nationality_ru still matched a preset
+      // it would just reappear in the dropdown next render. Clearing it
+      // here forces an explicit re-entry.
+      setField('nationality_ru', '');
+    }
+  };
 
   // handleCyrChange — preserves the existing one-way ICAO transliteration
   // from name_cyr → name_lat (only fires if the user is typing in Cyrillic;
@@ -70,7 +95,26 @@ export default function PersonalStep({ payload, setField, errors }) {
       ])}
 
       {textField('place_of_birth_ru', 'Место рождения')}
-      {textField('nationality_ru', 'Гражданство')}
+
+      {/* Nationality dropdown. nationality_choice is UI-only state; the
+          authoritative field the backend reads is nationality_ru — kept
+          in sync via handleNationalityChoice. The "Другое" branch reveals
+          a free-text input for nationalities outside the preset list. */}
+      <label className="sf-field" data-field="nationality_choice">
+        <span className="sf-label">Гражданство</span>
+        <select
+          value={payload.nationality_choice ?? 'Россия'}
+          onChange={(e) => handleNationalityChoice(e.target.value)}
+        >
+          {NATIONALITY_PRESETS.map((v) => (
+            <option key={v} value={v}>{v}</option>
+          ))}
+          <option value="other">Другое (указать)</option>
+        </select>
+      </label>
+
+      {payload.nationality_choice === 'other'
+        && textField('nationality_ru', 'Гражданство (введите страну)')}
       {textField('former_nationality_ru', 'Прежнее гражданство')}
 
       {/* Yes/No toggle for previous surname. The free-text trap (typing

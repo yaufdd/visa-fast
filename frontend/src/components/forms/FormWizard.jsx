@@ -57,6 +57,12 @@ const SELECT_DEFAULTS = {
   // so the text input stays hidden until the tourist explicitly says
   // they had a previous surname.
   had_other_name: 'Нет',
+  // Nationality dropdown defaults — see PersonalStep.NATIONALITY_PRESETS.
+  // nationality_choice is UI-only state; nationality_ru is the field the
+  // backend reads, kept in sync by PersonalStep when the dropdown
+  // changes. The "Россия" default mirrors the most common case.
+  nationality_choice: 'Россия',
+  nationality_ru: 'Россия',
 };
 
 // All fields the wizard touches. `same_address` is wizard-only state — the
@@ -64,7 +70,7 @@ const SELECT_DEFAULTS = {
 // is fine.
 const ALL_FIELDS = [
   'name_cyr', 'name_lat', 'gender_ru', 'birth_date', 'marital_status_ru',
-  'place_of_birth_ru', 'nationality_ru', 'former_nationality_ru',
+  'place_of_birth_ru', 'nationality_ru', 'nationality_choice', 'former_nationality_ru',
   'had_other_name', 'maiden_name_ru',
   'passport_number', 'passport_type_ru', 'issue_date', 'expiry_date', 'issued_by_ru',
   'internal_series', 'internal_number', 'internal_issued_ru', 'internal_issued_by_ru',
@@ -150,6 +156,23 @@ export default function FormWizard({
     if (!merged.had_other_name) {
       const hasMaiden = String(merged.maiden_name_ru || '').trim() !== '';
       merged.had_other_name = hasMaiden ? 'Да' : 'Нет';
+    }
+    // Restore nationality_choice from nationality_ru when missing (legacy
+    // submissions saved before the dropdown existed). Match against the
+    // preset list verbatim — the canonical strings agreed with the
+    // assembler's countryISOMap. Anything else falls into "other" so the
+    // user sees what was previously typed and can keep / edit it.
+    if (!merged.nationality_choice) {
+      const presets = ['Россия', 'Беларусь', 'Казахстан'];
+      const ru = String(merged.nationality_ru || '').trim();
+      if (presets.includes(ru)) {
+        merged.nationality_choice = ru;
+      } else if (ru) {
+        merged.nationality_choice = 'other';
+      } else {
+        merged.nationality_choice = 'Россия';
+        merged.nationality_ru = 'Россия';
+      }
     }
     return merged;
   }, [initialPayload, restoredBlob]);

@@ -28,7 +28,15 @@ const SELECT_DEFAULTS = {
   // had_other_name gates the maiden_name_ru text input. Default "Нет"
   // — the common case — keeps the text input hidden by default.
   had_other_name: 'Нет',
+  // Nationality dropdown defaults — mirror the wizard. nationality_choice
+  // is UI-only state; nationality_ru is what the backend reads.
+  nationality_choice: 'Россия',
+  nationality_ru: 'Россия',
 };
+
+// Nationality preset list — keys MUST match
+// backend/internal/ai/mappings.go:countryISOMap so CountryISO() resolves.
+const NATIONALITY_PRESETS = ['Россия', 'Беларусь', 'Казахстан'];
 
 // All fields the form touches. Phone fields aren't yet in the backend
 // assembler but are part of the payload JSONB we POST.
@@ -37,7 +45,7 @@ const SELECT_DEFAULTS = {
 // submission restore the chosen category without guessing.
 const ALL_FIELDS = [
   'name_cyr', 'name_lat', 'gender_ru', 'birth_date', 'marital_status_ru',
-  'place_of_birth_ru', 'nationality_ru', 'former_nationality_ru',
+  'place_of_birth_ru', 'nationality_ru', 'nationality_choice', 'former_nationality_ru',
   'had_other_name', 'maiden_name_ru',
   'passport_number', 'passport_type_ru', 'issue_date', 'expiry_date', 'issued_by_ru',
   'internal_series', 'internal_number', 'internal_issued_ru', 'internal_issued_by_ru',
@@ -296,6 +304,20 @@ export default function SubmissionForm({
     if (!merged.had_other_name) {
       const hasMaiden = String(merged.maiden_name_ru || '').trim() !== '';
       merged.had_other_name = hasMaiden ? 'Да' : 'Нет';
+    }
+    // Same restore rules as FormWizard — keep the two flat-and-wizard
+    // forms in lockstep so a submission edited in either renders
+    // identically.
+    if (!merged.nationality_choice) {
+      const ru = String(merged.nationality_ru || '').trim();
+      if (NATIONALITY_PRESETS.includes(ru)) {
+        merged.nationality_choice = ru;
+      } else if (ru) {
+        merged.nationality_choice = 'other';
+      } else {
+        merged.nationality_choice = 'Россия';
+        merged.nationality_ru = 'Россия';
+      }
     }
     return merged;
   }, [initialPayload]);
@@ -722,7 +744,35 @@ export default function SubmissionForm({
       ])}
 
       {textField('place_of_birth_ru', 'Место рождения')}
-      {textField('nationality_ru', 'Гражданство')}
+
+      {/* Nationality dropdown. nationality_choice is UI-only state; the
+          authoritative field the backend reads is nationality_ru. We
+          mirror the wizard's PersonalStep logic in handleNationalityChoice
+          below. */}
+      <label className="sf-field" data-field="nationality_choice">
+        <span className="sf-label">Гражданство</span>
+        <select
+          value={payload.nationality_choice ?? 'Россия'}
+          onChange={(e) => {
+            const next = e.target.value;
+            setPayload((p) => ({
+              ...p,
+              nationality_choice: next,
+              nationality_ru: next === 'other' ? '' : next,
+            }));
+            clearError('nationality_choice');
+            clearError('nationality_ru');
+          }}
+        >
+          {NATIONALITY_PRESETS.map((v) => (
+            <option key={v} value={v}>{v}</option>
+          ))}
+          <option value="other">Другое (указать)</option>
+        </select>
+      </label>
+
+      {payload.nationality_choice === 'other'
+        && textField('nationality_ru', 'Гражданство (введите страну)')}
       {textField('former_nationality_ru', 'Прежнее гражданство')}
 
       {/* Yes/No toggle (replaces the old free-text trap where typing
