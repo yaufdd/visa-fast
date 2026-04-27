@@ -145,6 +145,11 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 			// AI audit log — every provider call made on behalf of this group.
 			r.Get("/groups/{id}/ai_logs", api.ListGroupAILogs(pool))
 
+			// Submission-file counts per tourist in a group — single
+			// round-trip used by GroupDetailPage to render the 📎 N
+			// badge without an N+1 burst of /files calls.
+			r.Get("/groups/{id}/tourist_file_counts", api.GroupTouristFileCounts(pool))
+
 			// Submissions (form-based workflow)
 			r.Post("/submissions", api.CreateSubmissionByManager(pool))
 			r.Get("/submissions", api.ListSubmissions(pool))
