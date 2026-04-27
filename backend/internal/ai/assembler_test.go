@@ -5,6 +5,54 @@ import (
 	"testing"
 )
 
+func TestResolveMaidenName(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		// Empty / whitespace inputs collapse to "" so docgen prints "NO".
+		{"", ""},
+		{"   ", ""},
+		// Legacy free-text negatives, in every casing we have seen in the
+		// production data + the explicit dashes the form used to allow.
+		{"Нет", ""},
+		{"нет", ""},
+		{"НЕТ", ""},
+		{"NO", ""},
+		{"no", ""},
+		{"—", ""},
+		{"-", ""},
+		{"нет другой", ""},
+		{"нет другой фамилии", ""},
+		// A real previous surname is transliterated via ICAO.
+		{"Иванова", "IVANOVA"},
+		{"  Петрова  ", "PETROVA"},
+	}
+	for _, c := range cases {
+		got := resolveMaidenName(c.in)
+		if got != c.want {
+			t.Errorf("resolveMaidenName(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestAssembleTourist_MaidenNameNegativeCollapsesToEmpty(t *testing.T) {
+	// Regression net for the "NET in the visa anketa PDF" bug. A legacy
+	// payload with `maiden_name_ru = "Нет"` must produce an empty
+	// MaidenName so docgen's `or "NO"` fallback wins.
+	payload := map[string]any{
+		"name_cyr":         "Иванов Петр",
+		"gender_ru":        "Мужской",
+		"passport_type_ru": "Обычный",
+		"birth_date":       "10.06.1990",
+		"maiden_name_ru":   "Нет",
+	}
+	got := AssembleTourist(payload, nil, nil, nil)
+	if got.MaidenName != "" {
+		t.Errorf("MaidenName = %q, want empty (so docgen prints NO)", got.MaidenName)
+	}
+}
+
 func TestAssembleTourist_MaidenNameTransliterated(t *testing.T) {
 	payload := map[string]any{
 		"name_cyr":              "Иванова Анна",

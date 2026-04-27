@@ -158,7 +158,7 @@ func AssembleTourist(payload map[string]any, translations map[string]string, cle
 		BeenToJapan:           MapYesNo(get("been_to_japan_ru")),
 		PreviousVisits:        tr("previous_visits_ru"),
 		CriminalRecord:        MapYesNo(get("criminal_record_ru")),
-		MaidenName:            translit.RuToLatICAO(get("maiden_name_ru")),
+		MaidenName:            resolveMaidenName(get("maiden_name_ru")),
 		NationalityISO:        CountryISO(get("nationality_ru")),
 		FormerNationalityText: ComputeFormerNationality(get("former_nationality_ru"), get("place_of_birth_ru"), get("birth_date")),
 		GenderRB:              GenderRB(gender),
@@ -367,6 +367,25 @@ func firstNonEmpty(a ...string) string {
 		}
 	}
 	return ""
+}
+
+// resolveMaidenName returns the latinised previous surname, or "" when
+// the tourist either left the field empty or wrote a Russian/English
+// "no" (covers legacy free-text submissions where users typed "Нет"
+// before the form had a Yes/No control). Empty string lets
+// docgen/generate.py print the canonical "NO" via its existing
+// `or "NO"` fallback.
+func resolveMaidenName(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	// Defensive: legacy free-text negatives.
+	switch strings.ToLower(s) {
+	case "нет", "no", "—", "-", "нет другой", "нет другой фамилии":
+		return ""
+	}
+	return translit.RuToLatICAO(s)
 }
 
 var russianMonths = []string{"", "января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"}
