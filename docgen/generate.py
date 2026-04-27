@@ -535,15 +535,11 @@ def generate_anketa(tourist, anketa, dov, out_path, departure_date_str=""):
         "topmostSubform[0].Page1[0].T7[0]":  first_name,
         "topmostSubform[0].Page1[0].T49[0]": tourist.get("passport_number", ""),
         "topmostSubform[0].Page1[0].T50[0]": nat_iso if nat_iso != "RUS" else None,
-        # T34 ("Former nationalities") is an editable combo box
-        # (Ff=393216 = Combo+Edit) per the PDF spec, so it accepts any
-        # string. Pass2's `former_nationality_text` is computed by
-        # ai/nationality.go from explicit "СССР" mentions, the place of
-        # birth, and the birth date — yielding "USSR" for Soviet-born
-        # tourists and "NO" for everyone else. The flatten pipeline
-        # bakes whatever value we write here as static text, so it
-        # renders identically across Adobe, browsers, and Mac Preview.
-        "topmostSubform[0].Page1[0].T34[0]": tourist.get("former_nationality_text", "NO"),
+        # Former nationalities — placeholder. Will be replaced with the
+        # tourist's computed value (USSR / NO / country) in a follow-up
+        # commit. Kept as "NO" for now so the field renders something
+        # sensible after the new flatten pipeline.
+        "topmostSubform[0].Page1[0].T34[0]": "NO",
         "topmostSubform[0].Page1[0].T37[0]": "NO",  # ID No. issued by government — always NO for Russians
         "topmostSubform[0].Page1[0].#area[4].T14[0]": tourist.get("birth_date", ""),
         "topmostSubform[0].Page1[0].#area[4].T16[0]": tourist.get("place_of_birth", ""),
