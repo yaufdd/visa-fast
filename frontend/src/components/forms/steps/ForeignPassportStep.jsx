@@ -6,7 +6,7 @@ import { makeFieldFactories, PassportNumberField } from '../fieldFactories';
 import { makePassportAutoFillHandler } from '../passportAutoFill';
 
 export default function ForeignPassportStep({
-  payload, setField, errors, files, setFiles, slug, submissionId,
+  payload, setField, errors, files, setFiles, adapter, submissionId,
   setPayload, setAutoFillNotice, autoFillNotice,
 }) {
   const { boxedField, dateField, selectField } = makeFieldFactories({ payload, errors, setField });
@@ -29,7 +29,7 @@ export default function ForeignPassportStep({
       <FileUploadField
         label="Скан загранпаспорта (необязательно)"
         fileType="passport_foreign"
-        slug={slug}
+        adapter={adapter}
         submissionId={submissionId}
         currentFile={files.passport_foreign || null}
         onUploaded={(meta) => setFiles((f) => ({ ...f, passport_foreign: meta }))}

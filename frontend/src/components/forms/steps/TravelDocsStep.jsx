@@ -6,7 +6,7 @@ import FileUploadField from '../FileUploadField';
 import { makeFieldFactories } from '../fieldFactories';
 
 export default function TravelDocsStep({
-  payload, setField, errors, files, setFiles, slug, submissionId,
+  payload, setField, errors, files, setFiles, adapter, submissionId,
 }) {
   const { selectField, textareaField, phoneField } = makeFieldFactories({ payload, errors, setField });
   const showPreviousVisits = payload.been_to_japan_ru === 'Да';
@@ -30,7 +30,7 @@ export default function TravelDocsStep({
       <FileUploadField
         label="Авиабилет(ы)"
         fileType="ticket"
-        slug={slug}
+        adapter={adapter}
         submissionId={submissionId}
         currentFile={files.ticket || null}
         onUploaded={(meta) => setFiles((f) => ({ ...f, ticket: meta }))}
@@ -48,7 +48,7 @@ export default function TravelDocsStep({
       <FileUploadField
         label="Ваучер на отель(и)"
         fileType="voucher"
-        slug={slug}
+        adapter={adapter}
         submissionId={submissionId}
         currentFile={files.voucher || null}
         onUploaded={(meta) => setFiles((f) => ({ ...f, voucher: meta }))}

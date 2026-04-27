@@ -1,9 +1,23 @@
-// FormWizard — multi-step public submission form. Owns the full payload,
-// the current step index, errors per field, and the file attachment metadata
+// FormWizard — multi-step submission form. Owns the full payload, the
+// current step index, errors per field, and the file attachment metadata
 // keyed by file_type. Each step component is lightweight: it renders the
 // inputs and exports a validate(payload) sibling. The wizard runs the
 // active step's validator on Next; on the final step it runs every
 // validator and jumps back to the first one that fails.
+//
+// API access is abstracted through the `adapter` prop (see
+// publicWizardAdapter / adminWizardAdapter). The wizard never imports
+// api/files or api/client directly so the same component can drive both
+// the public /form/<slug> page and the manager-side /submissions/<id>
+// page.
+//
+// localStorage draft persistence is opt-in via `adapter.persistEnabled`:
+//   - public mode → true (tourist may close the tab mid-anketa)
+//   - admin  mode → false (server is the source of truth; persisting per
+//                   browser would cross-contaminate manager sessions)
+// The persistence key is namespaced by the optional `persistKey` prop
+// (the slug, in public mode); admin mode passes nothing and short-
+// circuits the persistence layer entirely.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getConsentText } from '../../api/client';
@@ -55,24 +69,39 @@ const ALL_FIELDS = [
 ];
 
 export default function FormWizard({
+  adapter,
   onSubmit,
   initialPayload = {},
-  slug = null,
+  initialFiles = null,
+  initialStep = 0,
   submissionId = null,
+  // Namespace for the localStorage draft blob. Public mode passes the
+  // slug; admin mode passes nothing (persistence is off).
+  persistKey = null,
+  // Show or hide the consent block on the Review step. Public mode and
+  // "create new" admin mode set this to true; "edit existing" admin
+  // mode hides it because the consent stamp from the original tourist
+  // submission is preserved on the row.
+  showConsent = true,
   // onRestoreSubmissionId — invoked once when the wizard finds a saved
   // submissionId in localStorage on mount. The parent (SubmissionFormPage)
-  // uses this to skip its `/start` call so a reload doesn't orphan the
-  // previous draft + its uploaded files.
+  // uses this to skip its draft-allocation call so a reload doesn't orphan
+  // the previous draft + its uploaded files. Only relevant in public mode.
   onRestoreSubmissionId = null,
   // onResetDraft — invoked when the tourist clicks "Начать заново" in the
-  // restore banner. Lets the parent issue a fresh `/start` for a new draft.
+  // restore banner. Lets the parent issue a fresh draft.
   onResetDraft = null,
 }) {
-  // Read the persisted blob exactly once at first render. We split the
-  // load out so the initial state for every piece of wizard state can be
-  // seeded from it without an extra effect+setState round-trip (which
-  // would briefly flash the empty form).
-  const restoredBlob = useMemo(() => loadWizardBlob(slug), [slug]);
+  const persistEnabled = Boolean(adapter?.persistEnabled && persistKey);
+
+  // Read the persisted blob exactly once at first render (public mode
+  // only). We split the load out so the initial state for every piece of
+  // wizard state can be seeded from it without an extra effect+setState
+  // round-trip (which would briefly flash the empty form).
+  const restoredBlob = useMemo(
+    () => (persistEnabled ? loadWizardBlob(persistKey) : null),
+    [persistEnabled, persistKey],
+  );
   const wasRestored = Boolean(
     restoredBlob !== null
     && (
@@ -111,19 +140,28 @@ export default function FormWizard({
       ticket: null,
       voucher: null,
     };
-    if (!restoredBlob?.files) return empty;
-    // Only carry over the four known keys; ignore anything else.
+    // Server-provided seeds (admin edit mode) take precedence over
+    // localStorage. In public mode initialFiles is usually null and the
+    // restoredBlob path runs.
+    const seed = initialFiles || restoredBlob?.files || null;
+    if (!seed) return empty;
     return {
-      passport_internal: restoredBlob.files.passport_internal ?? null,
-      passport_foreign: restoredBlob.files.passport_foreign ?? null,
-      ticket: restoredBlob.files.ticket ?? null,
-      voucher: restoredBlob.files.voucher ?? null,
+      passport_internal: seed.passport_internal ?? null,
+      passport_foreign: seed.passport_foreign ?? null,
+      ticket: seed.ticket ?? null,
+      voucher: seed.voucher ?? null,
     };
   });
   const [currentStep, setCurrentStep] = useState(() => {
-    const restored = restoredBlob?.currentStep;
-    if (Number.isInteger(restored) && restored >= 0 && restored < STEPS.length) {
-      return restored;
+    if (Number.isInteger(initialStep) && initialStep >= 0 && initialStep < STEPS.length) {
+      // initialStep wins when explicitly provided; otherwise fall back to
+      // the persisted blob.
+      const restored = restoredBlob?.currentStep;
+      if (initialStep > 0) return initialStep;
+      if (Number.isInteger(restored) && restored >= 0 && restored < STEPS.length) {
+        return restored;
+      }
+      return 0;
     }
     return 0;
   });
@@ -134,19 +172,26 @@ export default function FormWizard({
   const [showRestoreBanner, setShowRestoreBanner] = useState(wasRestored);
 
   // Consent — fetched once when the wizard mounts; rendered on the Review
-  // step. Loading state surfaces inside the consent block itself.
+  // step only when showConsent is true. In edit-existing mode the row
+  // already carries a consent stamp, so re-asking would be confusing.
   const [consent, setConsent] = useState(null);
   const [consentLoading, setConsentLoading] = useState(true);
-  const [consentChecked, setConsentChecked] = useState(false);
+  // When consent is hidden we treat it as already-checked so the submit
+  // button stays enabled.
+  const [consentChecked, setConsentChecked] = useState(!showConsent);
   const [consentExpanded, setConsentExpanded] = useState(false);
 
   useEffect(() => {
+    if (!showConsent) {
+      setConsentLoading(false);
+      return;
+    }
     setConsentLoading(true);
     getConsentText()
       .then((data) => setConsent(data))
       .catch(() => setConsent({ version: '?', body: 'Не удалось загрузить текст согласия.' }))
       .finally(() => setConsentLoading(false));
-  }, []);
+  }, [showConsent]);
 
   // Drop the auto-fill toast after a few seconds so it doesn't accumulate.
   useEffect(() => {
@@ -156,8 +201,8 @@ export default function FormWizard({
   }, [autoFillNotice]);
 
   // Hand the restored submission id back to the parent ONCE so it can
-  // skip its `/start` call. We do this in an effect (not at render time)
-  // to avoid setState-during-render warnings in the parent.
+  // skip its draft-allocation call. We do this in an effect (not at render
+  // time) to avoid setState-during-render warnings in the parent.
   const restoreNotifiedRef = useRef(false);
   useEffect(() => {
     if (restoreNotifiedRef.current) return;
@@ -176,14 +221,11 @@ export default function FormWizard({
   }, [showRestoreBanner]);
 
   // Debounced persistence — re-save 250 ms after the last change to any
-  // tracked piece of state. The effect re-runs on every change, but
-  // setTimeout + cleanup means only the LAST scheduled save fires; all
-  // earlier ones are cancelled. Net result: one write per quiet 250 ms
-  // window instead of one write per keystroke.
+  // tracked piece of state. Public mode only; admin mode skips entirely.
   useEffect(() => {
-    if (!slug) return undefined;
+    if (!persistEnabled) return undefined;
     const t = setTimeout(() => {
-      saveWizardBlob(slug, {
+      saveWizardBlob(persistKey, {
         payload,
         currentStep,
         files,
@@ -191,11 +233,11 @@ export default function FormWizard({
       });
     }, 250);
     return () => clearTimeout(t);
-  }, [slug, payload, currentStep, files, submissionId]);
+  }, [persistEnabled, persistKey, payload, currentStep, files, submissionId]);
 
   // "Начать заново" — clears the persisted blob and resets every piece
   // of in-memory state to defaults. The parent is asked (via callback)
-  // to issue a fresh `/start` so any uploads on the new draft land on a
+  // to issue a fresh draft so any uploads on the new draft land on a
   // clean submission row.
   const buildDefaults = () => {
     const base = {};
@@ -207,7 +249,7 @@ export default function FormWizard({
   };
 
   const handleResetDraft = () => {
-    clearWizardBlob(slug);
+    if (persistEnabled) clearWizardBlob(persistKey);
     setPayload(buildDefaults());
     setFiles({
       passport_internal: null,
@@ -218,7 +260,7 @@ export default function FormWizard({
     setCurrentStep(0);
     setErrors({});
     setApiError('');
-    setConsentChecked(false);
+    setConsentChecked(!showConsent);
     setShowRestoreBanner(false);
     onResetDraft?.();
   };
@@ -241,8 +283,6 @@ export default function FormWizard({
   const scrollToFirstError = (errs) => {
     const first = Object.keys(errs)[0];
     if (!first) return;
-    // requestAnimationFrame ensures the DOM has the .has-error class
-    // applied before we look up the field.
     requestAnimationFrame(() => {
       const el = document.querySelector(`[data-field="${first}"]`);
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -259,7 +299,6 @@ export default function FormWizard({
       return;
     }
     setCurrentStep((s) => Math.min(s + 1, STEPS.length - 1));
-    // Reset scroll to top of main content for a clean step transition.
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -271,8 +310,6 @@ export default function FormWizard({
   };
 
   const handleJump = (i) => {
-    // Sidebar only allows jumps to past steps — guard here too in case
-    // the prop wiring drifts.
     if (i >= currentStep) return;
     setApiError('');
     setErrors({});
@@ -283,13 +320,8 @@ export default function FormWizard({
   const handleSubmit = async () => {
     setApiError('');
 
-    // Apply the occupation auto-fill once at submit time (matches the
-    // legacy SubmissionForm behaviour). The on-screen state is left as
-    // typed; only the posted payload contains the normalised version.
     const finalPayload = applyOccupationAutoFill(payload);
 
-    // Re-run every step's validator — a user might have navigated
-    // backward and emptied a required field.
     for (let i = 0; i < STEPS.length; i++) {
       const errs = STEPS[i].validate(finalPayload) || {};
       if (Object.keys(errs).length > 0) {
@@ -300,7 +332,7 @@ export default function FormWizard({
       }
     }
 
-    if (!consentChecked) {
+    if (showConsent && !consentChecked) {
       setApiError('Необходимо подтвердить согласие на обработку персональных данных.');
       return;
     }
@@ -308,10 +340,9 @@ export default function FormWizard({
     setSubmitting(true);
     try {
       await onSubmit(finalPayload, consentChecked);
-      // Submission accepted — drop the persisted draft so a back-nav to
-      // /form/<slug> starts fresh. Done synchronously after onSubmit so
-      // a navigation away in the parent doesn't race the cleanup.
-      clearWizardBlob(slug);
+      // Submission accepted — drop the persisted draft so a back-nav
+      // starts fresh. Public mode only.
+      if (persistEnabled) clearWizardBlob(persistKey);
     } catch (err) {
       setApiError(err?.message || 'Не удалось отправить анкету.');
     } finally {
@@ -323,23 +354,22 @@ export default function FormWizard({
   const isFirst = currentStep === 0;
   const isLast = currentStep === STEPS.length - 1;
 
-  // Step prop bag — every step receives the same shape.
+  // Step prop bag — every step receives the same shape. The adapter is
+  // forwarded so passport / ticket / voucher upload widgets can drive
+  // the right backend without the wizard switching on mode.
   const stepProps = {
     payload,
     setField,
     errors,
     files,
     setFiles,
-    slug,
+    adapter,
     submissionId,
-    // Internal/Foreign passport steps need direct setPayload access for
-    // the auto-fill merge; addresses + others ignore the rest. Keeping
-    // every step's prop signature uniform avoids surprises.
     setPayload,
     autoFillNotice,
     setAutoFillNotice,
     // Review step needs consent state.
-    consent,
+    consent: showConsent ? consent : undefined,
     consentLoading,
     consentChecked,
     setConsentChecked,
@@ -347,11 +377,6 @@ export default function FormWizard({
     setConsentExpanded,
   };
 
-  // Mobile progress strip — sibling of the sidebar. CSS hides this on
-  // desktop and hides the sidebar on mobile; the two are mutually
-  // exclusive. Past steps remain reachable via the Back button on mobile;
-  // a clickable past-step navigation would need a dropdown / sheet and
-  // is deferred.
   const mobileProgressPct = ((currentStep + 1) / STEPS.length) * 100;
 
   return (
@@ -421,7 +446,7 @@ export default function FormWizard({
               type="button"
               className="fw-btn fw-btn-primary"
               onClick={handleSubmit}
-              disabled={submitting || !consentChecked}
+              disabled={submitting || (showConsent && !consentChecked)}
             >
               {submitting ? 'Отправка…' : 'Отправить анкету'}
             </button>

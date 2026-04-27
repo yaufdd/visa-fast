@@ -7,7 +7,7 @@ import { makeFieldFactories, InternalPassportField } from '../fieldFactories';
 import { makePassportAutoFillHandler } from '../passportAutoFill';
 
 export default function InternalPassportStep({
-  payload, setField, errors, files, setFiles, slug, submissionId,
+  payload, setField, errors, files, setFiles, adapter, submissionId,
   setPayload, setAutoFillNotice, autoFillNotice,
 }) {
   const { boxedField, dateField } = makeFieldFactories({ payload, errors, setField });
@@ -27,7 +27,7 @@ export default function InternalPassportStep({
       <FileUploadField
         label="Скан внутреннего паспорта (необязательно)"
         fileType="passport_internal"
-        slug={slug}
+        adapter={adapter}
         submissionId={submissionId}
         currentFile={files.passport_internal || null}
         onUploaded={(meta) => setFiles((f) => ({ ...f, passport_internal: meta }))}

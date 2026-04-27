@@ -1,9 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import {
-  uploadSubmissionFile,
-  deleteSubmissionFile,
-  parsePassport,
-} from '../../api/files';
 
 // 50 MB — matches the backend cap (handlers_public_files.go
 // maxSubmissionFileSize). Keeping the client check in sync avoids a
@@ -52,7 +47,7 @@ function mimeAllowed(accept, mime) {
 export default function FileUploadField({
   label,
   fileType,
-  slug,
+  adapter,
   submissionId,
   currentFile = null,
   onUploaded,
@@ -102,8 +97,7 @@ export default function FileUploadField({
     setUploading(true);
     setProgress(0);
     try {
-      const meta = await uploadSubmissionFile(
-        slug,
+      const meta = await adapter.uploadFile(
         submissionId,
         fileType,
         file,
@@ -136,7 +130,7 @@ export default function FileUploadField({
     if (!currentFile?.id || uploading || parsing) return;
     setError('');
     try {
-      await deleteSubmissionFile(slug, submissionId, currentFile.id);
+      await adapter.deleteFile(submissionId, currentFile.id);
       onDeleted?.();
     } catch (err) {
       setError(err?.message || 'Не удалось удалить файл.');
@@ -148,7 +142,7 @@ export default function FileUploadField({
     setError('');
     setParsing(true);
     try {
-      const fields = await parsePassport(slug, submissionId, currentFile.id, parseType);
+      const fields = await adapter.parsePassport(submissionId, currentFile.id, parseType);
       onAutoFill(fields);
     } catch (err) {
       setError(err?.message || 'Не удалось распознать документ.');
