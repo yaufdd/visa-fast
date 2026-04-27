@@ -56,6 +56,32 @@ func ReadFile(path string) ([]byte, error) {
 	return data, nil
 }
 
+// validSubmissionPathComponent rejects strings that contain path-separator
+// or dot characters, or anything outside [A-Za-z0-9_-]. Used as defence
+// in depth on every path component fed to BuildSubmissionFilePath /
+// SaveSubmissionFile so a future caller (e.g. an admin import path)
+// cannot smuggle "../" or absolute paths through any of orgID,
+// submissionID, fileType.
+func validSubmissionPathComponent(s string) bool {
+	if s == "" {
+		return false
+	}
+	if strings.ContainsAny(s, `/\.`) {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // extForSubmissionFile picks the on-disk extension. The original filename
 // is preferred (lowercased); if it has no extension we fall back to a
 // mime-derived suffix so the file at least has a sensible name on disk for
@@ -95,7 +121,21 @@ const (
 // Layout:
 //
 //	<uploadsDir>/<orgID>/submissions/<submissionID>/<fileType><ext>
+//
+// Returns an error if any of orgID, submissionID, fileType contains a
+// path separator, dot, or any character outside [A-Za-z0-9_-] — defence
+// in depth even though current callers source these from server-trusted
+// values (UUIDs from postgres, fileType from a handler-side allowlist).
 func BuildSubmissionFilePath(uploadsDir, orgID, submissionID, fileType, originalFilename, mime string) (string, error) {
+	if !validSubmissionPathComponent(orgID) {
+		return "", fmt.Errorf("invalid org_id: %q", orgID)
+	}
+	if !validSubmissionPathComponent(submissionID) {
+		return "", fmt.Errorf("invalid submission_id: %q", submissionID)
+	}
+	if !validSubmissionPathComponent(fileType) {
+		return "", fmt.Errorf("invalid file_type: %q", fileType)
+	}
 	dir := filepath.Join(uploadsDir, orgID, "submissions", submissionID)
 	return filepath.Join(dir, fileType+extForSubmissionFile(originalFilename, mime)), nil
 }
