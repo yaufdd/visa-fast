@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import Modal from './Modal';
-import ConfirmModal from './ConfirmModal';
 import FlightNumberInput from './FlightNumberInput';
 import { dmyToIso, isoToDmy } from '../utils/dates';
 import { JAPANESE_AIRPORTS, JAPANESE_AIRPORT_VALUES } from '../constants/airports';
@@ -41,19 +40,15 @@ export default function FlightDataForm({
   initial,
   onClose,
   onSave,
-  onApplyToSubgroup,
-  canApplyToSubgroup = false,
 }) {
   const [arrival, setArrival] = useState(emptyLeg());
   const [departure, setDeparture] = useState(emptyLeg());
   const [saving, setSaving] = useState(false);
-  const [applying, setApplying] = useState(false);
   const [error, setError] = useState(null);
   // Per-leg toggle: when the stored airport isn't a canonical preset, we flip
   // this to true so the user can keep typing the non-Japanese name.
   const [customArrival, setCustomArrival] = useState(false);
   const [customDeparture, setCustomDeparture] = useState(false);
-  const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -85,26 +80,6 @@ export default function FlightDataForm({
       setError(e.message);
     } finally {
       setSaving(false);
-    }
-  };
-
-  const requestApplyToSubgroup = () => {
-    if (!onApplyToSubgroup) return;
-    setError(null);
-    setConfirmApplyOpen(true);
-  };
-
-  const handleApplyToSubgroup = async () => {
-    setApplying(true);
-    setError(null);
-    try {
-      await onApplyToSubgroup(buildPayload());
-      setConfirmApplyOpen(false);
-      onClose();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setApplying(false);
     }
   };
 
@@ -196,7 +171,7 @@ export default function FlightDataForm({
     </div>
   );
 
-  const busy = saving || applying;
+  const busy = saving;
 
   return (
     <Modal open={open} onClose={() => !busy && onClose()} title="Рейсы" width={560}>
@@ -236,57 +211,29 @@ export default function FlightDataForm({
         style={{
           display: 'flex',
           gap: 10,
-          justifyContent: 'space-between',
+          justifyContent: 'flex-end',
           alignItems: 'center',
           marginTop: 16,
           flexWrap: 'wrap',
         }}
       >
-        <div>
-          {canApplyToSubgroup && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={requestApplyToSubgroup}
-              disabled={busy}
-              title="Сохранить этот перелёт для всех туристов в подгруппе"
-            >
-              {applying
-                ? <><span className="spinner" /> Применение…</>
-                : '↯ Применить ко всей подгруппе'}
-            </button>
-          )}
-        </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={onClose}
-            disabled={busy}
-          >
-            Отмена
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handleSave}
-            disabled={busy}
-          >
-            {saving ? <><span className="spinner" /> Сохранение...</> : 'Сохранить'}
-          </button>
-        </div>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={onClose}
+          disabled={busy}
+        >
+          Отмена
+        </button>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={handleSave}
+          disabled={busy}
+        >
+          {saving ? <><span className="spinner" /> Сохранение...</> : 'Сохранить'}
+        </button>
       </div>
-      <ConfirmModal
-        open={confirmApplyOpen}
-        title="Применить ко всей подгруппе?"
-        message="Скопировать этот перелёт всем остальным туристам в подгруппе? Их текущие данные о рейсах будут перезаписаны."
-        confirmText="Применить"
-        cancelText="Отмена"
-        variant="primary"
-        busy={applying}
-        onConfirm={handleApplyToSubgroup}
-        onCancel={() => setConfirmApplyOpen(false)}
-      />
     </Modal>
   );
 }
