@@ -2,28 +2,37 @@ package ai
 
 import (
 	"strings"
-	"time"
 )
 
-// ussrDissolution is 25 December 1991 — last day the USSR existed.
-var ussrDissolution = time.Date(1991, 12, 25, 23, 59, 59, 0, time.UTC)
-
-// ComputeFormerNationality applies the rules:
-//  1. explicit "СССР" / "Soviet" in formerRu     → "USSR"
-//  2. "СССР" / "Soviet" / "USSR" in placeOfBirth → "USSR"
-//  3. birth date on or before 25.12.1991         → "USSR"
-//  4. otherwise                                   → "NO"
-func ComputeFormerNationality(formerRu, placeOfBirthRu, birthDate string) string {
-	if containsUSSR(formerRu) {
-		return "USSR"
+// ComputeFormerNationality maps the form's former-nationality answer to
+// the visa anketa's expected token.
+//
+// The function only inspects formerRu — the value the form sent. The
+// older heuristics (USSR mention in place_of_birth, birth date on or
+// before 25.12.1991) moved to the form layer, where they are presented
+// as a reversible auto-fill the tourist or manager can override. See
+// frontend/src/components/forms/steps/PersonalStep.jsx (and the legacy
+// frontend/src/components/SubmissionForm.jsx) for the suggestion logic.
+//
+// Rules:
+//  1. empty / "Нет" / "No"        → "NO"  (explicit "no" wins)
+//  2. anything containing СССР / Soviet / USSR → "USSR"
+//  3. anything else (e.g. a custom country name typed via the
+//     "Другое" branch) → "NO" — the visa form's T34 field only
+//     renders USSR / NO today; passing a country verbatim is a
+//     separate feature.
+//
+// placeOfBirthRu and birthDate are kept in the signature so existing
+// call sites (assembler.go) continue to compile unchanged. They are
+// intentionally unused.
+func ComputeFormerNationality(formerRu, _placeOfBirthRu, _birthDate string) string {
+	s := strings.TrimSpace(formerRu)
+	lower := strings.ToLower(s)
+	if lower == "" || lower == "нет" || lower == "no" {
+		return "NO"
 	}
-	if containsUSSR(placeOfBirthRu) {
+	if containsUSSR(s) {
 		return "USSR"
-	}
-	if t, err := time.Parse("02.01.2006", strings.TrimSpace(birthDate)); err == nil {
-		if !t.After(ussrDissolution) {
-			return "USSR"
-		}
 	}
 	return "NO"
 }
