@@ -63,15 +63,13 @@ const SELECT_DEFAULTS = {
   // changes. The "Россия" default mirrors the most common case.
   nationality_choice: 'Россия',
   nationality_ru: 'Россия',
-  // Former nationality dropdown defaults — Нет / СССР / Другое.
-  // former_nationality_choice is UI-only state; former_nationality_ru is
-  // the field the backend reads (kept in sync by PersonalStep). Default
-  // "Нет" matches the common case. The assembler's
-  // ComputeFormerNationality recognises only "СССР" / "Soviet" / "USSR"
-  // patterns — anything from the "Другое" branch falls through to the
-  // place-of-birth fallback or "NO". That's accepted.
-  former_nationality_choice: 'Нет',
-  former_nationality_ru: 'Нет',
+  // Former nationality dropdown defaults — intentionally LEFT EMPTY so
+  // PersonalStep's birth_date watcher can suggest "СССР" / "Нет" on a
+  // fresh form. The select's UI shows "Нет" via a `?? 'Нет'` fallback
+  // until the watcher (or the user) sets a real value. The restore
+  // guard for `_former_nat_user_set` keys off "non-empty" — using a
+  // non-empty default here would trip the guard and block the watcher
+  // on every fresh form load.
 };
 
 // All fields the wizard touches. `same_address` is wizard-only state — the

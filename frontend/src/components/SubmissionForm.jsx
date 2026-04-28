@@ -32,10 +32,12 @@ const SELECT_DEFAULTS = {
   // is UI-only state; nationality_ru is what the backend reads.
   nationality_choice: 'Россия',
   nationality_ru: 'Россия',
-  // Former nationality dropdown — Нет / СССР / Другое. The choice is
-  // UI-only; former_nationality_ru is the persisted field.
-  former_nationality_choice: 'Нет',
-  former_nationality_ru: 'Нет',
+  // Former nationality dropdown — intentionally left empty so the
+  // birth_date watcher (mirroring PersonalStep's auto-fill) can suggest
+  // "СССР" / "Нет" on first render. The select's UI shows "Нет" via a
+  // `?? 'Нет'` fallback until the watcher (or the user) sets a value.
+  // The restore guard for `_former_nat_user_set` keys off "non-empty",
+  // so a non-empty default here would block the watcher on every load.
 };
 
 // Nationality preset list — keys MUST match
