@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { listSubmissions, eraseSubmission } from '../api/client';
-import ConfirmModal from '../components/ConfirmModal';
+import { listSubmissions } from '../api/client';
 
 function formatDate(iso) {
   if (!iso) return '—';
@@ -34,9 +33,6 @@ export default function SubmissionsListPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [deletingId, setDeletingId] = useState(null);
-  const [confirmTarget, setConfirmTarget] = useState(null); // submission being deleted
-  const [deleteError, setDeleteError] = useState(null);
   const debounceRef = useRef(null);
 
   const load = useCallback(async (query, status) => {
@@ -58,33 +54,6 @@ export default function SubmissionsListPage() {
     debounceRef.current = setTimeout(() => load(q, statusFilter), 300);
     return () => clearTimeout(debounceRef.current);
   }, [q, statusFilter, load]);
-
-  const requestDelete = (e, s) => {
-    e.stopPropagation();
-    setDeleteError(null);
-    setConfirmTarget(s);
-  };
-
-  const confirmDelete = async () => {
-    const s = confirmTarget;
-    if (!s) return;
-    setDeletingId(s.id);
-    setDeleteError(null);
-    try {
-      await eraseSubmission(s.id);
-      setConfirmTarget(null);
-      await load(q, statusFilter);
-    } catch (err) {
-      setDeleteError(err.message);
-    } finally {
-      setDeletingId(null);
-    }
-  };
-
-  const handleEdit = (e, s) => {
-    e.stopPropagation();
-    navigate(`/submissions/${s.id}`);
-  };
 
   return (
     <div className="page-container submissions-page">
@@ -148,13 +117,11 @@ export default function SubmissionsListPage() {
                 <th>Статус</th>
                 <th>Дата</th>
                 <th>Источник</th>
-                <th style={{ width: 1, whiteSpace: 'nowrap' }}></th>
               </tr>
             </thead>
             <tbody>
               {rows.map((s) => {
                 const badgeClass = `submission-status submission-status--${s.status || 'pending'}`;
-                const isDeleting = deletingId === s.id;
                 return (
                   <tr
                     key={s.id}
@@ -185,32 +152,6 @@ export default function SubmissionsListPage() {
                         {s.source || '—'}
                       </span>
                     </td>
-                    <td style={{ whiteSpace: 'nowrap' }}>
-                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          onClick={(e) => handleEdit(e, s)}
-                          disabled={isDeleting}
-                          title="Редактировать"
-                        >
-                          Редактировать
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          onClick={(e) => requestDelete(e, s)}
-                          disabled={isDeleting}
-                          title="Удалить навсегда"
-                          style={{
-                            color: isDeleting ? 'var(--white-dim)' : 'var(--danger, #ff6b6b)',
-                            opacity: isDeleting ? 0.5 : 1,
-                          }}
-                        >
-                          {isDeleting ? <span className="spinner" /> : 'Удалить'}
-                        </button>
-                      </div>
-                    </td>
                   </tr>
                 );
               })}
@@ -219,20 +160,6 @@ export default function SubmissionsListPage() {
         </div>
       )}
 
-      <ConfirmModal
-        open={!!confirmTarget}
-        title="Удалить анкету?"
-        message={confirmTarget
-          ? `Удалить анкету «${submissionName(confirmTarget)}» навсегда? Это нельзя отменить.`
-          : ''}
-        confirmText="Удалить"
-        cancelText="Отмена"
-        variant="danger"
-        busy={!!deletingId}
-        error={deleteError}
-        onConfirm={confirmDelete}
-        onCancel={() => { setConfirmTarget(null); setDeleteError(null); }}
-      />
     </div>
   );
 }

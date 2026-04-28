@@ -43,9 +43,6 @@ export default function TravelDocsStep({
         }))}
         acceptMime="application/pdf,image/jpeg,image/png"
       />
-      <span className="sf-hint">
-        Можно прикрепить несколько билетов. Менеджер распознает каждый автоматически после привязки к туру.
-      </span>
 
       <FileMultiUploadField
         label="Ваучеры на отели"
@@ -63,9 +60,6 @@ export default function TravelDocsStep({
         }))}
         acceptMime="application/pdf,image/jpeg,image/png"
       />
-      <span className="sf-hint">
-        Можно прикрепить несколько ваучеров. Менеджер распознает каждый автоматически после привязки к туру.
-      </span>
     </div>
   );
 }

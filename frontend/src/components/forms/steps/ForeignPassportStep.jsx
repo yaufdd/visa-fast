@@ -27,7 +27,7 @@ export default function ForeignPassportStep({
       {boxedField('issued_by_ru', 'Кем выдан')}
 
       <FileUploadField
-        label="Скан загранпаспорта (необязательно)"
+        label="Скан загранпаспорта"
         fileType="passport_foreign"
         adapter={adapter}
         submissionId={submissionId}

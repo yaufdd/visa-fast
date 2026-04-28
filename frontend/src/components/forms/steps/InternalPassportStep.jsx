@@ -25,7 +25,7 @@ export default function InternalPassportStep({
           already typed everything still sees a clear "or upload a scan"
           affordance. */}
       <FileUploadField
-        label="Скан внутреннего паспорта (необязательно)"
+        label="Скан внутреннего паспорта"
         fileType="passport_internal"
         adapter={adapter}
         submissionId={submissionId}

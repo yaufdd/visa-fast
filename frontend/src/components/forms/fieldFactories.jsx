@@ -195,7 +195,6 @@ export function PassportNumberField({ payload, errors, setField }) {
           />
           <span className="sf-passport-sublabel">Серия</span>
         </div>
-        <span className="sf-passport-sep">№</span>
         <div className="sf-passport-col">
           <input
             id={part2Id}
@@ -266,7 +265,6 @@ export function InternalPassportField({ payload, errors, setField }) {
           />
           <span className="sf-passport-sublabel">Серия</span>
         </div>
-        <span className="sf-passport-sep">№</span>
         <div className="sf-passport-col">
           <input
             id={numberId}

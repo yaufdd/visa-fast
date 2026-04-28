@@ -8,6 +8,7 @@ import ConfirmModal from '../components/ConfirmModal';
 import {
   archiveSubmission,
   attachSubmission,
+  eraseSubmission,
   getSubmission,
   listSubmissionFilesAdmin,
 } from '../api/client';
@@ -82,6 +83,8 @@ export default function SubmissionDetailPage() {
   const [attachOpen, setAttachOpen] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // /submissions/new — allocate a draft and redirect immediately so the
   // URL becomes a stable handle (refresh-safe, shareable inside the org).
@@ -174,6 +177,19 @@ export default function SubmissionDetailPage() {
     await attachSubmission(submission.id, groupId, subgroupId);
     setAttachOpen(false);
     navigate(`/groups/${groupId}`);
+  }, [submission, navigate]);
+
+  const handleDelete = useCallback(async () => {
+    if (!submission) return;
+    setDeleting(true);
+    setActionError(null);
+    try {
+      await eraseSubmission(submission.id);
+      navigate('/submissions');
+    } catch (e) {
+      setActionError(e.message);
+      setDeleting(false);
+    }
   }, [submission, navigate]);
 
   // /submissions/new — render a small loading shell until the redirect
@@ -309,7 +325,33 @@ export default function SubmissionDetailPage() {
           one place plus get download URLs the wizard doesn't expose.
           Hidden on draft rows where the wizard's own widgets are the
           only place files have ever existed. */}
-      {!isDraftRow && <SubmissionFilesPanel submissionId={id} />}
+      {!isDraftRow && <SubmissionFilesPanel submissionId={id} allowDelete />}
+
+      {submission && (
+        <div style={{ marginTop: 32, display: 'flex', justifyContent: 'flex-start' }}>
+          <button
+            type="button"
+            onClick={() => { setActionError(null); setDeleteConfirmOpen(true); }}
+            disabled={deleting}
+            style={{
+              background: 'none',
+              border: '1px solid rgba(239, 68, 68, 0.4)',
+              color: '#ef4444',
+              fontSize: 13,
+              fontWeight: 600,
+              padding: '8px 16px',
+              borderRadius: 6,
+              cursor: deleting ? 'default' : 'pointer',
+              opacity: deleting ? 0.6 : 1,
+              transition: 'background 0.15s, border-color 0.15s',
+            }}
+            onMouseEnter={e => { if (deleting) return; e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)'; e.currentTarget.style.borderColor = '#ef4444'; }}
+            onMouseLeave={e => { if (deleting) return; e.currentTarget.style.background = 'none'; e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.4)'; }}
+          >
+            {deleting ? 'Удаление…' : 'Удалить анкету'}
+          </button>
+        </div>
+      )}
 
       <AttachGroupModal
         open={attachOpen}
@@ -328,6 +370,19 @@ export default function SubmissionDetailPage() {
         error={actionError}
         onConfirm={handleArchive}
         onCancel={() => setArchiveConfirmOpen(false)}
+      />
+
+      <ConfirmModal
+        open={deleteConfirmOpen}
+        title="Удалить анкету?"
+        message="Анкета будет удалена навсегда. Это действие нельзя отменить."
+        confirmText="Удалить"
+        cancelText="Отмена"
+        variant="danger"
+        busy={deleting}
+        error={actionError}
+        onConfirm={handleDelete}
+        onCancel={() => { if (!deleting) setDeleteConfirmOpen(false); }}
       />
     </div>
   );

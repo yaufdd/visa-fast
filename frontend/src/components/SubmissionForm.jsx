@@ -687,7 +687,6 @@ export default function SubmissionForm({
             />
             <span className="sf-passport-sublabel">Серия</span>
           </div>
-          <span className="sf-passport-sep">№</span>
           <div className="sf-passport-col">
             <input
               id="passport-part2"
@@ -755,7 +754,6 @@ export default function SubmissionForm({
             />
             <span className="sf-passport-sublabel">Серия</span>
           </div>
-          <span className="sf-passport-sep">№</span>
           <div className="sf-passport-col">
             <input
               id="internal-number"
