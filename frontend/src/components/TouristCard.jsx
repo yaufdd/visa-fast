@@ -1,20 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   uploadTouristFile,
   parseTouristUpload,
-  getTouristUploads,
-  deleteTouristUpload,
   updateFlightData,
   applyFlightDataToSubgroup,
 } from '../api/client';
 import FlightDataForm from './FlightDataForm';
 import ConfirmModal from './ConfirmModal';
 import TouristFilesModal from './TouristFilesModal';
+import { formatAIError } from '../utils/aiError';
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
-
-const FILE_TYPE_LABEL = { ticket: 'Билет', voucher: 'Ваучер' };
 
 function snapshotOf(t) {
   const raw = t?.submission_snapshot;
@@ -34,170 +31,49 @@ function safeParse(raw) {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
-function uploadDisplayName(u) {
-  const raw = u.file_path || '';
-  const base = raw.split(/[\\/]/).pop() || '';
-  const prefix = `${u.file_type}_`;
-  return base.startsWith(prefix) ? base.slice(prefix.length) : base;
-}
-
-function formatUploadDate(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' });
-}
-
-function formatLeg(leg) {
-  if (!leg) return null;
-  const parts = [];
-  if (leg.flight_number) parts.push(leg.flight_number);
-  if (leg.airport) parts.push(leg.airport);
-  const when = [leg.date, leg.time].filter(Boolean).join(' ');
-  if (when) parts.push(when);
-  return parts.length ? parts.join(' · ') : null;
-}
-
 function isLegEmpty(leg) {
   return !leg || (!leg.flight_number && !leg.date && !leg.time && !leg.airport);
 }
 
-// ── Plain trash icon (gray) ──────────────────────────────────────────────────
+// ── Icons ────────────────────────────────────────────────────────────────────
 
-function TrashIcon({ size = 13 }) {
+function CrossIcon({ size = 13 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
-      <path d="M3 4h10M6.5 4V2.5a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1V4M4 4l.5 8.5a1.5 1.5 0 0 0 1.5 1.4h4a1.5 1.5 0 0 0 1.5-1.4L12 4M6.5 7v4M9.5 7v4"
-        stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M4 4l8 8M12 4l-8 8"
+        stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
     </svg>
   );
 }
 
-// ── Hook: all uploads/parsing/delete state for one tourist ───────────────────
+function UploadIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
+      <path d="M8 10.5V3M8 3l-3 3M8 3l3 3M3 13h10"
+        stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
 
-function useTouristUploads(touristId, onChanged) {
-  const [uploads, setUploads] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [uploadingType, setUploadingType] = useState(null);
-  const [uploadProgress, setUploadProgress] = useState(null);
-  const [bulkParsing, setBulkParsing] = useState(false);
-  const [bulkProgress, setBulkProgress] = useState(null);
-  const [parsingId, setParsingId] = useState(null);
-  const [parseErrorById, setParseErrorById] = useState({});
-  const [deletingId, setDeletingId] = useState(null);
-  const [confirmDeleteTarget, setConfirmDeleteTarget] = useState(null);
-  const [confirmDeleteError, setConfirmDeleteError] = useState(null);
-  const ticketRef = useRef(null);
-  const voucherRef = useRef(null);
+// Pencil — used for the "edit" / "change" action.
+function EditIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
+      <path d="M11 2.5l2.5 2.5L5 13.5H2.5V11L11 2.5z"
+        stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+      <path d="M9.5 4l2.5 2.5" stroke="currentColor" strokeWidth="1.3"/>
+    </svg>
+  );
+}
 
-  const load = useCallback(async () => {
-    try {
-      const data = await getTouristUploads(touristId);
-      setUploads(Array.isArray(data) ? data : []);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [touristId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const handleUpload = async (files, fileType) => {
-    const list = files ? Array.from(files) : [];
-    if (list.length === 0) return;
-    setUploadingType(fileType);
-    setError(null);
-    setUploadProgress({ done: 0, total: list.length });
-    const errors = [];
-    for (let i = 0; i < list.length; i++) {
-      const file = list[i];
-      try {
-        const res = await uploadTouristFile(touristId, file, fileType);
-        if (res?.redact_error) errors.push(`${file.name}: ${res.redact_error}`);
-      } catch (e) {
-        errors.push(`${file.name}: ${e.message}`);
-      }
-      setUploadProgress({ done: i + 1, total: list.length });
-    }
-    if (errors.length) setError(errors.join('\n'));
-    await load();
-    onChanged?.();
-    setUploadingType(null);
-    setUploadProgress(null);
-  };
-
-  const handleParseAll = async () => {
-    const targets = uploads.filter(u => !u.parsed_at);
-    if (targets.length === 0) return;
-    setBulkParsing(true);
-    setBulkProgress({ done: 0, total: targets.length });
-    setParseErrorById(m => {
-      const next = { ...m };
-      targets.forEach(u => { next[u.id] = null; });
-      return next;
-    });
-    for (let i = 0; i < targets.length; i++) {
-      const u = targets[i];
-      setParsingId(u.id);
-      try {
-        const res = await parseTouristUpload(touristId, u.id);
-        if (res?.parse_error) setParseErrorById(m => ({ ...m, [u.id]: res.parse_error }));
-        else if (res?.redact_error) setParseErrorById(m => ({ ...m, [u.id]: res.redact_error }));
-      } catch (e) {
-        setParseErrorById(m => ({ ...m, [u.id]: e.message }));
-      }
-      setBulkProgress({ done: i + 1, total: targets.length });
-    }
-    setParsingId(null);
-    await load();
-    onChanged?.();
-    setBulkParsing(false);
-    setBulkProgress(null);
-  };
-
-  const requestDelete = (u) => {
-    setConfirmDeleteError(null);
-    setConfirmDeleteTarget(u);
-  };
-
-  const confirmDelete = async () => {
-    const u = confirmDeleteTarget;
-    if (!u) return;
-    setDeletingId(u.id);
-    setConfirmDeleteError(null);
-    try {
-      await deleteTouristUpload(touristId, u.id);
-      setConfirmDeleteTarget(null);
-      await load();
-      onChanged?.();
-    } catch (e) {
-      setConfirmDeleteError(e.message);
-    } finally {
-      setDeletingId(null);
-    }
-  };
-
-  const closeConfirmDelete = () => {
-    setConfirmDeleteTarget(null);
-    setConfirmDeleteError(null);
-  };
-
-  const tickets = useMemo(() => uploads.filter(u => u.file_type === 'ticket'), [uploads]);
-  const vouchers = useMemo(() => uploads.filter(u => u.file_type === 'voucher'), [uploads]);
-  const unparsedCount = useMemo(() => uploads.filter(u => !u.parsed_at).length, [uploads]);
-  const busy = !!uploadingType || bulkParsing || !!deletingId;
-
-  return {
-    loading, error, uploads, tickets, vouchers, unparsedCount, busy,
-    uploadingType, uploadProgress,
-    bulkParsing, bulkProgress,
-    parsingId, parseErrorById,
-    deletingId, confirmDeleteTarget, confirmDeleteError,
-    handleUpload, handleParseAll, requestDelete, confirmDelete, closeConfirmDelete,
-    ticketRef, voucherRef,
-  };
+// Sparkle / 4-point star — used for "auto-fill from a scan" actions.
+function MagicIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
+      <path d="M8 1.5L9.2 6.8L14.5 8L9.2 9.2L8 14.5L6.8 9.2L1.5 8L6.8 6.8Z"
+        fill="currentColor"/>
+    </svg>
+  );
 }
 
 // ── Shared sub-components ────────────────────────────────────────────────────
@@ -221,137 +97,26 @@ function GrayDeleteButton({ onClick, disabled, busy }) {
         alignItems: 'center',
       }}
     >
-      {busy ? <span className="spinner" /> : <TrashIcon size={13} />}
+      {busy ? <span className="spinner" /> : <CrossIcon size={13} />}
     </button>
   );
 }
 
-function UploadRow({ u, parseError, isParsing, onDelete, deleting, busy }) {
-  const name = uploadDisplayName(u);
-  const date = formatUploadDate(u.created_at);
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '4px 8px',
-          fontSize: 12,
-          background: 'var(--graphite)',
-          borderRadius: 4,
-          opacity: isParsing ? 0.65 : 1,
-        }}
-      >
-        <span
-          style={{
-            flex: 1,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            color: 'var(--white)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 11,
-          }}
-          title={name}
-        >
-          {name || '—'}
-        </span>
-        {isParsing && <span className="spinner" />}
-        {!isParsing && u.parsed_at && (
-          <span style={{ fontSize: 10, color: 'var(--accent, #7fb77e)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            ✓
-          </span>
-        )}
-        {date && (
-          <span style={{ color: 'var(--white-dim)', fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>
-            {date}
-          </span>
-        )}
-        <GrayDeleteButton onClick={onDelete} disabled={busy} busy={deleting} />
-      </div>
-      {parseError && (
-        <div style={{ fontSize: 11, color: 'var(--danger)', paddingLeft: 8 }}>{parseError}</div>
-      )}
-    </div>
-  );
-}
+// ── Flight area ─────────────────────────────────────────────────────────────
 
-function FilesGroup({ title, items, onUploadClick, uploading, uploadProgress, busy, hook }) {
+function FlightLegRow({ label, leg }) {
+  const datetime = [leg?.date, leg?.time].filter(Boolean).join(' ');
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'baseline',
-          justifyContent: 'space-between',
-          paddingBottom: 4,
-          borderBottom: '1px solid var(--border)',
-        }}
-      >
-        <span
-          style={{
-            fontSize: 11,
-            color: 'var(--white-dim)',
-            textTransform: 'uppercase',
-            letterSpacing: '0.05em',
-          }}
-        >
-          {title}
-        </span>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          onClick={onUploadClick}
-          disabled={busy}
-          style={{ fontSize: 11 }}
-        >
-          {uploading
-            ? <><span className="spinner" /> {uploadProgress ? `${uploadProgress.done}/${uploadProgress.total}` : ''}</>
-            : '+ загрузить'}
-        </button>
-      </div>
-      {items.length === 0 ? (
-        <div style={{ fontSize: 11, color: 'var(--white-dim)', paddingLeft: 4 }}>—</div>
-      ) : (
-        items.map(u => (
-          <UploadRow
-            key={u.id}
-            u={u}
-            parseError={hook.parseErrorById[u.id]}
-            isParsing={hook.parsingId === u.id}
-            deleting={hook.deletingId === u.id}
-            onDelete={() => hook.requestDelete(u)}
-            busy={hook.busy}
-          />
-        ))
-      )}
-    </div>
-  );
-}
-
-function ParseAllButton({ hook, count, fullWidth }) {
-  if (count === 0) return null;
-  return (
-    <button
-      type="button"
-      className="btn btn-primary btn-sm"
-      onClick={hook.handleParseAll}
-      disabled={hook.busy}
-      style={fullWidth ? { width: '100%' } : undefined}
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 16,
+        fontSize: 12,
+        lineHeight: 1.55,
+        minWidth: 0,
+      }}
     >
-      {hook.bulkParsing
-        ? <><span className="spinner" /> Распознавание {hook.bulkProgress ? `${hook.bulkProgress.done}/${hook.bulkProgress.total}` : ''}…</>
-        : `Распознать все (${count})`}
-    </button>
-  );
-}
-
-// ── Flight area (no card border, rows or single-line summary) ────────────────
-
-function FlightLine({ label, value }) {
-  return (
-    <div style={{ display: 'flex', gap: 12, fontSize: 12, lineHeight: 1.5 }}>
       <span
         style={{
           width: 60,
@@ -360,76 +125,337 @@ function FlightLine({ label, value }) {
           textTransform: 'uppercase',
           fontSize: 10,
           letterSpacing: '0.05em',
-          paddingTop: 2,
         }}
       >
         {label}
       </span>
-      <span style={{ color: 'var(--white)', fontFamily: 'var(--font-mono)' }}>{value}</span>
+      <span
+        style={{
+          width: 70,
+          flexShrink: 0,
+          color: 'var(--white)',
+          fontFamily: 'var(--font-mono)',
+        }}
+      >
+        {leg?.flight_number || ''}
+      </span>
+      <span
+        style={{
+          color: 'var(--white)',
+          fontFamily: 'var(--font-mono)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          minWidth: 0,
+        }}
+        title={leg?.airport || ''}
+      >
+        {leg?.airport || ''}
+      </span>
+      <span
+        style={{
+          color: 'var(--white)',
+          fontFamily: 'var(--font-mono)',
+          fontVariantNumeric: 'tabular-nums',
+          flexShrink: 0,
+        }}
+      >
+        {datetime}
+      </span>
     </div>
   );
 }
 
-function FlightBlock({ tourist, onUpdated }) {
-  const [open, setOpen] = useState(false);
+// FlightSection: collapsible area with flight info + edit / apply / upload-ticket
+// actions. The ticket upload runs the upload+parse pair under the hood and
+// updates the tourist's flight_data — the file itself is not surfaced here.
+//
+// Imperative handle: parent can call `ref.current.parseExisting(uploadIds)` to
+// run the same parse loop against tourist_uploads that already exist (e.g.
+// triggered from the documents modal). The shared spinner / progress / error
+// state inside the section is reused so the visual feedback matches the
+// regular upload flow.
+const FlightSection = forwardRef(function FlightSection({ tourist, onUpdated }, ref) {
   const flight = useMemo(() => safeParse(tourist.flight_data) || {}, [tourist]);
-  const arrivalStr = formatLeg(flight.arrival);
-  const departureStr = formatLeg(flight.departure);
-  const has = !isLegEmpty(flight.arrival) || !isLegEmpty(flight.departure);
+  const hasArrival = !isLegEmpty(flight.arrival);
+  const hasDeparture = !isLegEmpty(flight.departure);
+  const has = hasArrival || hasDeparture;
+  const canApply = has && !!tourist.subgroup_id;
+
+  const [expanded, setExpanded] = useState(true);
+  const [editOpen, setEditOpen] = useState(false);
+  const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [actionError, setActionError] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const fileInputRef = useRef(null);
 
   const handleSave = async (data) => {
     await updateFlightData(tourist.id, data);
     onUpdated?.();
   };
-  const handleApplyToSubgroup = async (data) => {
-    await updateFlightData(tourist.id, data);
-    await applyFlightDataToSubgroup(tourist.id);
-    onUpdated?.();
+
+  const handleApplyToSubgroup = async () => {
+    setApplying(true);
+    setActionError(null);
+    try {
+      await applyFlightDataToSubgroup(tourist.id);
+      setConfirmApplyOpen(false);
+      onUpdated?.();
+    } catch (e) {
+      setActionError(e.message);
+    } finally {
+      setApplying(false);
+    }
   };
 
-  const form = (
-    <FlightDataForm
-      open={open}
-      initial={flight}
-      onClose={() => setOpen(false)}
-      onSave={handleSave}
-      canApplyToSubgroup={!!tourist.subgroup_id}
-      onApplyToSubgroup={handleApplyToSubgroup}
-    />
-  );
+  const handleUpload = async (files) => {
+    const list = files ? Array.from(files) : [];
+    if (list.length === 0) return;
+    setUploading(true);
+    setActionError(null);
+    setExpanded(true);
+    setProgress({ done: 0, total: list.length });
+    try {
+      // Each file gets uploaded, then immediately parsed so the flight_data
+      // on the tourist is filled in. The file row stays server-side (audit
+      // log + reupload safety) but is not surfaced anywhere on this screen.
+      for (let i = 0; i < list.length; i++) {
+        const up = await uploadTouristFile(tourist.id, list[i], 'ticket');
+        const res = await parseTouristUpload(tourist.id, up.id);
+        if (res?.parse_error) {
+          setActionError(formatAIError({ message: res.parse_error }));
+        }
+        setProgress({ done: i + 1, total: list.length });
+      }
+      onUpdated?.();
+    } catch (e) {
+      setActionError(formatAIError(e));
+    } finally {
+      setUploading(false);
+      setProgress(null);
+    }
+  };
+
+  // Same parse loop, but against existing tourist_uploads (e.g. triggered
+  // from the modal's magic button). No upload step.
+  const parseExisting = async (uploadIds) => {
+    if (!Array.isArray(uploadIds) || uploadIds.length === 0) return;
+    setUploading(true);
+    setActionError(null);
+    setExpanded(true);
+    setProgress({ done: 0, total: uploadIds.length });
+    try {
+      for (let i = 0; i < uploadIds.length; i++) {
+        const res = await parseTouristUpload(tourist.id, uploadIds[i]);
+        if (res?.parse_error) {
+          setActionError(formatAIError({ message: res.parse_error }));
+        }
+        setProgress({ done: i + 1, total: uploadIds.length });
+      }
+      onUpdated?.();
+    } catch (e) {
+      setActionError(formatAIError(e));
+    } finally {
+      setUploading(false);
+      setProgress(null);
+    }
+  };
+
+  useImperativeHandle(ref, () => ({ parseExisting }));
+
+  const summary = has
+    ? [
+        flight.arrival?.date,
+        flight.departure?.date && `→ ${flight.departure.date}`,
+      ].filter(Boolean).join(' ') || 'есть данные'
+    : '';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      {has ? (
-        <>
-          {arrivalStr && <FlightLine label="Прилёт" value={arrivalStr} />}
-          {departureStr && <FlightLine label="Вылет" value={departureStr} />}
-          {!arrivalStr && !departureStr && (
-            <div style={{ fontSize: 12, color: 'var(--white-dim)' }}>Данные заполнены частично</div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <button
+        type="button"
+        onClick={() => setExpanded(o => !o)}
+        style={{
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          color: 'var(--white-dim)',
+          padding: 0,
+          textAlign: 'left',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontSize: 12,
+        }}
+      >
+        <span
+          style={{
+            display: 'inline-block',
+            transition: 'transform 0.15s',
+            transform: expanded ? 'rotate(90deg)' : 'none',
+            fontSize: 10,
+          }}
+        >
+          ▶
+        </span>
+        <span style={{ textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: 10 }}>
+          Авиабилеты
+        </span>
+        <span style={{ fontSize: 11 }}>{summary}</span>
+      </button>
+
+      {expanded && (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            padding: '10px 12px',
+            background: 'var(--graphite)',
+            borderRadius: 6,
+          }}
+        >
+          {has ? (
+            <div
+              style={{
+                display: 'flex',
+                gap: 12,
+                alignItems: 'flex-start',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {hasArrival && <FlightLegRow label="Прилёт" leg={flight.arrival} />}
+                {hasDeparture && <FlightLegRow label="Вылет" leg={flight.departure} />}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-end',
+                  gap: 6,
+                  flexShrink: 0,
+                }}
+              >
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setEditOpen(true)}
+                  title="Изменить рейс"
+                  aria-label="Изменить рейс"
+                  style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '4px 8px' }}
+                >
+                  <EditIcon />
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm btn-magic"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  title="Загрузить скан билета — данные распознаются автоматически"
+                  aria-label="Заполнить из скана билета"
+                  style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '4px 8px' }}
+                >
+                  {uploading ? (
+                    <>
+                      <span className="spinner" />
+                      {progress && progress.total > 1 && (
+                        <span style={{ fontSize: 10, marginLeft: 4, fontVariantNumeric: 'tabular-nums' }}>
+                          {progress.done}/{progress.total}
+                        </span>
+                      )}
+                    </>
+                  ) : <MagicIcon />}
+                </button>
+                {canApply && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setConfirmApplyOpen(true)}
+                    disabled={applying}
+                    title="Скопировать этот перелёт всем туристам в этой группе"
+                    style={{ fontSize: 11, whiteSpace: 'nowrap' }}
+                  >
+                    {applying
+                      ? <><span className="spinner" /> Применение…</>
+                      : '↯ Применить ко всей группе'}
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm btn-magic"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                title="Загрузить скан билета — данные распознаются автоматически"
+                aria-label="Заполнить из скана билета"
+                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '4px 8px' }}
+              >
+                {uploading ? (
+                  <>
+                    <span className="spinner" />
+                    {progress && progress.total > 1 && (
+                      <span style={{ fontSize: 10, marginLeft: 4, fontVariantNumeric: 'tabular-nums' }}>
+                        {progress.done}/{progress.total}
+                      </span>
+                    )}
+                  </>
+                ) : <MagicIcon />}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setEditOpen(true)}
+              >
+                + Добавить авиа
+              </button>
+            </div>
           )}
-        </>
-      ) : (
-        <div style={{ fontSize: 12, color: 'var(--white-dim)' }}>Нет данных о рейсах</div>
+          {actionError && (
+            <div style={{ fontSize: 11, color: 'var(--danger)' }}>{actionError}</div>
+          )}
+        </div>
       )}
-      <div>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpen(true)} style={{ marginTop: 4 }}>
-          {has ? 'Изменить' : 'Добавить'}
-        </button>
-      </div>
-      {form}
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png"
+        multiple
+        style={{ display: 'none' }}
+        onChange={(e) => { handleUpload(e.target.files); e.target.value = ''; }}
+      />
+
+      <FlightDataForm
+        open={editOpen}
+        initial={flight}
+        onClose={() => setEditOpen(false)}
+        onSave={handleSave}
+      />
+      <ConfirmModal
+        open={confirmApplyOpen}
+        title="Применить ко всей группе?"
+        message="Скопировать этот перелёт всем остальным туристам в этой группе? Их текущие данные о рейсах будут перезаписаны."
+        confirmText="Применить"
+        cancelText="Отмена"
+        variant="primary"
+        busy={applying}
+        onConfirm={handleApplyToSubgroup}
+        onCancel={() => !applying && setConfirmApplyOpen(false)}
+      />
     </div>
   );
-}
+});
 
-// ── Card header: name, DOB, subgroup picker, gray delete ─────────────────────
+// ── Card header ──────────────────────────────────────────────────────────────
 
 function CardHeader({ tourist, onDelete, subgroups, onAssign, fileCount, onOpenFiles }) {
   const name = getTouristName(tourist);
-  const snap = snapshotOf(tourist);
-  const dob = snap.birth_date || snap.date_of_birth;
-  // Only show the badge when the tourist actually has a submission_id
-  // (not a manager-created manual row) AND that submission has files.
-  // Otherwise the header stays clean — no zero-state badge.
   const showFiles = !!tourist.submission_id && fileCount > 0;
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
@@ -453,11 +479,6 @@ function CardHeader({ tourist, onDelete, subgroups, onAssign, fileCount, onOpenF
         >
           {name}
         </Link>
-        {dob && (
-          <div style={{ fontSize: 11, color: 'var(--white-dim)', fontFamily: 'var(--font-mono)' }}>
-            {dob}
-          </div>
-        )}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         {showFiles && (
@@ -518,125 +539,29 @@ function CardHeader({ tourist, onDelete, subgroups, onAssign, fileCount, onOpenF
   );
 }
 
-// ── Card body: flights + collapsible documents ───────────────────────────────
-
-function CardBody({ tourist, onUpdated, hook }) {
-  const [open, setOpen] = useState(hook.unparsedCount > 0);
-  const totalDocs = hook.uploads.length;
-  return (
-    <>
-      <FlightBlock tourist={tourist} onUpdated={onUpdated} />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <button
-          type="button"
-          onClick={() => setOpen(o => !o)}
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            color: 'var(--white-dim)',
-            padding: 0,
-            textAlign: 'left',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontSize: 12,
-          }}
-        >
-          <span
-            style={{
-              display: 'inline-block',
-              transition: 'transform 0.15s',
-              transform: open ? 'rotate(90deg)' : 'none',
-              fontSize: 10,
-            }}
-          >
-            ▶
-          </span>
-          <span style={{ textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: 10 }}>
-            Документы
-          </span>
-          <span style={{ fontSize: 11 }}>
-            {totalDocs === 0
-              ? '— ничего не загружено'
-              : (hook.unparsedCount > 0
-                  ? `${totalDocs}, не распознано: ${hook.unparsedCount}`
-                  : `${totalDocs}, всё распознано`)}
-          </span>
-          {hook.unparsedCount > 0 && !open && (
-            <span
-              style={{
-                background: 'var(--accent-dim)',
-                color: 'var(--accent)',
-                padding: '0 6px',
-                borderRadius: 8,
-                fontSize: 10,
-                marginLeft: 'auto',
-              }}
-            >
-              требует распознавания
-            </span>
-          )}
-        </button>
-
-        {open && (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 12,
-              padding: '10px 12px',
-              background: 'var(--graphite)',
-              borderRadius: 6,
-            }}
-          >
-            <FilesGroup
-              title="Билеты"
-              items={hook.tickets}
-              onUploadClick={() => hook.ticketRef.current?.click()}
-              uploading={hook.uploadingType === 'ticket'}
-              uploadProgress={hook.uploadProgress}
-              busy={hook.busy}
-              hook={hook}
-            />
-            <FilesGroup
-              title="Ваучеры"
-              items={hook.vouchers}
-              onUploadClick={() => hook.voucherRef.current?.click()}
-              uploading={hook.uploadingType === 'voucher'}
-              uploadProgress={hook.uploadProgress}
-              busy={hook.busy}
-              hook={hook}
-            />
-            {hook.error && <div style={{ fontSize: 11, color: 'var(--danger)', whiteSpace: 'pre-wrap' }}>{hook.error}</div>}
-            {hook.unparsedCount > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <ParseAllButton hook={hook} count={hook.unparsedCount} />
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </>
-  );
-}
-
 // ── Public API ───────────────────────────────────────────────────────────────
 
 export default function TouristCard({
   tourist, onDelete, subgroups, onAssign, onUpdated, fileCount = 0, onFilesChanged,
+  onVoucherParseRequest,
 }) {
-  const hook = useTouristUploads(tourist.id, onUpdated);
   const [filesOpen, setFilesOpen] = useState(false);
-
-  // The SubmissionFilesPanel manages its own list internally, but the
-  // parent's count badge won't update unless we refetch when the modal
-  // closes. Unconditional refetch on close keeps the wiring simple —
-  // no callback threading from inside the panel — and the cost is one
-  // small JSON request per modal open/close cycle.
+  const flightRef = useRef(null);
   const closeFiles = () => {
     setFilesOpen(false);
     onFilesChanged?.();
+  };
+
+  // Triggered by the modal's magic button. Closes the modal first so the
+  // user sees the spinner appear in the relevant section, not in the modal.
+  const handleParseFromModal = (fileType, uploadIds) => {
+    setFilesOpen(false);
+    onFilesChanged?.();
+    if (fileType === 'ticket') {
+      flightRef.current?.parseExisting(uploadIds);
+    } else if (fileType === 'voucher') {
+      onVoucherParseRequest?.(tourist.id, uploadIds);
+    }
   };
 
   return (
@@ -659,46 +584,16 @@ export default function TouristCard({
         fileCount={fileCount}
         onOpenFiles={() => setFilesOpen(true)}
       />
-      <CardBody tourist={tourist} onUpdated={onUpdated} hook={hook} />
-
-      {/* Hidden file inputs */}
-      <input
-        ref={hook.ticketRef}
-        type="file"
-        accept=".pdf,.jpg,.jpeg,.png"
-        multiple
-        style={{ display: 'none' }}
-        onChange={(e) => { hook.handleUpload(e.target.files, 'ticket'); e.target.value = ''; }}
-      />
-      <input
-        ref={hook.voucherRef}
-        type="file"
-        accept=".pdf,.jpg,.jpeg,.png"
-        multiple
-        style={{ display: 'none' }}
-        onChange={(e) => { hook.handleUpload(e.target.files, 'voucher'); e.target.value = ''; }}
-      />
-
-      <ConfirmModal
-        open={!!hook.confirmDeleteTarget}
-        title="Удалить файл?"
-        message={hook.confirmDeleteTarget
-          ? `Удалить «${uploadDisplayName(hook.confirmDeleteTarget) || FILE_TYPE_LABEL[hook.confirmDeleteTarget.file_type] || 'файл'}»?`
-          : ''}
-        confirmText="Удалить"
-        cancelText="Отмена"
-        variant="danger"
-        busy={!!hook.deletingId}
-        error={hook.confirmDeleteError}
-        onConfirm={hook.confirmDelete}
-        onCancel={hook.closeConfirmDelete}
-      />
+      <FlightSection ref={flightRef} tourist={tourist} onUpdated={onUpdated} />
 
       <TouristFilesModal
         open={filesOpen}
         onClose={closeFiles}
         submissionId={tourist.submission_id}
+        touristId={tourist.id}
         touristName={getTouristName(tourist)}
+        onUpdated={onUpdated}
+        onParseRequest={handleParseFromModal}
       />
     </div>
   );

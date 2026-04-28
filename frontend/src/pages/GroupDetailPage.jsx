@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { forwardRef, useImperativeHandle, useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   getGroup,
@@ -11,11 +11,13 @@ import {
   updateGroupStatus, deleteGroup, updateGroupName,
   updateSubgroupProgrammeNotes,
   getGroupTouristFileCounts,
+  uploadTouristFile, parseTouristUpload,
 } from '../api/client';
 import StatusSection from '../components/StatusSection';
 import AddFromDBModal from '../components/AddFromDBModal';
 import TouristCard from '../components/TouristCard';
 import { normalizeCity } from '../constants/cities';
+import { formatAIError } from '../utils/aiError';
 
 // Folder-download icon.
 const FolderIcon = () => (
@@ -29,6 +31,32 @@ const TrashIcon = ({ size = 14 }) => (
   <svg width={size} height={size} viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, display: 'block' }}>
     <path d="M3 4h10M6.5 4V2.5a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1V4M4 4l.5 8.5a1.5 1.5 0 0 0 1.5 1.4h4a1.5 1.5 0 0 0 1.5-1.4L12 4M6.5 7v4M9.5 7v4"
       stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+);
+
+// "X" icon — used in the Groups view as a quieter alternative to the trash
+// silhouette (deletion in this view is a quick one-click action).
+const CrossIcon = ({ size = 13 }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, display: 'block' }}>
+    <path d="M4 4l8 8M12 4l-8 8"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+  </svg>
+);
+
+// "Add person" icon — silhouette with a plus sign.
+const UserPlusIcon = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, display: 'block' }}>
+    <circle cx="6" cy="5" r="2.4" stroke="currentColor" strokeWidth="1.3"/>
+    <path d="M2 13.5c0-2.2 1.8-4 4-4s4 1.8 4 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+    <path d="M12 6.5v4M10 8.5h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+  </svg>
+);
+
+// Sparkle / 4-point star — used for "auto-fill from a scan".
+const MagicIcon = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, display: 'block' }}>
+    <path d="M8 1.5L9.2 6.8L14.5 8L9.2 9.2L8 14.5L6.8 9.2L1.5 8L6.8 6.8Z"
+      fill="currentColor"/>
   </svg>
 );
 import StatusBadge from '../components/StatusBadge';
@@ -54,6 +82,25 @@ function GroupCard({ group, groupId, allTourists, fileCounts, onReload, onFilesC
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState(null);
+
+  // Wiring for "magic button on a tourist's voucher in the docs modal" → run
+  // the parse inside SubgroupHotelsSection so the spinner appears there.
+  // pendingVoucher is queued from the modal callback; the effect below fires
+  // it once the section has actually mounted (after auto-expand).
+  const hotelsRef = useRef(null);
+  const [pendingVoucher, setPendingVoucher] = useState(null);
+  useEffect(() => {
+    if (!pendingVoucher) return;
+    if (!hotelsExpanded) return;
+    if (!hotelsRef.current) return;
+    const { touristId, uploadIds } = pendingVoucher;
+    hotelsRef.current.parseExisting(touristId, uploadIds);
+    setPendingVoucher(null);
+  }, [pendingVoucher, hotelsExpanded]);
+  const handleVoucherParseRequest = useCallback((touristId, uploadIds) => {
+    setHotelsExpanded(true);
+    setPendingVoucher({ touristId, uploadIds });
+  }, []);
 
   const tourists = allTourists.filter(t => t.subgroup_id === group.id);
 
@@ -116,39 +163,10 @@ function GroupCard({ group, groupId, allTourists, fileCounts, onReload, onFilesC
           <span style={{ flex: 1, fontSize: 14, fontWeight: 600, color: 'var(--white)' }}>{group.name}</span>
         )}
 
-        {editing ? (
+        {editing && (
           <>
             <button className="btn btn-primary btn-sm" onClick={e => { e.stopPropagation(); handleRename(); }}>OK</button>
             <button className="btn btn-secondary btn-sm" onClick={e => { e.stopPropagation(); setEditing(false); setEditName(group.name); }}>Отмена</button>
-          </>
-        ) : (
-          <>
-            <button
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--white-dim)', fontSize: 14, padding: '2px 6px' }}
-              onClick={e => { e.stopPropagation(); setEditing(true); setEditName(group.name); }}
-              title="Переименовать"
-            >✎</button>
-            <button
-              type="button"
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: 'var(--white-dim)',
-                lineHeight: 1,
-                padding: '4px 6px',
-                borderRadius: 4,
-                transition: 'color 0.15s, background 0.15s',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              onClick={e => { e.stopPropagation(); requestDelete(); }}
-              onMouseEnter={e => { e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
-              onMouseLeave={e => { e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
-              title="Удалить группу"
-              aria-label="Удалить группу"
-            ><TrashIcon /></button>
           </>
         )}
       </div>
@@ -202,10 +220,12 @@ function GroupCard({ group, groupId, allTourists, fileCounts, onReload, onFilesC
               </div>
               <button
                 className="btn btn-secondary btn-sm"
-                style={{ fontSize: 11 }}
                 onClick={() => setShowAddModal(true)}
+                title="Добавить туриста"
+                aria-label="Добавить туриста"
+                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '4px 8px' }}
               >
-                + Добавить туриста
+                <UserPlusIcon />
               </button>
             </div>
             {touristsExpanded && tourists.length > 0 && (
@@ -217,6 +237,7 @@ function GroupCard({ group, groupId, allTourists, fileCounts, onReload, onFilesC
                     fileCount={(fileCounts && t.submission_id) ? (fileCounts[t.submission_id] || 0) : 0}
                     onFilesChanged={onFilesChanged}
                     onUpdated={onReload}
+                    onVoucherParseRequest={handleVoucherParseRequest}
                     onDelete={async () => {
                       try { await deleteTourist(t.id); onTouristDeleted(t.id); }
                       catch (e) { setCardError(e.message); }
@@ -262,7 +283,11 @@ function GroupCard({ group, groupId, allTourists, fileCounts, onReload, onFilesC
               </span>
             </div>
             {hotelsExpanded && (
-              <SubgroupHotelsSection subgroupId={group.id} />
+              <SubgroupHotelsSection
+                ref={hotelsRef}
+                subgroupId={group.id}
+                tourists={tourists}
+              />
             )}
           </div>
         </div>
@@ -481,7 +506,7 @@ function GroupsTab({ groupId }) {
 
 // ── SubgroupHotelsSection ─────────────────────────────────────────────────────
 
-function SubgroupHotelsSection({ subgroupId }) {
+const SubgroupHotelsSection = forwardRef(function SubgroupHotelsSection({ subgroupId, tourists = [] }, ref) {
   const [groupHotels, setGroupHotels] = useState([]);
   const [allHotels, setAllHotels] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -489,9 +514,18 @@ function SubgroupHotelsSection({ subgroupId }) {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ hotel_id: '', check_in: '', check_out: '' });
   const [showAddCard, setShowAddCard] = useState(false);
+  const [uploadingVoucher, setUploadingVoucher] = useState(false);
+  const [voucherProgress, setVoucherProgress] = useState(null);
+  const [voucherError, setVoucherError] = useState(null);
+  const voucherInputRef = useRef(null);
   // Remembers the server-confirmed value of a date field at the moment the user
   // focused it, so onBlur can decide whether to persist and what to roll back to.
   const dateEditStartRef = useRef({});
+
+  // Voucher parser writes group_hotels for the subgroup using a tourist as the
+  // upload target (their group_id + subgroup_id scope the inserted rows).
+  // Pick any tourist in this subgroup; if there are none, the button is hidden.
+  const uploadAnchor = tourists[0]?.id || null;
 
   const loadAll = useCallback(async () => {
     try {
@@ -596,11 +630,97 @@ function SubgroupHotelsSection({ subgroupId }) {
     persist(next, prev);
   };
 
+  const handleVoucherUpload = async (files) => {
+    const list = files ? Array.from(files) : [];
+    if (list.length === 0 || !uploadAnchor) return;
+    setUploadingVoucher(true);
+    setVoucherError(null);
+    setVoucherProgress({ done: 0, total: list.length });
+    try {
+      for (let i = 0; i < list.length; i++) {
+        const up = await uploadTouristFile(uploadAnchor, list[i], 'voucher');
+        const res = await parseTouristUpload(uploadAnchor, up.id);
+        if (res?.parse_error) setVoucherError(formatAIError({ message: res.parse_error }));
+        setVoucherProgress({ done: i + 1, total: list.length });
+      }
+      // Reload subgroup hotels — voucher parser inserts rows into group_hotels.
+      await loadAll();
+    } catch (e) {
+      setVoucherError(formatAIError(e));
+    } finally {
+      setUploadingVoucher(false);
+      setVoucherProgress(null);
+    }
+  };
+
+  // Triggered from elsewhere (e.g. tourist's documents modal) — parses
+  // already-uploaded tourist_uploads and refreshes the hotel list.
+  const parseExistingVouchers = async (anchorTouristId, uploadIds) => {
+    if (!anchorTouristId || !Array.isArray(uploadIds) || uploadIds.length === 0) return;
+    setUploadingVoucher(true);
+    setVoucherError(null);
+    setVoucherProgress({ done: 0, total: uploadIds.length });
+    try {
+      for (let i = 0; i < uploadIds.length; i++) {
+        const res = await parseTouristUpload(anchorTouristId, uploadIds[i]);
+        if (res?.parse_error) setVoucherError(formatAIError({ message: res.parse_error }));
+        setVoucherProgress({ done: i + 1, total: uploadIds.length });
+      }
+      await loadAll();
+    } catch (e) {
+      setVoucherError(formatAIError(e));
+    } finally {
+      setUploadingVoucher(false);
+      setVoucherProgress(null);
+    }
+  };
+
+  useImperativeHandle(ref, () => ({
+    parseExisting: parseExistingVouchers,
+  }));
+
   if (loading) return <div className="loading-center"><div className="spinner" /></div>;
 
   return (
     <div>
       {error && <div className="error-message">{error}</div>}
+
+      {/* Voucher upload — parses and auto-fills hotels */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm btn-magic"
+          onClick={() => voucherInputRef.current?.click()}
+          disabled={uploadingVoucher || !uploadAnchor}
+          title={uploadAnchor
+            ? 'Загрузить скан ваучера — отели распознаются автоматически'
+            : 'Сначала добавьте туриста в группу'}
+          aria-label="Заполнить отели из скана ваучера"
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '4px 8px' }}
+        >
+          {uploadingVoucher ? (
+            <>
+              <span className="spinner" />
+              {voucherProgress && voucherProgress.total > 1 && (
+                <span style={{ fontSize: 10, marginLeft: 4, fontVariantNumeric: 'tabular-nums' }}>
+                  {voucherProgress.done}/{voucherProgress.total}
+                </span>
+              )}
+            </>
+          ) : <MagicIcon />}
+        </button>
+        {voucherError && (
+          <span style={{ fontSize: 11, color: 'var(--danger)', whiteSpace: 'pre-wrap' }}>{voucherError}</span>
+        )}
+        <input
+          ref={voucherInputRef}
+          type="file"
+          accept=".pdf,.jpg,.jpeg,.png"
+          multiple
+          style={{ display: 'none' }}
+          onChange={(e) => { handleVoucherUpload(e.target.files); e.target.value = ''; }}
+        />
+      </div>
 
       {/* Hotel list (from AI / manually added) */}
       {groupHotels.length > 0 && (
@@ -661,7 +781,7 @@ function SubgroupHotelsSection({ subgroupId }) {
                 }}
                 onMouseEnter={e => { if (saving) return; e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
                 onMouseLeave={e => { if (saving) return; e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
-              ><TrashIcon /></button>
+              ><CrossIcon /></button>
             </div>
           ))}
         </div>
@@ -725,7 +845,7 @@ function SubgroupHotelsSection({ subgroupId }) {
       )}
     </div>
   );
-}
+});
 
 // ── DocumentsTab ──────────────────────────────────────────────────────────────
 
@@ -831,7 +951,7 @@ function SubgroupDocsRow({ subgroup }) {
       setHasZip(true);
       setJustRegenerated(true);
     } catch (e) {
-      setError(e.message);
+      setError(formatAIError(e));
     } finally {
       setGenerating(false);
     }
@@ -852,24 +972,25 @@ function SubgroupDocsRow({ subgroup }) {
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--white)' }}>{subgroup.name}</div>
           {hasZip && generatedAt && (
-            <div style={{ fontSize: 11, color: 'var(--white-dim)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span>Сгенерировано: {formatDate(generatedAt)}</span>
-              {justRegenerated && <JustRegeneratedBadge />}
+            <div style={{ fontSize: 11, color: 'var(--white-dim)', marginTop: 3 }}>
+              Сгенерировано: {formatDate(generatedAt)}
             </div>
           )}
           {error && (
             <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 3 }}>{error}</div>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {justRegenerated && <JustRegeneratedBadge />}
           <button
-            className="btn btn-primary btn-sm"
+            className="btn btn-sm btn-magic"
             onClick={handleGenerate}
             disabled={generating}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
           >
             {generating
               ? <><span className="spinner" /> Генерация...</>
-              : hasZip ? 'Перегенерировать' : 'Сгенерировать'}
+              : <><MagicIcon /> {hasZip ? 'Перегенерировать' : 'Сгенерировать'}</>}
           </button>
           {hasZip && (
             <a
@@ -963,7 +1084,7 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
       setFinalGeneratedAt(res?.generated_at || new Date().toISOString());
       setFinalJustRegenerated(true);
     } catch (e) {
-      setFinalError(e.message);
+      setFinalError(formatAIError(e));
     } finally {
       setFinalizing(false);
     }
@@ -1028,15 +1149,17 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
               style={{ fontSize: 13, padding: '6px 10px', height: 32 }}
             />
           </label>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {finalJustRegenerated && <JustRegeneratedBadge />}
             <button
-              className="btn btn-primary btn-sm"
+              className="btn btn-sm btn-magic"
               onClick={handleFinalize}
               disabled={finalizing}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
             >
               {finalizing
                 ? <><span className="spinner" /> Генерация...</>
-                : finalHasZip ? 'Перегенерировать' : 'Сгенерировать'}
+                : <><MagicIcon /> {finalHasZip ? 'Перегенерировать' : 'Сгенерировать'}</>}
             </button>
             {finalHasZip && (
               <a
@@ -1053,9 +1176,8 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
           </div>
         </div>
         {finalHasZip && finalGeneratedAt && (
-          <div style={{ fontSize: 11, color: 'var(--white-dim)', marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span>Сгенерировано: {formatDate(finalGeneratedAt)}</span>
-            {finalJustRegenerated && <JustRegeneratedBadge />}
+          <div style={{ fontSize: 11, color: 'var(--white-dim)', marginTop: 8 }}>
+            Сгенерировано: {formatDate(finalGeneratedAt)}
           </div>
         )}
       </div>
@@ -1143,7 +1265,228 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
 
 // ── SettingsTab ───────────────────────────────────────────────────────────────
 
-function SettingsTab({ group, onDeleted, onGroupUpdated }) {
+// SubgroupsManager — list of all subgroups inside the current submission
+// with inline rename + delete. Lives on the Settings tab so that destructive
+// actions are tucked away from the main "Группы" working view.
+function SubgroupsManager({ groupId }) {
+  const [subgroups, setSubgroups] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [busyId, setBusyId] = useState(null);
+  const [confirmTarget, setConfirmTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await getSubgroups(groupId);
+      setSubgroups(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [groupId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const startEdit = (sg) => {
+    setEditingId(sg.id);
+    setEditName(sg.name);
+  };
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditName('');
+  };
+  const saveEdit = async (sg) => {
+    const trimmed = editName.trim();
+    if (!trimmed || trimmed === sg.name) { cancelEdit(); return; }
+    setBusyId(sg.id);
+    setError(null);
+    try {
+      await updateSubgroup(sg.id, trimmed);
+      setSubgroups(prev => prev.map(s => s.id === sg.id ? { ...s, name: trimmed } : s));
+      cancelEdit();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const requestDelete = (sg) => setConfirmTarget(sg);
+  const confirmDelete = async () => {
+    if (!confirmTarget) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteSubgroup(confirmTarget.id);
+      setSubgroups(prev => prev.filter(s => s.id !== confirmTarget.id));
+      setConfirmTarget(null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <div style={{
+      marginBottom: 18,
+      padding: '14px 16px',
+      background: 'var(--graphite)',
+      border: '1px solid var(--border)',
+      borderRadius: 8,
+    }}>
+      <div style={{
+        fontFamily: 'var(--font-mono)',
+        fontSize: 10,
+        letterSpacing: '0.05em',
+        textTransform: 'uppercase',
+        color: 'var(--white-dim)',
+        marginBottom: 10,
+      }}>
+        Группы внутри подачи
+      </div>
+
+      {error && <div className="error-message" style={{ marginBottom: 10 }}>{error}</div>}
+
+      {loading ? (
+        <div style={{ fontSize: 12, color: 'var(--white-dim)' }}>Загрузка…</div>
+      ) : subgroups.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--white-dim)' }}>В этой подаче пока нет групп.</div>
+      ) : (
+        <div style={{
+          border: '1px solid var(--border)',
+          borderRadius: 6,
+          overflow: 'hidden',
+          background: 'var(--gray-dark)',
+        }}>
+          {subgroups.map((sg, i) => (
+            <div
+              key={sg.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '10px 12px',
+                borderTop: i === 0 ? 'none' : '1px solid var(--border)',
+              }}
+            >
+              {editingId === sg.id ? (
+                <>
+                  <input
+                    className="form-input"
+                    style={{ flex: 1, fontSize: 13, padding: '4px 8px' }}
+                    value={editName}
+                    onChange={e => setEditName(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') saveEdit(sg);
+                      if (e.key === 'Escape') cancelEdit();
+                    }}
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => saveEdit(sg)}
+                    disabled={busyId === sg.id || !editName.trim()}
+                  >
+                    {busyId === sg.id ? <span className="spinner" /> : 'OK'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={cancelEdit}
+                    disabled={busyId === sg.id}
+                  >
+                    Отмена
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span style={{ flex: 1, fontSize: 13, color: 'var(--white)' }}>{sg.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => startEdit(sg)}
+                    title="Переименовать"
+                    aria-label="Переименовать"
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'var(--white-dim)',
+                      fontSize: 14,
+                      padding: '4px 6px',
+                      borderRadius: 4,
+                      transition: 'color 0.15s, background 0.15s',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
+                  >✎</button>
+                  <button
+                    type="button"
+                    onClick={() => requestDelete(sg)}
+                    title="Удалить группу"
+                    aria-label="Удалить группу"
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'var(--white-dim)',
+                      lineHeight: 1,
+                      padding: '4px 6px',
+                      borderRadius: 4,
+                      transition: 'color 0.15s, background 0.15s',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.color = 'var(--white)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = 'var(--white-dim)'; e.currentTarget.style.background = 'none'; }}
+                  ><TrashIcon /></button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Modal
+        open={!!confirmTarget}
+        onClose={() => !deleting && setConfirmTarget(null)}
+        title="Удалить группу?"
+        width={440}
+      >
+        <div style={{ fontSize: 13, color: 'var(--white)', marginBottom: 16, lineHeight: 1.5 }}>
+          Удалить группу <strong>«{confirmTarget?.name}»</strong>? Туристы останутся в подаче без группы.
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setConfirmTarget(null)}
+            disabled={deleting}
+          >
+            Отмена
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={confirmDelete}
+            disabled={deleting}
+          >
+            {deleting ? <><span className="spinner" /> Удаление…</> : 'Удалить'}
+          </button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+function SettingsTab({ group, groupId, onDeleted, onGroupUpdated }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState(null);
@@ -1266,6 +1609,8 @@ function SettingsTab({ group, onDeleted, onGroupUpdated }) {
           {formatDate(group?.created_at)}
         </span>
       </div>
+
+      {groupId && <SubgroupsManager groupId={groupId} />}
 
       <button
         type="button"
@@ -1402,6 +1747,7 @@ export default function GroupDetailPage() {
       {activeTab === 'settings' && (
         <SettingsTab
           group={group}
+          groupId={id}
           onDeleted={() => navigate('/')}
           onGroupUpdated={setGroup}
         />
