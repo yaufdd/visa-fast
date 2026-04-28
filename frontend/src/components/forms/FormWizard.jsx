@@ -81,6 +81,13 @@ const ALL_FIELDS = [
   'name_cyr', 'name_lat', 'gender_ru', 'birth_date', 'marital_status_ru',
   'place_of_birth_ru', 'nationality_ru', 'nationality_choice',
   'former_nationality_ru', 'former_nationality_choice',
+  // _former_nat_user_set — UI-only flag (leading underscore signals
+  // "transient, ignored by the backend"). Tracks whether the tourist
+  // has explicitly picked the former-nationality dropdown so the
+  // birth_date auto-fill in PersonalStep stops overriding their
+  // choice. Persisted in the localStorage draft + DB JSONB roundtrip
+  // so the override survives reloads.
+  '_former_nat_user_set',
   'had_other_name', 'maiden_name_ru',
   'passport_number', 'passport_type_ru', 'issue_date', 'expiry_date', 'issued_by_ru',
   'internal_series', 'internal_number', 'internal_issued_ru', 'internal_issued_by_ru',
@@ -137,7 +144,13 @@ export default function FormWizard({
   const initialState = useMemo(() => {
     const base = {};
     for (const name of ALL_FIELDS) {
-      base[name] = SELECT_DEFAULTS[name] ?? (name === 'same_address' ? false : '');
+      if (name === 'same_address') {
+        base[name] = false;
+      } else if (name === '_former_nat_user_set') {
+        base[name] = false;
+      } else {
+        base[name] = SELECT_DEFAULTS[name] ?? '';
+      }
     }
     // Schema drift: defaults fill missing keys, restored blob wins for
     // known keys, unknown keys from a future schema just ride along —
@@ -201,6 +214,17 @@ export default function FormWizard({
       } else {
         merged.former_nationality_choice = 'other';
       }
+    }
+    // Restore rule for _former_nat_user_set: any non-empty saved
+    // former_nationality_ru means a previous explicit choice was made
+    // (by the tourist or a manager editing their submission). Seed the
+    // flag so PersonalStep's birth_date watcher doesn't auto-override
+    // on first mount. The empty-string and the literal "" cases are
+    // also fine — those leave the watcher free to suggest СССР if the
+    // birth date warrants it.
+    if (!merged._former_nat_user_set
+        && String(merged.former_nationality_ru || '').trim() !== '') {
+      merged._former_nat_user_set = true;
     }
     return merged;
   }, [initialPayload, restoredBlob]);

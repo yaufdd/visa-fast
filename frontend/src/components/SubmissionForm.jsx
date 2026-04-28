@@ -51,6 +51,11 @@ const ALL_FIELDS = [
   'name_cyr', 'name_lat', 'gender_ru', 'birth_date', 'marital_status_ru',
   'place_of_birth_ru', 'nationality_ru', 'nationality_choice',
   'former_nationality_ru', 'former_nationality_choice',
+  // _former_nat_user_set — UI-only flag mirroring FormWizard. Tracks
+  // whether the user has explicitly picked the former-nationality
+  // dropdown so the birth_date auto-fill below stops overriding their
+  // choice. Backend ignores keys with a leading underscore.
+  '_former_nat_user_set',
   'had_other_name', 'maiden_name_ru',
   'passport_number', 'passport_type_ru', 'issue_date', 'expiry_date', 'issued_by_ru',
   'internal_series', 'internal_number', 'internal_issued_ru', 'internal_issued_by_ru',
@@ -352,6 +357,14 @@ export default function SubmissionForm({
         merged.former_nationality_choice = 'other';
       }
     }
+    // Same _former_nat_user_set seeding rule as FormWizard — any
+    // non-empty saved former_nationality_ru means a previous explicit
+    // choice; block the birth_date auto-override on first mount so the
+    // saved value stands.
+    if (!merged._former_nat_user_set
+        && String(merged.former_nationality_ru || '').trim() !== '') {
+      merged._former_nat_user_set = true;
+    }
     return merged;
   }, [initialPayload]);
 
@@ -450,6 +463,33 @@ export default function SubmissionForm({
     const t = setTimeout(() => setAutoFillNotice(''), 4000);
     return () => clearTimeout(t);
   }, [autoFillNotice]);
+
+  // Birth-date → former-nationality auto-fill suggestion. Mirrors the
+  // logic in PersonalStep so the wizard and the legacy flat form behave
+  // identically. Tourists born on or before 25.12.1991 (last day USSR
+  // existed) get "СССР" pre-selected; later dates get "Нет". Only acts
+  // while _former_nat_user_set is false — once the user picks the
+  // dropdown manually, or a saved submission with a non-empty
+  // former_nationality_ru is restored, the flag flips and we never
+  // override their choice again.
+  useEffect(() => {
+    if (payload._former_nat_user_set) return;
+    const dmy = String(payload.birth_date || '').trim();
+    if (!dmy) return;
+    const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(dmy);
+    if (!m) return;
+    const t = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+    const cutoff = new Date(1991, 11, 25, 23, 59, 59); // 25.12.1991
+    const suggested = t <= cutoff ? 'СССР' : 'Нет';
+    if (payload.former_nationality_choice !== suggested) {
+      setPayload((p) => ({
+        ...p,
+        former_nationality_choice: suggested,
+        former_nationality_ru: suggested,
+      }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payload.birth_date, payload._former_nat_user_set]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -818,8 +858,11 @@ export default function SubmissionForm({
           value={payload.former_nationality_choice ?? 'Нет'}
           onChange={(e) => {
             const next = e.target.value;
+            // Mark the choice as user-driven so the birth_date watcher
+            // above stops overriding it on subsequent edits.
             setPayload((p) => ({
               ...p,
+              _former_nat_user_set: true,
               former_nationality_choice: next,
               former_nationality_ru: next === 'other' ? '' : next,
             }));

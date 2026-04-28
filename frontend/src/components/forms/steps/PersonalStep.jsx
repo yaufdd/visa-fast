@@ -7,6 +7,7 @@
 // intentional (one file per step). The HMR-only rule below objects to
 // the mixed export — overriding it is the lighter trade-off.
 
+import { useEffect } from 'react';
 import { ruToLatICAO } from '../../../utils/translit';
 import { makeFieldFactories, sanitizeLatin } from '../fieldFactories';
 
@@ -40,12 +41,15 @@ export default function PersonalStep({ payload, setField, errors }) {
 
   // Former nationality dropdown — same shape as nationality. Anything other
   // than 'other' syncs verbatim to former_nationality_ru. Picking 'other'
-  // clears the field so the user types a country name. Note:
-  // ComputeFormerNationality on the backend recognises only "СССР" /
-  // "Soviet" / "USSR" patterns — anything else falls through to the
-  // place-of-birth fallback or "NO". That is accepted; the form just
-  // collects what the user types.
+  // clears the field so the user types a country name. The backend's
+  // ComputeFormerNationality respects whatever the form sends (СССР /
+  // Soviet / USSR → "USSR", everything else → "NO"); the birth-date
+  // suggestion lives below as a reversible auto-fill.
+  //
+  // Setting _former_ nat_user_set marks the choice as user-driven so the
+  // birth_date watcher below stops overriding it.
   const handleFormerNationalityChoice = (next) => {
+    setField('_former_nat_user_set', true);
     setField('former_nationality_choice', next);
     if (next !== 'other') {
       setField('former_nationality_ru', next);
@@ -53,6 +57,31 @@ export default function PersonalStep({ payload, setField, errors }) {
       setField('former_nationality_ru', '');
     }
   };
+
+  // Auto-fill suggestion: tourists born on or before 25.12.1991 (the day
+  // the USSR was formally dissolved) get "СССР" pre-selected; later dates
+  // get "Нет". The watcher only acts while _former_nat_user_set is false
+  // — the moment the user picks the dropdown manually (or restores a
+  // saved submission, see FormWizard initialState) the flag flips and we
+  // never override their choice again.
+  useEffect(() => {
+    if (payload._former_nat_user_set) return;
+    const dmy = String(payload.birth_date || '').trim();
+    if (!dmy) return;
+    const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(dmy);
+    if (!m) return;
+    const t = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+    const cutoff = new Date(1991, 11, 25, 23, 59, 59); // 25.12.1991
+    const suggested = t <= cutoff ? 'СССР' : 'Нет';
+    if (payload.former_nationality_choice !== suggested) {
+      setField('former_nationality_choice', suggested);
+      setField('former_nationality_ru', suggested);
+    }
+    // setField is stable enough across renders for this purpose; we
+    // intentionally do not depend on it to avoid re-running on every
+    // keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payload.birth_date, payload._former_nat_user_set]);
 
   // handleCyrChange — preserves the existing one-way ICAO transliteration
   // from name_cyr → name_lat (only fires if the user is typing in Cyrillic;
