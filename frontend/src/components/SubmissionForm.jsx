@@ -350,9 +350,14 @@ export default function SubmissionForm({
     // exactly "Нет" / "СССР" land on "Другое" so the saved string survives.
     if (!merged.former_nationality_choice) {
       const ru = String(merged.former_nationality_ru || '').trim();
-      if (ru === 'Нет' || ru === '') {
+      if (ru === 'Нет') {
         merged.former_nationality_choice = 'Нет';
-        merged.former_nationality_ru = 'Нет';
+      } else if (ru === '') {
+        // Empty → fresh form. UI shows "Нет" via `?? 'Нет'` fallback
+        // but former_nationality_ru stays empty so the birth_date
+        // watcher below can auto-suggest without tripping the
+        // _former_nat_user_set guard.
+        merged.former_nationality_choice = 'Нет';
       } else if (ru === 'СССР') {
         merged.former_nationality_choice = 'СССР';
       } else {

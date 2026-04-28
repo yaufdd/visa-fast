@@ -77,7 +77,7 @@ dev-frontend:
 deploy:
 	git pull
 	$(COMPOSE) up -d --build
-	$(COMPOSE) ps
+	$(COMPOSE) >1
 
 clean:
 	$(COMPOSE) down -v

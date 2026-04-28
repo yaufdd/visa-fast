@@ -204,9 +204,14 @@ export default function FormWizard({
     // falls through to its place-of-birth fallback.
     if (!merged.former_nationality_choice) {
       const ru = String(merged.former_nationality_ru || '').trim();
-      if (ru === 'Нет' || ru === '') {
+      if (ru === 'Нет') {
         merged.former_nationality_choice = 'Нет';
-        merged.former_nationality_ru = 'Нет';
+      } else if (ru === '') {
+        // Empty → fresh form. Show "Нет" in the dropdown via the JSX's
+        // `?? 'Нет'` fallback but leave former_nationality_ru EMPTY so
+        // PersonalStep's birth_date watcher can suggest "СССР"/"Нет"
+        // without tripping the _former_nat_user_set guard below.
+        merged.former_nationality_choice = 'Нет';
       } else if (ru === 'СССР') {
         merged.former_nationality_choice = 'СССР';
       } else {
