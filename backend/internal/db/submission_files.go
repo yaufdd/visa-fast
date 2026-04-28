@@ -55,6 +55,23 @@ func InsertOrReplaceSubmissionFile(ctx context.Context, pool *pgxpool.Pool, f Su
 	return id, oldPath, oldPath != "", nil
 }
 
+// InsertSubmissionFile inserts a fresh submission_files row without any
+// conflict handling. Use for file_types that allow multiple rows per
+// submission (ticket / voucher post-migration 000023). The caller must
+// supply a unique file_path — typically built via storage.BuildSubmission
+// MultiFilePath with a random suffix.
+func InsertSubmissionFile(ctx context.Context, pool *pgxpool.Pool, f SubmissionFile) (string, error) {
+	var id string
+	err := pool.QueryRow(ctx,
+		`INSERT INTO submission_files
+		   (org_id, submission_id, file_type, file_path, original_name, mime_type, size_bytes)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING id`,
+		f.OrgID, f.SubmissionID, f.FileType, f.FilePath, f.OriginalName, f.MIMEType, f.SizeBytes,
+	).Scan(&id)
+	return id, err
+}
+
 // ListSubmissionFiles returns all files for a submission within the org.
 // Empty slice (not nil error) when none.
 func ListSubmissionFiles(ctx context.Context, pool *pgxpool.Pool, orgID, submissionID string) ([]SubmissionFile, error) {

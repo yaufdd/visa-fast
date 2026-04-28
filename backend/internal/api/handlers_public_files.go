@@ -35,6 +35,27 @@ var allowedSubmissionFileTypes = map[string]bool{
 	"voucher":           true,
 }
 
+// multiFileTypes are the file_type values that allow MULTIPLE rows per
+// submission (a tourist may upload several tickets / vouchers for the
+// same trip). Passport types are excluded — they keep the
+// "one row per (submission, type)" upsert semantics so a re-upload
+// replaces the previous scan.
+var multiFileTypes = map[string]bool{
+	"ticket":  true,
+	"voucher": true,
+}
+
+// randomFileSuffix returns 8 hex chars used to disambiguate filenames
+// when multiple files of the same file_type live next to each other on
+// disk under <uploadsDir>/<org>/submissions/<id>/.
+func randomFileSuffix() (string, error) {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
 // resolveDraftSubmission looks up a draft submission by id, scoped to the
 // org behind the slug. Returns (orgID, submission, found). If found is
 // false, the caller should respond 404 — the row may not exist, may belong
@@ -225,7 +246,23 @@ func PublicUploadSubmissionFile(pool *pgxpool.Pool, uploadsDir string) http.Hand
 					return
 				}
 
-				finalPath, err = storage.BuildSubmissionFilePath(uploadsDir, orgID, submissionID, fileType, origFilename, sniffedMime)
+				// Path policy by file_type: passports collide on
+				// (submission, type) so the path stays "<type><ext>"
+				// and the row is upserted. Tickets / vouchers stack —
+				// each new upload gets a random suffix so files don't
+				// trample each other and the row is plain INSERT.
+				if multiFileTypes[fileType] {
+					suffix, sErr := randomFileSuffix()
+					if sErr != nil {
+						part.Close()
+						slog.Error("random file suffix", "err", sErr)
+						writeError(w, http.StatusInternalServerError, "internal error")
+						return
+					}
+					finalPath, err = storage.BuildSubmissionMultiFilePath(uploadsDir, orgID, submissionID, fileType, suffix, origFilename, sniffedMime)
+				} else {
+					finalPath, err = storage.BuildSubmissionFilePath(uploadsDir, orgID, submissionID, fileType, origFilename, sniffedMime)
+				}
 				if err != nil {
 					part.Close()
 					slog.Error("build submission file path", "err", err)
@@ -332,7 +369,16 @@ func PublicUploadSubmissionFile(pool *pgxpool.Pool, uploadsDir string) http.Hand
 			MIMEType:     sniffedMime,
 			SizeBytes:    sizeBytes,
 		}
-		id, oldPath, replaced, err := db.InsertOrReplaceSubmissionFile(r.Context(), pool, row)
+		var (
+			id       string
+			oldPath  string
+			replaced bool
+		)
+		if multiFileTypes[fileType] {
+			id, err = db.InsertSubmissionFile(r.Context(), pool, row)
+		} else {
+			id, oldPath, replaced, err = db.InsertOrReplaceSubmissionFile(r.Context(), pool, row)
+		}
 		if err != nil {
 			slog.Error("insert submission file", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")

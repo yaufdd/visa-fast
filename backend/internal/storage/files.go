@@ -140,6 +140,34 @@ func BuildSubmissionFilePath(uploadsDir, orgID, submissionID, fileType, original
 	return filepath.Join(dir, fileType+extForSubmissionFile(originalFilename, mime)), nil
 }
 
+// BuildSubmissionMultiFilePath returns the canonical on-disk path for a
+// submission scan that allows multiple rows per file_type (ticket/voucher).
+// A short caller-supplied suffix is interpolated into the filename so two
+// concurrent uploads don't trample each other.
+//
+// Layout:
+//
+//	<uploadsDir>/<orgID>/submissions/<submissionID>/<fileType>_<suffix><ext>
+//
+// suffix must satisfy validSubmissionPathComponent (alphanumeric / - / _).
+// Pass-through validation mirrors BuildSubmissionFilePath.
+func BuildSubmissionMultiFilePath(uploadsDir, orgID, submissionID, fileType, suffix, originalFilename, mime string) (string, error) {
+	if !validSubmissionPathComponent(orgID) {
+		return "", fmt.Errorf("invalid org_id: %q", orgID)
+	}
+	if !validSubmissionPathComponent(submissionID) {
+		return "", fmt.Errorf("invalid submission_id: %q", submissionID)
+	}
+	if !validSubmissionPathComponent(fileType) {
+		return "", fmt.Errorf("invalid file_type: %q", fileType)
+	}
+	if !validSubmissionPathComponent(suffix) {
+		return "", fmt.Errorf("invalid suffix: %q", suffix)
+	}
+	dir := filepath.Join(uploadsDir, orgID, "submissions", submissionID)
+	return filepath.Join(dir, fileType+"_"+suffix+extForSubmissionFile(originalFilename, mime)), nil
+}
+
 // SaveSubmissionFile saves a tourist-uploaded scan associated with a public
 // draft submission. Thin wrapper around BuildSubmissionFilePath + an
 // in-memory write. Only kept for callers that already have the bytes in

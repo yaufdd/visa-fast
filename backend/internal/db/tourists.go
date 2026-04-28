@@ -22,6 +22,28 @@ type Tourist struct {
 	UpdatedAt          time.Time       `json:"updated_at"`
 }
 
+// GetTouristByID returns a single tourist scoped to the org. Returns
+// pgx.ErrNoRows when the tourist doesn't exist or belongs to another org —
+// callers should map that to 404 (never 403, to prevent ID enumeration).
+func GetTouristByID(ctx context.Context, pool *pgxpool.Pool, orgID, id string) (*Tourist, error) {
+	var t Tourist
+	var snap, flight, tr []byte
+	err := pool.QueryRow(ctx,
+		`SELECT id, group_id, subgroup_id, submission_id, submission_snapshot,
+		        flight_data, translations, created_at, updated_at
+		   FROM tourists
+		  WHERE id = $1 AND org_id = $2`, id, orgID).
+		Scan(&t.ID, &t.GroupID, &t.SubgroupID, &t.SubmissionID,
+			&snap, &flight, &tr, &t.CreatedAt, &t.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	t.SubmissionSnapshot = snap
+	t.FlightData = flight
+	t.Translations = tr
+	return &t, nil
+}
+
 func ListTouristsByGroup(ctx context.Context, pool *pgxpool.Pool, orgID, groupID string) ([]Tourist, error) {
 	rows, err := pool.Query(ctx,
 		`SELECT id, group_id, subgroup_id, submission_id, submission_snapshot,

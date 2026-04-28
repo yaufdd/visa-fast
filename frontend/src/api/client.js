@@ -83,6 +83,12 @@ export async function deleteTourist(touristId) {
   if (!res.ok) throw await errFromRes(res);
 }
 
+export async function getTourist(touristId) {
+  const res = await apiFetch(`/tourists/${touristId}`);
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
 // Per-tourist uploads (ticket | voucher). Two-step flow:
 //   1. uploadTouristFile — saves + redacts the scan, does NOT run AI.
 //   2. parseTouristUpload — runs the AI parser on a previously uploaded row.

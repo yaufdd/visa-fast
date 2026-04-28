@@ -26,22 +26,35 @@ const STATUS_LABELS = {
 };
 
 // Bucket the flat array returned by GET /submissions/{id}/files into the
-// {passport_internal, passport_foreign, ticket, voucher} shape the wizard
-// keeps in state. Each bucket holds the LATEST file for that type — the
-// upload endpoint replaces in place, so there is at most one row per
-// (submission, file_type) anyway.
+// shape the wizard keeps in state. Passports are single objects (one per
+// type, replace-on-upload). Tickets and vouchers are arrays — multiple
+// files per submission are allowed since migration 000023.
 function bucketFilesByType(arr) {
   const out = {
     passport_internal: null,
     passport_foreign: null,
-    ticket: null,
-    voucher: null,
+    ticket: [],
+    voucher: [],
   };
   if (!Array.isArray(arr)) return out;
   for (const f of arr) {
-    if (f && f.file_type && Object.prototype.hasOwnProperty.call(out, f.file_type)) {
+    if (!f || !f.file_type) continue;
+    if (f.file_type === 'passport_internal' || f.file_type === 'passport_foreign') {
       out[f.file_type] = f;
+    } else if (f.file_type === 'ticket' || f.file_type === 'voucher') {
+      out[f.file_type].push(f);
     }
+  }
+  // Stable order: oldest first so newly added files appear at the bottom
+  // of the wizard's list (matches upload order from the tourist).
+  for (const k of ['ticket', 'voucher']) {
+    out[k].sort((a, b) => {
+      const av = a.created_at || '';
+      const bv = b.created_at || '';
+      if (av < bv) return -1;
+      if (av > bv) return 1;
+      return 0;
+    });
   }
   return out;
 }

@@ -129,7 +129,18 @@ func UploadSubmissionFile(pool *pgxpool.Pool, uploadsDir string) http.HandlerFun
 					return
 				}
 
-				finalPath, err = storage.BuildSubmissionFilePath(uploadsDir, orgID, submissionID, fileType, origFilename, sniffedMime)
+				if multiFileTypes[fileType] {
+					suffix, sErr := randomFileSuffix()
+					if sErr != nil {
+						part.Close()
+						slog.Error("random file suffix", "err", sErr)
+						writeError(w, http.StatusInternalServerError, "internal error")
+						return
+					}
+					finalPath, err = storage.BuildSubmissionMultiFilePath(uploadsDir, orgID, submissionID, fileType, suffix, origFilename, sniffedMime)
+				} else {
+					finalPath, err = storage.BuildSubmissionFilePath(uploadsDir, orgID, submissionID, fileType, origFilename, sniffedMime)
+				}
 				if err != nil {
 					part.Close()
 					slog.Error("build submission file path", "err", err)
@@ -215,7 +226,16 @@ func UploadSubmissionFile(pool *pgxpool.Pool, uploadsDir string) http.HandlerFun
 			MIMEType:     sniffedMime,
 			SizeBytes:    sizeBytes,
 		}
-		id, oldPath, replaced, err := db.InsertOrReplaceSubmissionFile(r.Context(), pool, row)
+		var (
+			id       string
+			oldPath  string
+			replaced bool
+		)
+		if multiFileTypes[fileType] {
+			id, err = db.InsertSubmissionFile(r.Context(), pool, row)
+		} else {
+			id, oldPath, replaced, err = db.InsertOrReplaceSubmissionFile(r.Context(), pool, row)
+		}
 		if err != nil {
 			slog.Error("insert submission file", "err", err)
 			writeError(w, http.StatusInternalServerError, "database error")

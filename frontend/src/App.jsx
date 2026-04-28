@@ -11,6 +11,7 @@ import HotelEditPage from './pages/HotelEditPage';
 import TemplatesPage from './pages/TemplatesPage';
 import SubmissionsListPage from './pages/SubmissionsListPage';
 import SubmissionDetailPage from './pages/SubmissionDetailPage';
+import TouristDetailPage from './pages/TouristDetailPage';
 import SubmissionFormPage from './pages/SubmissionFormPage';
 import FormThanksPage from './pages/FormThanksPage';
 import ConsentPage from './pages/ConsentPage';
@@ -74,6 +75,7 @@ function AdminRoutes() {
         <Route path="/templates" element={<TemplatesPage />} />
         <Route path="/submissions" element={<SubmissionsListPage />} />
         <Route path="/submissions/:id" element={<SubmissionDetailPage />} />
+        <Route path="/tourists/:id" element={<TouristDetailPage />} />
       </Routes>
     </AdminShell>
   );

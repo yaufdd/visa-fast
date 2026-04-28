@@ -122,6 +122,7 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 
 			// Tourists
 			r.Get("/groups/{id}/tourists", api.ListTourists(pool))
+			r.Get("/tourists/{id}", api.GetTourist(pool))
 			r.Delete("/tourists/{id}", api.DeleteTourist(pool))
 
 			// Per-tourist uploads
@@ -158,7 +159,7 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 			r.Put("/submissions/{id}", api.UpdateSubmission(pool))
 			r.Delete("/submissions/{id}", api.ArchiveSubmission(pool))
 			r.Delete("/submissions/{id}/erase", api.EraseSubmission(pool))
-			r.Post("/submissions/{id}/attach", api.AttachSubmission(pool))
+			r.Post("/submissions/{id}/attach", api.AttachSubmission(pool, uploadsDir))
 
 			// Manager view of files a tourist attached via the public form.
 			r.Get("/submissions/{id}/files", api.ListSubmissionFiles(pool))

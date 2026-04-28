@@ -1,8 +1,6 @@
-// StepSidebar — left rail listing the 7 wizard steps.
-//   - current step → highlighted (accent border + bold)
-//   - past steps → marked complete with a check; clickable to jump back
-//   - future steps → visually disabled, NOT clickable
-// Also renders a thin progress bar with "X из 7" label below the list.
+// StepSidebar — left rail listing the 7 wizard steps. Every step is
+// clickable; the user can jump to any section at any time. Sections
+// look identical except for the currently-active one.
 
 export default function StepSidebar({ steps, currentStep, onJump }) {
   const total = steps.length;
@@ -14,19 +12,12 @@ export default function StepSidebar({ steps, currentStep, onJump }) {
 
       {steps.map((step, i) => {
         const isActive = i === currentStep;
-        const isDone = i < currentStep;
-        const isFuture = i > currentStep;
-        const clickable = isDone; // only past steps are clickable
+        const clickable = !isActive;
         const cls = [
           'fw-step',
           isActive ? 'is-active' : '',
-          isDone ? 'is-done' : '',
-          isFuture ? 'is-future' : '',
           clickable ? 'is-clickable' : '',
         ].filter(Boolean).join(' ');
-
-        // Marker shows the step number normally, a check (✓) when done.
-        const marker = isDone ? '✓' : String(i + 1);
 
         return (
           <button
@@ -34,10 +25,9 @@ export default function StepSidebar({ steps, currentStep, onJump }) {
             key={step.id}
             className={cls}
             onClick={() => clickable && onJump(i)}
-            disabled={!clickable && !isActive}
             aria-current={isActive ? 'step' : undefined}
           >
-            <span className="fw-step-marker" aria-hidden="true">{marker}</span>
+            <span className="fw-step-marker" aria-hidden="true">{i + 1}</span>
             <span className="fw-step-label">{step.label}</span>
           </button>
         );

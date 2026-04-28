@@ -237,19 +237,27 @@ export default function FormWizard({
     const empty = {
       passport_internal: null,
       passport_foreign: null,
-      ticket: null,
-      voucher: null,
+      ticket: [],
+      voucher: [],
     };
     // Server-provided seeds (admin edit mode) take precedence over
     // localStorage. In public mode initialFiles is usually null and the
     // restoredBlob path runs.
     const seed = initialFiles || restoredBlob?.files || null;
     if (!seed) return empty;
+    // Backwards compat: ticket/voucher used to be single objects (one per
+    // submission). After 000023 they are arrays of metadata. Promote any
+    // legacy single-object seed into a one-element array.
+    const toArr = (v) => {
+      if (!v) return [];
+      if (Array.isArray(v)) return v;
+      return [v];
+    };
     return {
       passport_internal: seed.passport_internal ?? null,
       passport_foreign: seed.passport_foreign ?? null,
-      ticket: seed.ticket ?? null,
-      voucher: seed.voucher ?? null,
+      ticket: toArr(seed.ticket),
+      voucher: toArr(seed.voucher),
     };
   });
   const [currentStep, setCurrentStep] = useState(() => {
@@ -354,8 +362,8 @@ export default function FormWizard({
     setFiles({
       passport_internal: null,
       passport_foreign: null,
-      ticket: null,
-      voucher: null,
+      ticket: [],
+      voucher: [],
     });
     setCurrentStep(0);
     setErrors({});
@@ -410,7 +418,7 @@ export default function FormWizard({
   };
 
   const handleJump = (i) => {
-    if (i >= currentStep) return;
+    if (i === currentStep) return;
     setApiError('');
     setErrors({});
     setCurrentStep(i);

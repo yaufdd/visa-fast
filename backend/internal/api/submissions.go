@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -13,7 +14,62 @@ import (
 	"fujitravel-admin/backend/internal/consent"
 	"fujitravel-admin/backend/internal/db"
 	"fujitravel-admin/backend/internal/middleware"
+	"fujitravel-admin/backend/internal/storage"
 )
+
+// copyAttachedSubmissionDocs duplicates ticket/voucher rows from submission_files
+// into the tourist-level uploads table after a submission is attached. Bytes
+// are physically copied so each tourist owns its own file (independent of the
+// submission's lifecycle: archive/erase/replace won't strip docs from an
+// already-attached tourist). Best-effort — errors are logged but the attach
+// still succeeds.
+func copyAttachedSubmissionDocs(ctx context.Context, pool *pgxpool.Pool, uploadsDir, orgID, submissionID, touristID, groupID string) {
+	rows, err := pool.Query(ctx,
+		`SELECT file_type, file_path, original_name
+		   FROM submission_files
+		  WHERE submission_id = $1 AND org_id = $2
+		    AND file_type IN ('ticket','voucher')`,
+		submissionID, orgID,
+	)
+	if err != nil {
+		slog.Warn("copy submission docs: query", "submission_id", submissionID, "err", err)
+		return
+	}
+	defer rows.Close()
+
+	type item struct{ fileType, filePath, originalName string }
+	var items []item
+	for rows.Next() {
+		var it item
+		if err := rows.Scan(&it.fileType, &it.filePath, &it.originalName); err != nil {
+			slog.Warn("copy submission docs: scan", "err", err)
+			return
+		}
+		items = append(items, it)
+	}
+	rows.Close()
+
+	for _, it := range items {
+		data, err := storage.ReadFile(it.filePath)
+		if err != nil {
+			slog.Warn("copy submission docs: read",
+				"submission_id", submissionID, "file_type", it.fileType, "err", err)
+			continue
+		}
+		savedPath, err := storage.SaveFileBytes(uploadsDir, groupID, it.fileType, it.originalName, data)
+		if err != nil {
+			slog.Warn("copy submission docs: save",
+				"tourist_id", touristID, "file_type", it.fileType, "err", err)
+			continue
+		}
+		tid := touristID
+		if _, err := db.InsertUpload(ctx, pool, orgID, groupID, &tid, it.fileType, savedPath); err != nil {
+			slog.Warn("copy submission docs: insert",
+				"tourist_id", touristID, "file_type", it.fileType, "err", err)
+			continue
+		}
+	}
+}
 
 // Required top-level keys in payload for a submission to be considered valid.
 var requiredPayloadKeys = []string{
@@ -201,7 +257,12 @@ func EraseSubmission(pool *pgxpool.Pool) http.HandlerFunc {
 
 // AttachSubmission handles POST /api/submissions/:id/attach
 // Body: { "group_id": "...", "subgroup_id": "..." | null }
-func AttachSubmission(pool *pgxpool.Pool) http.HandlerFunc {
+//
+// uploadsDir is needed because ticket/voucher scans uploaded with the
+// submission are physically copied into the tourist-level uploads tree on
+// attach — that way the tourist's "Документы" section is pre-populated and
+// the docs survive any later submission-side mutation (re-upload / erase).
+func AttachSubmission(pool *pgxpool.Pool, uploadsDir string) http.HandlerFunc {
 	type reqBody struct {
 		GroupID    string  `json:"group_id"`
 		SubgroupID *string `json:"subgroup_id"`
@@ -230,6 +291,9 @@ func AttachSubmission(pool *pgxpool.Pool) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
+
+		copyAttachedSubmissionDocs(r.Context(), pool, uploadsDir, orgID, submissionID, touristID, body.GroupID)
+
 		writeJSON(w, http.StatusCreated, map[string]string{"tourist_id": touristID})
 	}
 }

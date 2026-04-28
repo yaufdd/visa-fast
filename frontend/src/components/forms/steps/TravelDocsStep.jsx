@@ -4,6 +4,7 @@
 // Phone field moved to PersonalStep (Step 1) — see commit history.
 
 import FileUploadField from '../FileUploadField';
+import FileMultiUploadField from '../FileMultiUploadField';
 import { makeFieldFactories } from '../fieldFactories';
 
 export default function TravelDocsStep({
@@ -26,40 +27,44 @@ export default function TravelDocsStep({
         { value: 'Да', label: 'Да' },
       ])}
 
-      <FileUploadField
-        label="Авиабилет(ы)"
+      <FileMultiUploadField
+        label="Авиабилеты"
         fileType="ticket"
         adapter={adapter}
         submissionId={submissionId}
-        currentFile={files.ticket || null}
-        onUploaded={(meta) => setFiles((f) => ({ ...f, ticket: meta }))}
-        onDeleted={() => setFiles((f) => {
-          const next = { ...f };
-          next.ticket = null;
-          return next;
-        })}
+        currentFiles={Array.isArray(files.ticket) ? files.ticket : []}
+        onAdded={(meta) => setFiles((f) => ({
+          ...f,
+          ticket: [...(Array.isArray(f.ticket) ? f.ticket : []), meta],
+        }))}
+        onRemoved={(fileId) => setFiles((f) => ({
+          ...f,
+          ticket: (Array.isArray(f.ticket) ? f.ticket : []).filter((x) => x.id !== fileId),
+        }))}
         acceptMime="application/pdf,image/jpeg,image/png"
       />
       <span className="sf-hint">
-        Менеджер распознает скан автоматически после прикрепления к туру.
+        Можно прикрепить несколько билетов. Менеджер распознает каждый автоматически после привязки к туру.
       </span>
 
-      <FileUploadField
-        label="Ваучер на отель(и)"
+      <FileMultiUploadField
+        label="Ваучеры на отели"
         fileType="voucher"
         adapter={adapter}
         submissionId={submissionId}
-        currentFile={files.voucher || null}
-        onUploaded={(meta) => setFiles((f) => ({ ...f, voucher: meta }))}
-        onDeleted={() => setFiles((f) => {
-          const next = { ...f };
-          next.voucher = null;
-          return next;
-        })}
+        currentFiles={Array.isArray(files.voucher) ? files.voucher : []}
+        onAdded={(meta) => setFiles((f) => ({
+          ...f,
+          voucher: [...(Array.isArray(f.voucher) ? f.voucher : []), meta],
+        }))}
+        onRemoved={(fileId) => setFiles((f) => ({
+          ...f,
+          voucher: (Array.isArray(f.voucher) ? f.voucher : []).filter((x) => x.id !== fileId),
+        }))}
         acceptMime="application/pdf,image/jpeg,image/png"
       />
       <span className="sf-hint">
-        Менеджер распознает скан автоматически после прикрепления к туру.
+        Можно прикрепить несколько ваучеров. Менеджер распознает каждый автоматически после привязки к туру.
       </span>
     </div>
   );

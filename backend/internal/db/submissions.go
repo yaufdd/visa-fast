@@ -183,6 +183,12 @@ func GetSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, id string) (*
 }
 
 func UpdateSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, id string, payload []byte) (bool, error) {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
 	// Status flip: when the row is still 'draft' (created via the
 	// manager-side /submissions/draft endpoint), the first PUT writing a
 	// real payload also promotes it to 'pending' — that's the same
@@ -190,13 +196,35 @@ func UpdateSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, id string,
 	// Rows already in 'pending' / 'attached' / 'archived' keep their
 	// status untouched. Done in a single statement so a manager edit can
 	// never leave a draft "stuck" with a real payload.
-	tag, err := pool.Exec(ctx,
+	tag, err := tx.Exec(ctx,
 		`UPDATE tourist_submissions
 		    SET payload = $1,
 		        updated_at = NOW(),
 		        status = CASE WHEN status = 'draft' THEN 'pending' ELSE status END
 		  WHERE id = $2 AND org_id = $3`, payload, id, orgID)
-	return tag.RowsAffected() > 0, err
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+
+	// Propagate the new payload to every attached tourist in an active
+	// group. Finalized groups ('submitted', 'visa_issued') keep the
+	// historical snapshot of what was actually sent to the embassy —
+	// editing the submission afterwards must not rewrite that record.
+	if _, err := tx.Exec(ctx,
+		`UPDATE tourists
+		    SET submission_snapshot = $1, updated_at = NOW()
+		   FROM groups g
+		  WHERE tourists.group_id = g.id
+		    AND tourists.org_id = $2
+		    AND tourists.submission_id = $3
+		    AND g.status NOT IN ('submitted', 'visa_issued')`,
+		payload, orgID, id); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
 }
 
 func ArchiveSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, id string) (bool, error) {

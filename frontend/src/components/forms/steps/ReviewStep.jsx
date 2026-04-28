@@ -14,9 +14,13 @@ const fmt = (v) => {
 const FILE_TYPE_LABELS = {
   passport_internal: 'Скан внутреннего паспорта',
   passport_foreign: 'Скан загранпаспорта',
-  ticket: 'Авиабилет(ы)',
-  voucher: 'Ваучер на отель(и)',
+  ticket: 'Авиабилеты',
+  voucher: 'Ваучеры на отели',
 };
+
+// passport_* are single rows; ticket / voucher are lists since
+// migration 000023.
+const MULTI_FILE_TYPES = new Set(['ticket', 'voucher']);
 
 function formatSize(bytes) {
   if (!bytes && bytes !== 0) return '';
@@ -124,8 +128,12 @@ export default function ReviewStep({
         <h3>Прикреплённые файлы</h3>
         <div className="fw-review-files">
           {Object.keys(FILE_TYPE_LABELS).map((key) => {
-            const f = files?.[key];
-            if (!f) {
+            const slot = files?.[key];
+            const list = MULTI_FILE_TYPES.has(key)
+              ? (Array.isArray(slot) ? slot : [])
+              : (slot ? [slot] : []);
+
+            if (list.length === 0) {
               return (
                 <div key={key} className="fw-review-file">
                   <span className="fw-review-file-name">{FILE_TYPE_LABELS[key]}</span>
@@ -134,12 +142,22 @@ export default function ReviewStep({
               );
             }
             return (
-              <div key={key} className="fw-review-file">
-                <div>
-                  <div className="fw-review-file-name">{FILE_TYPE_LABELS[key]}</div>
-                  <div className="fw-review-file-meta">{f.original_name || 'файл'}</div>
+              <div key={key} className="fw-review-file" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 4 }}>
+                <div className="fw-review-file-name">
+                  {FILE_TYPE_LABELS[key]}
+                  {MULTI_FILE_TYPES.has(key) && list.length > 1 && ` (${list.length})`}
                 </div>
-                <div className="fw-review-file-meta">{formatSize(f.size_bytes)}</div>
+                {list.map((f, i) => (
+                  <div
+                    key={f.id || i}
+                    style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}
+                  >
+                    <span className="fw-review-file-meta" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {f.original_name || 'файл'}
+                    </span>
+                    <span className="fw-review-file-meta">{formatSize(f.size_bytes)}</span>
+                  </div>
+                ))}
               </div>
             );
           })}

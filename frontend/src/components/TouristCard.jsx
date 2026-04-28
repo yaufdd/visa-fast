@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   uploadTouristFile,
   parseTouristUpload,
@@ -433,17 +434,25 @@ function CardHeader({ tourist, onDelete, subgroups, onAssign, fileCount, onOpenF
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
       <div style={{ minWidth: 0 }}>
-        <div
+        <Link
+          to={`/tourists/${tourist.id}`}
+          title="Открыть карточку туриста"
           style={{
+            display: 'block',
             fontSize: 13,
             fontWeight: 500,
+            color: 'var(--white)',
+            textDecoration: 'none',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
+            cursor: 'pointer',
           }}
+          onMouseEnter={(e) => { e.currentTarget.style.textDecoration = 'underline'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.textDecoration = 'none'; }}
         >
           {name}
-        </div>
+        </Link>
         {dob && (
           <div style={{ fontSize: 11, color: 'var(--white-dim)', fontFamily: 'var(--font-mono)' }}>
             {dob}

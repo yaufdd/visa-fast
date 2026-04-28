@@ -780,12 +780,47 @@ function SubgroupProgrammeNotes({ subgroupId, initial }) {
   );
 }
 
+// JustRegeneratedBadge — small accent chip placed next to the timestamp.
+// Self-fades via the parent's setTimeout; this component is purely visual.
+function JustRegeneratedBadge() {
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '2px 8px',
+        borderRadius: 10,
+        background: 'rgba(127, 183, 126, 0.18)',
+        color: 'var(--accent)',
+        border: '1px solid var(--accent)',
+        fontSize: 10,
+        fontWeight: 600,
+        textTransform: 'uppercase',
+        letterSpacing: '0.05em',
+      }}
+    >
+      new
+    </span>
+  );
+}
+
 function SubgroupDocsRow({ subgroup }) {
   // Start with server-persisted state: if a ZIP exists on disk, show it.
   const [hasZip, setHasZip] = useState(!!subgroup.has_zip);
   const [generatedAt, setGeneratedAt] = useState(subgroup.generated_at || null);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState(null);
+  // justRegenerated drives the "только что обновлено" badge + accent
+  // border highlight after a successful regeneration. Auto-clears after
+  // 30 s via the effect below so the visual cue fades on its own.
+  const [justRegenerated, setJustRegenerated] = useState(false);
+
+  useEffect(() => {
+    if (!justRegenerated) return undefined;
+    const t = setTimeout(() => setJustRegenerated(false), 30000);
+    return () => clearTimeout(t);
+  }, [justRegenerated]);
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -794,6 +829,7 @@ function SubgroupDocsRow({ subgroup }) {
       const res = await generateSubgroupDocuments(subgroup.id);
       setGeneratedAt(res.generated_at);
       setHasZip(true);
+      setJustRegenerated(true);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -802,13 +838,23 @@ function SubgroupDocsRow({ subgroup }) {
   };
 
   return (
-    <div className="card" style={{ marginBottom: 12, padding: '14px 18px' }}>
+    <div
+      className="card"
+      style={{
+        marginBottom: 12,
+        padding: '14px 18px',
+        border: justRegenerated ? '1px solid var(--accent)' : undefined,
+        boxShadow: justRegenerated ? '0 0 0 2px rgba(127, 183, 126, 0.15)' : undefined,
+        transition: 'border-color 0.3s ease, box-shadow 0.3s ease',
+      }}
+    >
       <div className="doc-card-row">
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--white)' }}>{subgroup.name}</div>
           {hasZip && generatedAt && (
-            <div style={{ fontSize: 11, color: 'var(--white-dim)', marginTop: 3 }}>
-              Сгенерировано: {formatDate(generatedAt)}
+            <div style={{ fontSize: 11, color: 'var(--white-dim)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span>Сгенерировано: {formatDate(generatedAt)}</span>
+              {justRegenerated && <JustRegeneratedBadge />}
             </div>
           )}
           {error && (
@@ -854,8 +900,16 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [finalHasZip, setFinalHasZip] = useState(false);
+  const [finalGeneratedAt, setFinalGeneratedAt] = useState(null);
+  const [finalJustRegenerated, setFinalJustRegenerated] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [finalError, setFinalError] = useState(null);
+
+  useEffect(() => {
+    if (!finalJustRegenerated) return undefined;
+    const t = setTimeout(() => setFinalJustRegenerated(false), 30000);
+    return () => clearTimeout(t);
+  }, [finalJustRegenerated]);
   // Default submission date = tomorrow (YYYY-MM-DD for <input type="date">).
   const [submissionDate, setSubmissionDate] = useState(() => {
     const d = new Date();
@@ -891,6 +945,7 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
         ]);
         setSubgroups(Array.isArray(sgs) ? sgs : []);
         setFinalHasZip(!!fstat.has_zip);
+        setFinalGeneratedAt(fstat.generated_at || null);
       } catch (e) {
         setError(e.message);
       } finally {
@@ -903,8 +958,10 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
     setFinalizing(true);
     setFinalError(null);
     try {
-      await finalizeGroup(groupId, submissionDate);
+      const res = await finalizeGroup(groupId, submissionDate);
       setFinalHasZip(true);
+      setFinalGeneratedAt(res?.generated_at || new Date().toISOString());
+      setFinalJustRegenerated(true);
     } catch (e) {
       setFinalError(e.message);
     } finally {
@@ -949,7 +1006,16 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
 
       {finalError && <div className="error-message">{finalError}</div>}
 
-      <div className="card" style={{ marginBottom: 12, padding: '14px 18px' }}>
+      <div
+        className="card"
+        style={{
+          marginBottom: 12,
+          padding: '14px 18px',
+          border: finalJustRegenerated ? '1px solid var(--accent)' : undefined,
+          boxShadow: finalJustRegenerated ? '0 0 0 2px rgba(127, 183, 126, 0.15)' : undefined,
+          transition: 'border-color 0.3s ease, box-shadow 0.3s ease',
+        }}
+      >
         <div className="doc-card-row">
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontSize: 13, color: 'var(--white)', fontWeight: 500, flexWrap: 'wrap' }}>
             Дата подачи:
@@ -986,6 +1052,12 @@ function DocumentsTab({ groupId, group, onGroupUpdated }) {
             )}
           </div>
         </div>
+        {finalHasZip && finalGeneratedAt && (
+          <div style={{ fontSize: 11, color: 'var(--white-dim)', marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span>Сгенерировано: {formatDate(finalGeneratedAt)}</span>
+            {finalJustRegenerated && <JustRegeneratedBadge />}
+          </div>
+        )}
       </div>
 
       {/* Final confirmation — compact toggle */}
