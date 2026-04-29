@@ -2,13 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import FormWizard from '../components/forms/FormWizard';
 import { adminWizardAdapter } from '../components/forms/adminWizardAdapter';
-import SubmissionFilesPanel from '../components/SubmissionFilesPanel';
 import AttachGroupModal from '../components/AttachGroupModal';
 import ConfirmModal from '../components/ConfirmModal';
 import {
   archiveSubmission,
   attachSubmission,
-  eraseSubmission,
   getSubmission,
   listSubmissionFilesAdmin,
 } from '../api/client';
@@ -19,20 +17,14 @@ function safeParsePayload(raw) {
   try { return JSON.parse(raw); } catch { return {}; }
 }
 
-const STATUS_LABELS = {
-  draft: 'Черновик',
-  pending: 'Ожидает',
-  attached: 'Привязана',
-  archived: 'Архив',
-};
-
 // Bucket the flat array returned by GET /submissions/{id}/files into the
-// shape the wizard keeps in state. Passports are single objects (one per
-// type, replace-on-upload). Tickets and vouchers are arrays — multiple
-// files per submission are allowed since migration 000023.
+// shape the wizard keeps in state. passport_internal joined the multi-row
+// types in migration 000024 (manager often uploads main + registration
+// page); passport_foreign stays single (one row per submission,
+// replace-on-upload).
 function bucketFilesByType(arr) {
   const out = {
-    passport_internal: null,
+    passport_internal: [],
     passport_foreign: null,
     ticket: [],
     voucher: [],
@@ -40,15 +32,19 @@ function bucketFilesByType(arr) {
   if (!Array.isArray(arr)) return out;
   for (const f of arr) {
     if (!f || !f.file_type) continue;
-    if (f.file_type === 'passport_internal' || f.file_type === 'passport_foreign') {
+    if (f.file_type === 'passport_foreign') {
       out[f.file_type] = f;
-    } else if (f.file_type === 'ticket' || f.file_type === 'voucher') {
+    } else if (
+      f.file_type === 'passport_internal'
+      || f.file_type === 'ticket'
+      || f.file_type === 'voucher'
+    ) {
       out[f.file_type].push(f);
     }
   }
   // Stable order: oldest first so newly added files appear at the bottom
   // of the wizard's list (matches upload order from the tourist).
-  for (const k of ['ticket', 'voucher']) {
+  for (const k of ['passport_internal', 'ticket', 'voucher']) {
     out[k].sort((a, b) => {
       const av = a.created_at || '';
       const bv = b.created_at || '';
@@ -83,8 +79,6 @@ export default function SubmissionDetailPage() {
   const [attachOpen, setAttachOpen] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [deleting, setDeleting] = useState(false);
 
   // /submissions/new — allocate a draft and redirect immediately so the
   // URL becomes a stable handle (refresh-safe, shareable inside the org).
@@ -138,12 +132,15 @@ export default function SubmissionDetailPage() {
   );
 
   // True when the row was created via the manager-side draft endpoint
-  // and hasn't been finalised yet. In that case we still want to show
-  // the consent block on the Review step (treat the wizard as a "create"
-  // experience, not an "edit"). For pending/attached/archived rows the
-  // consent stamp is already on file — hide the block.
+  // and hasn't been finalised yet. Used below to hide the
+  // SubmissionFilesPanel for fresh drafts where the wizard's own widgets
+  // are the only place files exist.
   const isDraftRow = submission?.status === 'draft';
-  const showConsent = isDraftRow;
+  // Manager doesn't need the consent checkbox at all — the tourist
+  // grants consent on the public form, and managers acting on a
+  // submission don't re-stamp it. Was previously gated on isDraftRow,
+  // now always off in admin mode.
+  const showConsent = false;
 
   const handleSubmit = useCallback(async (payload, consent) => {
     setActionError(null);
@@ -177,19 +174,6 @@ export default function SubmissionDetailPage() {
     await attachSubmission(submission.id, groupId, subgroupId);
     setAttachOpen(false);
     navigate(`/groups/${groupId}`);
-  }, [submission, navigate]);
-
-  const handleDelete = useCallback(async () => {
-    if (!submission) return;
-    setDeleting(true);
-    setActionError(null);
-    try {
-      await eraseSubmission(submission.id);
-      navigate('/submissions');
-    } catch (e) {
-      setActionError(e.message);
-      setDeleting(false);
-    }
   }, [submission, navigate]);
 
   // /submissions/new — render a small loading shell until the redirect
@@ -240,19 +224,30 @@ export default function SubmissionDetailPage() {
   // canAct — the top-bar Archive / Attach buttons. A draft cannot be
   // archived or attached yet; an attached row can only be viewed.
   const canAct = submission && status !== 'attached' && status !== 'draft';
-  const title = (
-    initialPayload.name_lat || initialPayload.name_cyr || submission?.id || 'Анкета'
-  );
 
   return (
     <div className="page-container">
       <div className="page-header">
-        <div>
-          <div
-            style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <button
+            onClick={() => navigate('/submissions')}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--white-dim)',
+              fontSize: 13,
+              cursor: 'pointer',
+              padding: 0,
+            }}
           >
+            ← Анкеты
+          </button>
+          {submission && (
             <button
-              onClick={() => navigate('/submissions')}
+              type="button"
+              onClick={() => navigate(`/submissions/${id}/settings`)}
+              title="Настройки анкеты"
+              aria-label="Настройки"
               style={{
                 background: 'none',
                 border: 'none',
@@ -260,30 +255,21 @@ export default function SubmissionDetailPage() {
                 fontSize: 13,
                 cursor: 'pointer',
                 padding: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
               }}
             >
-              ← Анкеты
-            </button>
-            <span style={{ color: 'var(--border)' }}>/</span>
-            <span style={{ color: 'var(--white-dim)', fontSize: 13 }}>
-              {(submission?.id || '').slice(0, 8)}
-            </span>
-          </div>
-          <div className="page-title">{title}</div>
-          {submission && (
-            <div
-              className="page-subtitle"
-              style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 6 }}
-            >
-              <span
-                className={`submission-status submission-status--${status}`}
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                fill="currentColor"
+                viewBox="0 0 16 16"
+                style={{ flexShrink: 0 }}
               >
-                {STATUS_LABELS[status] || status}
-              </span>
-              <span style={{ color: 'var(--white-dim)', fontSize: 12 }}>
-                Источник: {submission.source}
-              </span>
-            </div>
+                <path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 1 1 0-5.858 2.929 2.929 0 0 1 0 5.858z"/>
+              </svg>
+            </button>
           )}
         </div>
 
@@ -319,39 +305,6 @@ export default function SubmissionDetailPage() {
         showConsent={showConsent}
       />
 
-      {/* SubmissionFilesPanel duplicates the per-step file widgets the
-          wizard now renders inline, but it remains a useful "single
-          consolidated" view: managers can see all four file types in
-          one place plus get download URLs the wizard doesn't expose.
-          Hidden on draft rows where the wizard's own widgets are the
-          only place files have ever existed. */}
-      {!isDraftRow && <SubmissionFilesPanel submissionId={id} allowDelete />}
-
-      {submission && (
-        <div style={{ marginTop: 32, display: 'flex', justifyContent: 'flex-start' }}>
-          <button
-            type="button"
-            onClick={() => { setActionError(null); setDeleteConfirmOpen(true); }}
-            disabled={deleting}
-            style={{
-              background: 'none',
-              border: '1px solid rgba(239, 68, 68, 0.4)',
-              color: '#ef4444',
-              fontSize: 13,
-              fontWeight: 600,
-              padding: '8px 16px',
-              borderRadius: 6,
-              cursor: deleting ? 'default' : 'pointer',
-              opacity: deleting ? 0.6 : 1,
-              transition: 'background 0.15s, border-color 0.15s',
-            }}
-            onMouseEnter={e => { if (deleting) return; e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)'; e.currentTarget.style.borderColor = '#ef4444'; }}
-            onMouseLeave={e => { if (deleting) return; e.currentTarget.style.background = 'none'; e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.4)'; }}
-          >
-            {deleting ? 'Удаление…' : 'Удалить анкету'}
-          </button>
-        </div>
-      )}
 
       <AttachGroupModal
         open={attachOpen}
@@ -370,19 +323,6 @@ export default function SubmissionDetailPage() {
         error={actionError}
         onConfirm={handleArchive}
         onCancel={() => setArchiveConfirmOpen(false)}
-      />
-
-      <ConfirmModal
-        open={deleteConfirmOpen}
-        title="Удалить анкету?"
-        message="Анкета будет удалена навсегда. Это действие нельзя отменить."
-        confirmText="Удалить"
-        cancelText="Отмена"
-        variant="danger"
-        busy={deleting}
-        error={actionError}
-        onConfirm={handleDelete}
-        onCancel={() => { if (!deleting) setDeleteConfirmOpen(false); }}
       />
     </div>
   );

@@ -6,6 +6,7 @@ const navItems = [
   { to: '/submissions', label: 'Анкеты', icon: '⌬', end: false },
   { to: '/hotels', label: 'Отели', icon: '⊞', end: true },
   { to: '/templates', label: 'Шаблоны', icon: '❡', end: true },
+  { to: '/profile', label: 'Профиль', icon: '◉', end: true },
 ];
 
 export default function Sidebar({ open, onClose }) {

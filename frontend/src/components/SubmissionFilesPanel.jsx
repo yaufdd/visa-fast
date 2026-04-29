@@ -76,6 +76,7 @@ export default function SubmissionFilesPanel({
   // Tourist-side uploads — needed to find the upload ids that map to the
   // visible submission files when the manager triggers parsing from here.
   const [touristUploads, setTouristUploads] = useState([]);
+  const [expanded, setExpanded] = useState(false);
 
   const load = useCallback(async (signal) => {
     if (!submissionId) return;
@@ -183,24 +184,49 @@ export default function SubmissionFilesPanel({
   const allGroups = [...knownGroups, ...unknownGroups];
 
   return (
-    <div
-      style={{
-        marginTop: 28,
-        border: '1px solid var(--border)',
-        borderRadius: 10,
-        padding: 20,
-        background: 'var(--gray-dark)',
-      }}
-    >
-      <div className="section-header" style={{ marginBottom: 14 }}>
-        <div className="section-title">Прикреплённые документы</div>
-      </div>
+    <div>
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        style={{
+          background: 'none',
+          border: 'none',
+          padding: 0,
+          marginBottom: expanded ? 14 : 0,
+          width: '100%',
+          textAlign: 'left',
+          cursor: 'pointer',
+          color: 'var(--white)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          fontSize: 14,
+          fontWeight: 600,
+        }}
+        aria-expanded={expanded}
+      >
+        <span
+          style={{
+            display: 'inline-block',
+            transition: 'transform 0.15s',
+            transform: expanded ? 'rotate(90deg)' : 'none',
+            fontSize: 11,
+            color: 'var(--white-dim)',
+          }}
+        >▶</span>
+        <span>Прикреплённые документы</span>
+        {files.length > 0 && (
+          <span style={{ fontSize: 12, color: 'var(--white-dim)', fontWeight: 400 }}>
+            ({files.length})
+          </span>
+        )}
+      </button>
 
-      {error && <div className="error-message">{error}</div>}
+      {expanded && error && <div className="error-message">{error}</div>}
 
-      {files.length === 0 ? (
+      {expanded && (files.length === 0 ? (
         <div style={{ color: 'var(--white-dim)', fontSize: 13 }}>
-          Турист не прикрепил файлов.
+          Файлов пока нет.
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -330,7 +356,7 @@ export default function SubmissionFilesPanel({
             );
           })}
         </div>
-      )}
+      ))}
 
       <ConfirmModal
         open={!!deleteTarget}

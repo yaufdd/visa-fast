@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listSubmissions } from '../api/client';
+import CopyFormLinkButton from '../components/CopyFormLinkButton';
 
 function formatDate(iso) {
   if (!iso) return '—';
@@ -62,12 +63,15 @@ export default function SubmissionsListPage() {
           <div className="page-title">Анкеты</div>
           <div className="page-subtitle">Пул анкет от туристов и менеджера</div>
         </div>
-        <button
-          className="btn btn-primary"
-          onClick={() => navigate('/submissions/new')}
-        >
-          <span>+</span> Создать вручную
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <CopyFormLinkButton />
+          <button
+            className="btn btn-primary"
+            onClick={() => navigate('/submissions/new')}
+          >
+            <span>+</span> Создать вручную
+          </button>
+        </div>
       </div>
 
       <div className="submissions-filters">

@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import RequireAuth from './auth/RequireAuth';
 import Sidebar from './components/Sidebar';
-import CopyFormLinkButton from './components/CopyFormLinkButton';
 import GroupsPage from './pages/GroupsPage';
 import GroupDetailPage from './pages/GroupDetailPage';
 import HotelsPage from './pages/HotelsPage';
@@ -11,6 +10,8 @@ import HotelEditPage from './pages/HotelEditPage';
 import TemplatesPage from './pages/TemplatesPage';
 import SubmissionsListPage from './pages/SubmissionsListPage';
 import SubmissionDetailPage from './pages/SubmissionDetailPage';
+import SubmissionSettingsPage from './pages/SubmissionSettingsPage';
+import ProfilePage from './pages/ProfilePage';
 import TouristDetailPage from './pages/TouristDetailPage';
 import SubmissionFormPage from './pages/SubmissionFormPage';
 import FormThanksPage from './pages/FormThanksPage';
@@ -19,18 +20,23 @@ import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import PublicFormFallbackPage from './pages/PublicFormFallbackPage';
 
-function AdminShellHeader() {
-  const { user, org, logout } = useAuth();
+function AdminShellHeader({ onMenuClick }) {
+  const { org } = useAuth();
   return (
     <header className="admin-shell-header">
+      <button
+        className="hamburger-btn"
+        onClick={onMenuClick}
+        aria-label="Открыть меню"
+        type="button"
+      >
+        <span className="hamburger-icon" />
+        <span className="hamburger-icon" />
+        <span className="hamburger-icon" />
+      </button>
       <div className="org-info">
         <strong>{org?.name}</strong>
         <span className="muted">/{org?.slug}</span>
-      </div>
-      <div className="shell-actions">
-        <CopyFormLinkButton />
-        <span className="user-email">{user?.email}</span>
-        <button onClick={logout} className="btn btn-ghost btn-sm">Выйти</button>
       </div>
     </header>
   );
@@ -48,16 +54,7 @@ function AdminShell({ children }) {
         <div className="sidebar-backdrop" onClick={closeSidebar} />
       )}
       <main className="main-content">
-        <AdminShellHeader />
-        <button
-          className="hamburger-btn"
-          onClick={toggleSidebar}
-          aria-label="Toggle menu"
-        >
-          <span className="hamburger-icon" />
-          <span className="hamburger-icon" />
-          <span className="hamburger-icon" />
-        </button>
+        <AdminShellHeader onMenuClick={toggleSidebar} />
         {children}
       </main>
     </div>
@@ -75,7 +72,9 @@ function AdminRoutes() {
         <Route path="/templates" element={<TemplatesPage />} />
         <Route path="/submissions" element={<SubmissionsListPage />} />
         <Route path="/submissions/:id" element={<SubmissionDetailPage />} />
+        <Route path="/submissions/:id/settings" element={<SubmissionSettingsPage />} />
         <Route path="/tourists/:id" element={<TouristDetailPage />} />
+        <Route path="/profile" element={<ProfilePage />} />
       </Routes>
     </AdminShell>
   );

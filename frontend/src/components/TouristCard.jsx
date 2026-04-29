@@ -153,6 +153,7 @@ function FlightLegRow({ label, leg }) {
         {leg?.airport || ''}
       </span>
       <span
+        className="tc-flight-datetime"
         style={{
           color: 'var(--white)',
           fontFamily: 'var(--font-mono)',
@@ -319,6 +320,7 @@ const FlightSection = forwardRef(function FlightSection({ tourist, onUpdated }, 
         >
           {has ? (
             <div
+              className="tc-flight-row"
               style={{
                 display: 'flex',
                 gap: 12,
@@ -331,6 +333,7 @@ const FlightSection = forwardRef(function FlightSection({ tourist, onUpdated }, 
                 {hasDeparture && <FlightLegRow label="Вылет" leg={flight.departure} />}
               </div>
               <div
+                className="tc-flight-actions"
                 style={{
                   display: 'flex',
                   flexDirection: 'column',
