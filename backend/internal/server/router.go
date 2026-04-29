@@ -170,6 +170,8 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 			// public siblings, used by the dashboard's submission editor).
 			r.Post("/submissions/{id}/files/{type}", api.UploadSubmissionFile(pool, uploadsDir))
 			r.Post("/submissions/{id}/parse-passport", api.ParseSubmissionPassport(pool, ocrClient, translator))
+			r.Post("/submissions/{id}/parse-ticket", api.ParseSubmissionTicket(pool, ocrClient, translator))
+			r.Post("/submissions/{id}/parse-voucher", api.ParseSubmissionVoucher(pool, ocrClient, translator))
 
 			// Flight data
 			r.Put("/tourists/{id}/flight_data", api.UpdateFlightData(pool))

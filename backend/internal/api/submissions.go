@@ -72,10 +72,15 @@ func copyAttachedSubmissionDocs(ctx context.Context, pool *pgxpool.Pool, uploads
 }
 
 // Required top-level keys in payload for a submission to be considered valid.
+//
+// internal_series / internal_number used to be required, but the public form
+// no longer asks the tourist for those — the manager fills them later from
+// the uploaded internal-passport scan (manually or via the magic-button
+// recognition). Keeping them out of this list lets the tourist submit
+// without ever typing internal-passport numbers.
 var requiredPayloadKeys = []string{
 	"name_lat", "name_cyr", "gender_ru", "birth_date",
 	"passport_number", "issue_date", "expiry_date",
-	"internal_series", "internal_number",
 	"phone", "home_address_ru",
 }
 

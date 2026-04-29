@@ -36,13 +36,15 @@ var allowedSubmissionFileTypes = map[string]bool{
 }
 
 // multiFileTypes are the file_type values that allow MULTIPLE rows per
-// submission (a tourist may upload several tickets / vouchers for the
-// same trip). Passport types are excluded — they keep the
-// "one row per (submission, type)" upsert semantics so a re-upload
-// replaces the previous scan.
+// submission. Tickets and vouchers are obviously stackable; the internal
+// Russian passport joined the list when the manager wizard's Документы
+// step was reworked — a manager often needs both the main page and the
+// registration page on file. Foreign passport stays single (one row per
+// submission, replace-on-upload via ON CONFLICT).
 var multiFileTypes = map[string]bool{
-	"ticket":  true,
-	"voucher": true,
+	"passport_internal": true,
+	"ticket":            true,
+	"voucher":           true,
 }
 
 // randomFileSuffix returns 8 hex chars used to disambiguate filenames

@@ -361,3 +361,148 @@ func ParseSubmissionPassport(pool *pgxpool.Pool, ocr ai.OCRRecognizer, translato
 		writeJSON(w, http.StatusOK, fields)
 	}
 }
+
+// ParseSubmissionTicket handles POST /api/submissions/{id}/parse-ticket.
+//
+// Body: {"file_id":"uuid"}
+//
+// Same shape as ParseSubmissionPassport — reads the previously-uploaded
+// ticket scan, runs it through the Yandex Vision + GPT pipeline, and
+// returns {arrival, departure} so the dashboard wizard can show / store
+// the recognised flights. Side-effect free.
+func ParseSubmissionTicket(pool *pgxpool.Pool, ocr ai.OCRRecognizer, translator ai.Translator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := appmw.OrgID(r.Context())
+		submissionID := chi.URLParam(r, "id")
+
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<14)
+		var body struct {
+			FileID string `json:"file_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		if body.FileID == "" {
+			writeError(w, http.StatusBadRequest, "file_id required")
+			return
+		}
+
+		if !submissionExistsForOrg(r, pool, orgID, submissionID) {
+			writeError(w, http.StatusNotFound, "submission not found")
+			return
+		}
+
+		f, err := db.GetSubmissionFile(r.Context(), pool, orgID, body.FileID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "file not found")
+				return
+			}
+			slog.Error("get submission file", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if f.SubmissionID != submissionID {
+			writeError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		if f.FileType != "ticket" {
+			writeError(w, http.StatusBadRequest, "file is not a ticket scan")
+			return
+		}
+
+		scanBytes, err := os.ReadFile(f.FilePath)
+		if err != nil {
+			slog.Error("read ticket scan for parse", "err", err, "path", f.FilePath)
+			writeError(w, http.StatusInternalServerError, "failed to read file")
+			return
+		}
+		mime := detectScanMime(f.FilePath, scanBytes)
+
+		aiCtx := withAuditCtx(r.Context(), pool, orgID, "", "")
+		flights, err := ai.ParseTicketScan(aiCtx, ocr, translator, scanBytes, mime)
+		if err != nil {
+			slog.Error("admin ticket parse", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to parse ticket")
+			return
+		}
+
+		flights.Arrival.Airport = ai.NormalizeJapaneseAirport(flights.Arrival.Airport)
+		flights.Departure.Airport = ai.NormalizeJapaneseAirport(flights.Departure.Airport)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"arrival":   flights.Arrival,
+			"departure": flights.Departure,
+		})
+	}
+}
+
+// ParseSubmissionVoucher handles POST /api/submissions/{id}/parse-voucher.
+//
+// Body: {"file_id":"uuid"}
+//
+// Reads a voucher scan and returns the recognised list of hotel stays.
+// Side-effect free — the dashboard wizard merges the result into
+// payload.hotels (or shows it for manual review) and the manager can
+// then save the submission.
+func ParseSubmissionVoucher(pool *pgxpool.Pool, ocr ai.OCRRecognizer, translator ai.Translator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := appmw.OrgID(r.Context())
+		submissionID := chi.URLParam(r, "id")
+
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<14)
+		var body struct {
+			FileID string `json:"file_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		if body.FileID == "" {
+			writeError(w, http.StatusBadRequest, "file_id required")
+			return
+		}
+
+		if !submissionExistsForOrg(r, pool, orgID, submissionID) {
+			writeError(w, http.StatusNotFound, "submission not found")
+			return
+		}
+
+		f, err := db.GetSubmissionFile(r.Context(), pool, orgID, body.FileID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "file not found")
+				return
+			}
+			slog.Error("get submission file", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if f.SubmissionID != submissionID {
+			writeError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		if f.FileType != "voucher" {
+			writeError(w, http.StatusBadRequest, "file is not a voucher scan")
+			return
+		}
+
+		scanBytes, err := os.ReadFile(f.FilePath)
+		if err != nil {
+			slog.Error("read voucher scan for parse", "err", err, "path", f.FilePath)
+			writeError(w, http.StatusInternalServerError, "failed to read file")
+			return
+		}
+		mime := detectScanMime(f.FilePath, scanBytes)
+
+		aiCtx := withAuditCtx(r.Context(), pool, orgID, "", "")
+		hotels, err := ai.ParseVoucherScan(aiCtx, ocr, translator, scanBytes, mime)
+		if err != nil {
+			slog.Error("admin voucher parse", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to parse voucher")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, hotels)
+	}
+}
