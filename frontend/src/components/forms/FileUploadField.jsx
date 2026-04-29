@@ -55,6 +55,7 @@ export default function FileUploadField({
   onAutoFill,
   parseType,
   acceptMime = '',
+  showDelete = false,
 }) {
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
@@ -206,29 +207,59 @@ export default function FileUploadField({
             {onAutoFill && parseType && (
               <button
                 type="button"
-                className="ff-btn ff-btn-accent"
+                className="ff-btn ff-btn-accent btn-magic"
                 onClick={handleParse}
                 disabled={parsing}
+                title="Распознать сканы и заполнить данные паспорта"
               >
-                {parsing ? 'Распознаю…' : 'Распознать'}
+                {parsing ? <span className="spinner" /> : '✦ Распознать'}
               </button>
+            )}
+            {adapter?.downloadUrl && currentFile.id && (
+              <a
+                className="ff-btn ff-icon-btn"
+                href={adapter.downloadUrl(submissionId, currentFile.id)}
+                download
+                title="Скачать"
+                aria-label="Скачать"
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                  <path d="M8 2.5v8M8 10.5l-3-3M8 10.5l3-3M3 13h10"
+                    stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </a>
             )}
             <button
               type="button"
-              className="ff-btn"
+              className="ff-btn ff-icon-btn"
               onClick={pickFile}
               disabled={parsing}
+              title="Заменить файл"
+              aria-label="Заменить"
             >
-              Заменить
+              {/* Two opposite-direction arrows — clearer "swap / replace"
+                  metaphor than the curved refresh arrows we had before
+                  (those read as "обновить / refresh"). */}
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path d="M3 5h9M9.5 2.5 12 5l-2.5 2.5M13 11H4M6.5 13.5 4 11l2.5-2.5"
+                  stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
             </button>
-            <button
-              type="button"
-              className="ff-btn ff-btn-danger"
-              onClick={handleDelete}
-              disabled={parsing}
-            >
-              Удалить
-            </button>
+            {showDelete && (
+              <button
+                type="button"
+                className="ff-btn ff-icon-btn"
+                onClick={handleDelete}
+                disabled={parsing}
+                title="Удалить файл"
+                aria-label="Удалить"
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                  <path d="M3 4h10M6.5 4V2.5a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1V4M4 4l.5 8.5a1.5 1.5 0 0 0 1.5 1.4h4a1.5 1.5 0 0 0 1.5-1.4L12 4M6.5 7v4M9.5 7v4"
+                    stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+            )}
           </div>
         </div>
       )}

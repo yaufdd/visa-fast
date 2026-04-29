@@ -26,24 +26,40 @@ import { loadWizardBlob, saveWizardBlob, clearWizardBlob } from './wizardPersist
 import './wizard.css';
 
 import PersonalStep, { validate as validatePersonal } from './steps/PersonalStep';
-import InternalPassportStep, { validate as validateInternal } from './steps/InternalPassportStep';
 import ForeignPassportStep, { validate as validateForeign } from './steps/ForeignPassportStep';
 import AddressesStep, { validate as validateAddresses } from './steps/AddressesStep';
 import OccupationStep, { validate as validateOccupation, applyOccupationAutoFill, OCCUPATION_DEFAULT } from './steps/OccupationStep';
-import TravelDocsStep, { validate as validateTravel } from './steps/TravelDocsStep';
+import TravelStep, { validate as validateTravel } from './steps/TravelStep';
+import DocumentsStep, { validate as validateDocuments } from './steps/DocumentsStep';
 import ReviewStep, { validate as validateReview } from './steps/ReviewStep';
 
 // Step registry — order matters: this is the order shown in the sidebar
 // and the order `Next` walks through.
-const STEPS = [
-  { id: 'personal',  label: 'Личные данные',         Component: PersonalStep,         validate: validatePersonal  },
-  { id: 'internal',  label: 'Внутренний паспорт',    Component: InternalPassportStep, validate: validateInternal  },
-  { id: 'foreign',   label: 'Загранпаспорт',         Component: ForeignPassportStep,  validate: validateForeign   },
-  { id: 'addresses', label: 'Адреса',                Component: AddressesStep,        validate: validateAddresses },
-  { id: 'occupation',label: 'Работа',                Component: OccupationStep,       validate: validateOccupation},
-  { id: 'travel',    label: 'Поездка и документы',   Component: TravelDocsStep,       validate: validateTravel    },
-  { id: 'review',    label: 'Проверка и отправка',   Component: ReviewStep,           validate: validateReview    },
-];
+//
+// Both public (tourist) and admin (manager) wizards share the same
+// layout: no dedicated "Внутренний паспорт" step (tourist uploads a scan;
+// the manager runs recognition from the Документы step), and a clean
+// split between "Поездка" (travel history) and "Документы" (uploads).
+//
+// The only mode-specific bit is the last step's label — tourist sees
+// "Проверка и отправка" (matches the action — they submit), manager
+// sees "Сохранение" (they save the row, no submission concept).
+function buildSteps(isPublic) {
+  return [
+    { id: 'personal',  label: 'Личные данные',  Component: PersonalStep,        validate: validatePersonal   },
+    { id: 'foreign',   label: 'Загранпаспорт',  Component: ForeignPassportStep, validate: validateForeign    },
+    { id: 'addresses', label: 'Адреса',         Component: AddressesStep,       validate: validateAddresses  },
+    { id: 'occupation',label: 'Работа',         Component: OccupationStep,      validate: validateOccupation },
+    { id: 'travel',    label: 'Поездка',        Component: TravelStep,          validate: validateTravel     },
+    { id: 'documents', label: 'Документы',      Component: DocumentsStep,       validate: validateDocuments  },
+    {
+      id: 'review',
+      label: isPublic ? 'Проверка и отправка' : 'Сохранение',
+      Component: ReviewStep,
+      validate: validateReview,
+    },
+  ];
+}
 
 // Defaults for selects that should not start empty.
 const SELECT_DEFAULTS = {
@@ -120,6 +136,10 @@ export default function FormWizard({
   onResetDraft = null,
 }) {
   const persistEnabled = Boolean(adapter?.persistEnabled && persistKey);
+  // Step list — wrapped in useMemo so step navigation / validation refs
+  // stay stable across renders. Only the last step's label depends on
+  // adapter.isPublic right now.
+  const STEPS = useMemo(() => buildSteps(Boolean(adapter?.isPublic)), [adapter]);
 
   // Read the persisted blob exactly once at first render (public mode
   // only). We split the load out so the initial state for every piece of
@@ -235,7 +255,7 @@ export default function FormWizard({
   const [payload, setPayload] = useState(initialState);
   const [files, setFiles] = useState(() => {
     const empty = {
-      passport_internal: null,
+      passport_internal: [],
       passport_foreign: null,
       ticket: [],
       voucher: [],
@@ -246,15 +266,17 @@ export default function FormWizard({
     const seed = initialFiles || restoredBlob?.files || null;
     if (!seed) return empty;
     // Backwards compat: ticket/voucher used to be single objects (one per
-    // submission). After 000023 they are arrays of metadata. Promote any
-    // legacy single-object seed into a one-element array.
+    // submission). After 000023 they are arrays. passport_internal joined
+    // the array types in 000024. Promote any legacy single-object seed
+    // into a one-element array so the rest of the wizard sees a uniform
+    // shape.
     const toArr = (v) => {
       if (!v) return [];
       if (Array.isArray(v)) return v;
       return [v];
     };
     return {
-      passport_internal: seed.passport_internal ?? null,
+      passport_internal: toArr(seed.passport_internal),
       passport_foreign: seed.passport_foreign ?? null,
       ticket: toArr(seed.ticket),
       voucher: toArr(seed.voucher),
@@ -360,7 +382,7 @@ export default function FormWizard({
     if (persistEnabled) clearWizardBlob(persistKey);
     setPayload(buildDefaults());
     setFiles({
-      passport_internal: null,
+      passport_internal: [],
       passport_foreign: null,
       ticket: [],
       voucher: [],
@@ -556,7 +578,9 @@ export default function FormWizard({
               onClick={handleSubmit}
               disabled={submitting || (showConsent && !consentChecked)}
             >
-              {submitting ? 'Отправка…' : 'Отправить анкету'}
+              {submitting
+                ? (adapter?.isPublic ? 'Отправка…' : 'Сохранение…')
+                : (adapter?.isPublic ? 'Отправить анкету' : 'Сохранить')}
             </button>
           )}
         </div>

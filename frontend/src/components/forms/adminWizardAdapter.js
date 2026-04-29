@@ -14,6 +14,9 @@ import {
   deleteSubmissionFileAdmin,
   listSubmissionFilesAdmin,
   parseSubmissionPassportAdmin,
+  parseSubmissionTicketAdmin,
+  parseSubmissionVoucherAdmin,
+  submissionFileDownloadUrl,
   updateSubmission,
   uploadSubmissionFileAdmin,
 } from '../../api/client';
@@ -21,6 +24,7 @@ import {
 export function adminWizardAdapter() {
   return {
     persistEnabled: false,
+    isPublic: false,
     startSubmission: () =>
       createDraftSubmission().then((data) => ({ submissionId: data.submission_id })),
     uploadFile: (submissionId, fileType, file, onProgress) =>
@@ -30,6 +34,15 @@ export function adminWizardAdapter() {
       deleteSubmissionFileAdmin(submissionId, fileId),
     parsePassport: (submissionId, fileId, type) =>
       parseSubmissionPassportAdmin(submissionId, fileId, type),
+    parseTicket: (submissionId, fileId) =>
+      parseSubmissionTicketAdmin(submissionId, fileId),
+    parseVoucher: (submissionId, fileId) =>
+      parseSubmissionVoucherAdmin(submissionId, fileId),
+    // Manager-side has cookie-authenticated GET on the file blob; the
+    // public form doesn't expose this (the tourist holds the source PDF
+    // on their own device). When omitted, the download icon is hidden.
+    downloadUrl: (submissionId, fileId) =>
+      submissionFileDownloadUrl(submissionId, fileId),
     // Final submit on the manager side: branch on whether we have a
     // submissionId already.
     //

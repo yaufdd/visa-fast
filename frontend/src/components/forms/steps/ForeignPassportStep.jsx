@@ -38,6 +38,7 @@ export default function ForeignPassportStep({
           next.passport_foreign = null;
           return next;
         })}
+        showDelete={Boolean(adapter?.isPublic)}
         onAutoFill={onAutoFill}
         parseType="foreign"
         acceptMime="application/pdf,image/jpeg,image/png"

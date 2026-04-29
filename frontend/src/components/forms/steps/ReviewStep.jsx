@@ -18,9 +18,10 @@ const FILE_TYPE_LABELS = {
   voucher: 'Ваучеры на отели',
 };
 
-// passport_* are single rows; ticket / voucher are lists since
-// migration 000023.
-const MULTI_FILE_TYPES = new Set(['ticket', 'voucher']);
+// passport_foreign is single; passport_internal joined ticket/voucher as
+// a stackable type in migration 000024 (manager often uploads multiple
+// passport pages).
+const MULTI_FILE_TYPES = new Set(['passport_internal', 'ticket', 'voucher']);
 
 function formatSize(bytes) {
   if (!bytes && bytes !== 0) return '';
@@ -36,12 +37,16 @@ function occupationLabel(payload) {
 }
 
 export default function ReviewStep({
-  payload, files,
+  payload, files, adapter,
   // Consent props are managed by FormWizard so the submit button can read
   // them without prop-drilling state setters all the way down.
   consent, consentChecked, setConsentChecked, consentLoading,
   consentExpanded, setConsentExpanded,
 }) {
+  // The public form skips the internal-passport step entirely, so the
+  // review summary should hide that section too — otherwise the tourist
+  // sees four "—" rows that they could never have filled.
+  const isPublic = Boolean(adapter?.isPublic);
   return (
     <div className="fw-step-content">
       <section className="fw-review-section">
@@ -59,15 +64,17 @@ export default function ReviewStep({
         </dl>
       </section>
 
-      <section className="fw-review-section">
-        <h3>Внутренний паспорт РФ</h3>
-        <dl className="fw-review-dl">
-          <dt>Серия</dt><dd>{fmt(payload.internal_series)}</dd>
-          <dt>Номер</dt><dd>{fmt(payload.internal_number)}</dd>
-          <dt>Дата выдачи</dt><dd>{fmt(payload.internal_issued_ru)}</dd>
-          <dt>Кем выдан</dt><dd>{fmt(payload.internal_issued_by_ru)}</dd>
-        </dl>
-      </section>
+      {!isPublic && (
+        <section className="fw-review-section">
+          <h3>Внутренний паспорт РФ</h3>
+          <dl className="fw-review-dl">
+            <dt>Серия</dt><dd>{fmt(payload.internal_series)}</dd>
+            <dt>Номер</dt><dd>{fmt(payload.internal_number)}</dd>
+            <dt>Дата выдачи</dt><dd>{fmt(payload.internal_issued_ru)}</dd>
+            <dt>Кем выдан</dt><dd>{fmt(payload.internal_issued_by_ru)}</dd>
+          </dl>
+        </section>
+      )}
 
       <section className="fw-review-section">
         <h3>Загранпаспорт</h3>

@@ -524,6 +524,30 @@ export async function parseSubmissionPassportAdmin(submissionId, fileId, type) {
   return res.json();
 }
 
+// parseSubmissionTicketAdmin recognises a single ticket scan attached to
+// the submission. Returns { arrival, departure } — same shape as the
+// per-tourist parser, so the wizard's payload.flight_data slot accepts it
+// directly.
+export async function parseSubmissionTicketAdmin(submissionId, fileId) {
+  const res = await apiFetch(`/submissions/${encodeURIComponent(submissionId)}/parse-ticket`, {
+    method: 'POST',
+    body: JSON.stringify({ file_id: fileId }),
+  });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
+// parseSubmissionVoucherAdmin recognises a single voucher scan and returns
+// the array of hotel stays found inside. Wizard appends to payload.hotels.
+export async function parseSubmissionVoucherAdmin(submissionId, fileId) {
+  const res = await apiFetch(`/submissions/${encodeURIComponent(submissionId)}/parse-voucher`, {
+    method: 'POST',
+    body: JSON.stringify({ file_id: fileId }),
+  });
+  if (!res.ok) throw await errFromRes(res);
+  return res.json();
+}
+
 // Returns { "<submission_id>": <count>, ... } for every tourist in the
 // group whose submission has at least one file attached. Tourists with
 // no submission_id (manager-created manually) and submissions with zero

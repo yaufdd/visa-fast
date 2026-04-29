@@ -361,13 +361,16 @@
   text-align: center;
 }
 
-.fw-main .sf-passport-seg--short,
-.fw-main .sf-passport-seg--series {
+/* Specificity bump (three classes + element) — beats the global
+   `.fw-main .sf-field input { width: 100% }` so the passport segments
+   keep their compact fixed widths and don't sprawl across the row. */
+.fw-main .sf-field input.sf-passport-seg--short,
+.fw-main .sf-field input.sf-passport-seg--series {
   width: 76px;
 }
 
-.fw-main .sf-passport-seg--long,
-.fw-main .sf-passport-seg--number {
+.fw-main .sf-field input.sf-passport-seg--long,
+.fw-main .sf-field input.sf-passport-seg--number {
   width: 130px;
 }
 
@@ -630,13 +633,13 @@
     gap: 6px;
   }
 
-  .fw-main .sf-passport-seg--short,
-  .fw-main .sf-passport-seg--series {
+  .fw-main .sf-field input.sf-passport-seg--short,
+  .fw-main .sf-field input.sf-passport-seg--series {
     width: 64px;
   }
 
-  .fw-main .sf-passport-seg--long,
-  .fw-main .sf-passport-seg--number {
+  .fw-main .sf-field input.sf-passport-seg--long,
+  .fw-main .sf-field input.sf-passport-seg--number {
     width: 110px;
   }
 
@@ -823,6 +826,56 @@
 .ff-btn-danger:hover:not(:disabled) {
   border-color: var(--danger);
   color: var(--danger);
+}
+
+/* Icon-only button — square footprint, just a centered svg child. */
+.ff-icon-btn {
+  padding: 6px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  color: var(--white-dim);
+}
+.ff-icon-btn:hover:not(:disabled) {
+  color: var(--white);
+}
+
+/* Compact variant of the drop zone — used in Документы where stacking
+   three full-size drop zones eats too much screen space. Just a thin
+   rounded rectangle with a single "+ файл" label centered inside. */
+.ff-drop-compact {
+  padding: 10px 14px !important;
+  min-height: 0 !important;
+}
+.ff-drop-compact-label {
+  font-size: 12px;
+  color: var(--white-dim);
+  text-align: center;
+}
+.ff-drop-compact:hover:not(.is-disabled) .ff-drop-compact-label {
+  color: var(--accent);
+}
+
+/* Continuous "look at me" wink for the «Открыть» eye button. After a
+   successful parse the manager should look here — so the eye blinks
+   twice quickly, then idles for the rest of a 2-second cycle, looping
+   forever until the manager clicks the button (the React layer drops
+   the class on click). */
+@keyframes eyeWink {
+  /* First blink at the start of the cycle… */
+  0%   { transform: scaleY(1); }
+  5%   { transform: scaleY(0.08); }
+  10%  { transform: scaleY(1); }
+  /* …then a second blink right after… */
+  15%  { transform: scaleY(0.08); }
+  20%  { transform: scaleY(1); }
+  /* …then a long pause until the next cycle. */
+  100% { transform: scaleY(1); }
+}
+.btn-wink > svg {
+  transform-origin: center;
+  animation: eyeWink 2s ease infinite;
 }
 
 .ff-error {

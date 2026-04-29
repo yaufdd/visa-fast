@@ -1,9 +1,12 @@
 import { useRef, useState } from 'react';
 
 // Multi-file companion to FileUploadField: a list of already-uploaded files
-// with a per-file "Удалить" button and a single drop zone at the bottom for
-// adding more. Reuses the .ff-* styles from FileUploadField (mounted on the
-// page once via that component's <style> block).
+// with per-file Скачать / Заменить affordances and a single drop zone at the
+// bottom for adding more. Reuses the .ff-* styles from FileUploadField.
+//
+// `compact` shrinks the drop zone (no inner labels, just a small "+ файл"
+// button) — used in the Документы step where the section sits inside a
+// stack of three uploaders and full-size drop zones would crowd the page.
 
 const MAX_BYTES = 50 * 1024 * 1024;
 
@@ -34,12 +37,17 @@ export default function FileMultiUploadField({
   onAdded,
   onRemoved,
   acceptMime = '',
+  compact = false,
+  showDelete = false,
 }) {
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
-  const [deletingId, setDeletingId] = useState(null);
+  const [busyFileId, setBusyFileId] = useState(null);
   const [error, setError] = useState('');
   const inputRef = useRef(null);
+  const replaceInputRef = useRef(null);
+  // Tracks which file is being replaced once the OS file picker returns.
+  const replaceTargetRef = useRef(null);
   const [dragging, setDragging] = useState(false);
 
   const disabled = !submissionId;
@@ -108,17 +116,38 @@ export default function FileMultiUploadField({
     })();
   };
 
-  const handleDelete = async (file) => {
-    if (uploading || deletingId) return;
+  // Replace = upload new + delete old. If upload fails, old stays in place.
+  // If delete fails, both linger (manager can manually clean up later via
+  // the original list).
+  const handleReplaceClick = (file) => {
+    if (uploading || busyFileId) return;
     setError('');
-    setDeletingId(file.id);
+    replaceTargetRef.current = file;
+    replaceInputRef.current?.click();
+  };
+  const handleReplaceInput = async (e) => {
+    const newFile = e.target.files?.[0];
+    e.target.value = '';
+    const oldFile = replaceTargetRef.current;
+    replaceTargetRef.current = null;
+    if (!newFile || !oldFile) return;
+    const localErr = validateFile(newFile);
+    if (localErr) { setError(localErr); return; }
+    setBusyFileId(oldFile.id);
+    setError('');
     try {
-      await adapter.deleteFile(submissionId, file.id);
-      onRemoved?.(file.id);
+      const meta = await adapter.uploadFile(submissionId, fileType, newFile);
+      onAdded?.(meta);
+      try {
+        await adapter.deleteFile(submissionId, oldFile.id);
+        onRemoved?.(oldFile.id);
+      } catch (innerErr) {
+        setError(innerErr?.message || 'Не удалось убрать старый файл.');
+      }
     } catch (err) {
-      setError(err?.message || 'Не удалось удалить файл.');
+      setError(err?.message || 'Не удалось заменить файл.');
     } finally {
-      setDeletingId(null);
+      setBusyFileId(null);
     }
   };
 
@@ -132,6 +161,13 @@ export default function FileMultiUploadField({
         accept={acceptMime || undefined}
         onChange={handleInputChange}
         multiple
+        style={{ display: 'none' }}
+      />
+      <input
+        ref={replaceInputRef}
+        type="file"
+        accept={acceptMime || undefined}
+        onChange={handleReplaceInput}
         style={{ display: 'none' }}
       />
 
@@ -149,14 +185,52 @@ export default function FileMultiUploadField({
                 </div>
               </div>
               <div className="ff-file-actions">
+                {adapter?.downloadUrl && f.id && (
+                  <a
+                    className="ff-btn ff-icon-btn"
+                    href={adapter.downloadUrl(submissionId, f.id)}
+                    download
+                    title="Скачать"
+                    aria-label="Скачать"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                      <path d="M8 2.5v8M8 10.5l-3-3M8 10.5l3-3M3 13h10"
+                        stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </a>
+                )}
                 <button
                   type="button"
-                  className="ff-btn ff-btn-danger"
-                  onClick={() => handleDelete(f)}
-                  disabled={uploading || deletingId === f.id}
+                  className="ff-btn ff-icon-btn"
+                  onClick={() => handleReplaceClick(f)}
+                  disabled={uploading || busyFileId === f.id}
+                  title="Заменить файл"
+                  aria-label="Заменить"
                 >
-                  {deletingId === f.id ? 'Удаляю…' : 'Удалить'}
+                  {busyFileId === f.id ? (
+                    <span className="spinner" />
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                      <path d="M3 5h9M9.5 2.5 12 5l-2.5 2.5M13 11H4M6.5 13.5 4 11l2.5-2.5"
+                        stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  )}
                 </button>
+                {showDelete && (
+                  <button
+                    type="button"
+                    className="ff-btn ff-icon-btn"
+                    onClick={() => handleDelete(f)}
+                    disabled={uploading || busyFileId === f.id}
+                    title="Удалить файл"
+                    aria-label="Удалить"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                      <path d="M3 4h10M6.5 4V2.5a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1V4M4 4l.5 8.5a1.5 1.5 0 0 0 1.5 1.4h4a1.5 1.5 0 0 0 1.5-1.4L12 4M6.5 7v4M9.5 7v4"
+                        stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -174,7 +248,7 @@ export default function FileMultiUploadField({
 
       {!uploading && (
         <div
-          className={`ff-drop${dragging ? ' is-dragging' : ''}${disabled ? ' is-disabled' : ''}`}
+          className={`ff-drop${compact ? ' ff-drop-compact' : ''}${dragging ? ' is-dragging' : ''}${disabled ? ' is-disabled' : ''}`}
           onClick={pickFile}
           onDragOver={(e) => { e.preventDefault(); if (!disabled) setDragging(true); }}
           onDragLeave={() => setDragging(false)}
@@ -183,11 +257,17 @@ export default function FileMultiUploadField({
           tabIndex={disabled ? -1 : 0}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickFile(); } }}
         >
-          <div className="ff-drop-title">
-            {currentFiles.length > 0 ? 'Добавить ещё файл' : 'Перетащите файл сюда'}
-          </div>
-          <div className="ff-drop-sub">или нажмите, чтобы выбрать</div>
-          <div className="ff-drop-hint">PDF, JPEG, PNG · до 50 МБ · можно несколько</div>
+          {compact ? (
+            <div className="ff-drop-compact-label">+ файл</div>
+          ) : (
+            <>
+              <div className="ff-drop-title">
+                {currentFiles.length > 0 ? 'Добавить ещё файл' : 'Перетащите файл сюда'}
+              </div>
+              <div className="ff-drop-sub">или нажмите, чтобы выбрать</div>
+              <div className="ff-drop-hint">PDF, JPEG, PNG · до 50 МБ · можно несколько</div>
+            </>
+          )}
         </div>
       )}
 

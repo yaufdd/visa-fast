@@ -21,6 +21,7 @@ import { publicCreateSubmission } from '../../api/client';
 export function publicWizardAdapter(slug) {
   return {
     persistEnabled: true,
+    isPublic: true,
     startSubmission: () =>
       startSubmission(slug).then((data) => ({ submissionId: data.submission_id })),
     uploadFile: (submissionId, fileType, file, onProgress) =>
