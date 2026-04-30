@@ -32,20 +32,22 @@ export default function ForeignPassportStep({
       {dateField('expiry_date', 'Дата окончания')}
       {boxedField('issued_by_ru', 'Кем выдан')}
 
-      <FileUploadField
-        label="Скан загранпаспорта"
-        fileType="passport_foreign"
-        adapter={adapter}
-        submissionId={submissionId}
-        currentFile={files.passport_foreign || null}
-        onUploaded={(meta) => setFiles((f) => ({ ...f, passport_foreign: meta }))}
-        onDeleted={() => setFiles((f) => ({ ...f, passport_foreign: null }))}
-        onAutoFill={onAutoFill}
-        parseType="foreign"
-        acceptMime="application/pdf,image/jpeg,image/png"
-        filesMode={filesMode}
-        compact
-      />
+      {isAdmin && (
+        <FileUploadField
+          label="Скан/фото загранпаспорта"
+          fileType="passport_foreign"
+          adapter={adapter}
+          submissionId={submissionId}
+          currentFile={files.passport_foreign || null}
+          onUploaded={(meta) => setFiles((f) => ({ ...f, passport_foreign: meta }))}
+          onDeleted={() => setFiles((f) => ({ ...f, passport_foreign: null }))}
+          onAutoFill={onAutoFill}
+          parseType="foreign"
+          acceptMime="application/pdf,image/jpeg,image/png"
+          filesMode={filesMode}
+          compact
+        />
+      )}
 
       {autoFillNotice && (
         <div className="sf-autofill-notice">{autoFillNotice}</div>
