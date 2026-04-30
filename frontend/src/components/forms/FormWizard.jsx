@@ -278,6 +278,11 @@ export default function FormWizard({
   const [files, setFiles] = useState(() => {
     const empty = {
       passport_internal: [],
+      // Public-mode split: main page and registration page(s) are tracked
+      // separately so DocumentsStep can show two distinct upload slots.
+      // collectLocalFiles() merges both into passport_internal at submit.
+      passport_main: [],
+      passport_reg: [],
       passport_foreign: null,
       ticket: [],
       voucher: [],
@@ -295,6 +300,8 @@ export default function FormWizard({
     };
     return {
       passport_internal: toArr(initialFiles.passport_internal),
+      passport_main: [],
+      passport_reg: [],
       passport_foreign: initialFiles.passport_foreign ?? null,
       ticket: toArr(initialFiles.ticket),
       voucher: toArr(initialFiles.voucher),
@@ -402,6 +409,8 @@ export default function FormWizard({
     setPayload(buildDefaults());
     setFiles({
       passport_internal: [],
+      passport_main: [],
+      passport_reg: [],
       passport_foreign: null,
       ticket: [],
       voucher: [],
@@ -477,7 +486,14 @@ export default function FormWizard({
         .map((m) => (m && m._localFile) || null)
         .filter(Boolean);
     return {
-      passport_internal: arrFiles(files.passport_internal),
+      // Merge public-mode split slots (passport_main + passport_reg) with
+      // any admin-mode passport_internal files so publicSubmit receives a
+      // single flat array under the passport_internal multipart field name.
+      passport_internal: [
+        ...arrFiles(files.passport_internal),
+        ...arrFiles(files.passport_main),
+        ...arrFiles(files.passport_reg),
+      ],
       passport_foreign: fileOrNull(files.passport_foreign),
       ticket: arrFiles(files.ticket),
       voucher: arrFiles(files.voucher),
