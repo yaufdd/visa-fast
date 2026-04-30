@@ -32,6 +32,10 @@ type SubmissionFile struct {
 // ('passport_internal','passport_foreign','ticket','voucher'); HTTP
 // handlers should reject bad input earlier with a 400.
 func InsertOrReplaceSubmissionFile(ctx context.Context, pool *pgxpool.Pool, f SubmissionFile) (id string, oldPath string, replaced bool, err error) {
+	// The partial unique index created by migration 000024 covers only
+	// file_type = 'passport_foreign'. PostgreSQL requires the WHERE clause
+	// to be spelled out explicitly in ON CONFLICT — a plain
+	// ON CONFLICT (submission_id, file_type) cannot match a partial index.
 	err = pool.QueryRow(ctx,
 		`WITH old AS (
 		   SELECT file_path FROM submission_files
@@ -40,7 +44,7 @@ func InsertOrReplaceSubmissionFile(ctx context.Context, pool *pgxpool.Pool, f Su
 		 INSERT INTO submission_files
 		   (org_id, submission_id, file_type, file_path, original_name, mime_type, size_bytes)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
-		 ON CONFLICT (submission_id, file_type) DO UPDATE
+		 ON CONFLICT (submission_id, file_type) WHERE file_type = 'passport_foreign' DO UPDATE
 		   SET file_path = EXCLUDED.file_path,
 		       original_name = EXCLUDED.original_name,
 		       mime_type = EXCLUDED.mime_type,
