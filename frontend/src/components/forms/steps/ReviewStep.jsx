@@ -19,6 +19,7 @@ const fmt = (v) => {
 // confuse the tourist. Admin sees the full list below.
 const FILE_TYPE_LABELS_PUBLIC = {
   passport_internal: 'Скан внутреннего паспорта',
+  passport_foreign: 'Скан загранпаспорта',
   ticket: 'Авиабилеты',
   voucher: 'Ваучеры на отели',
 };
