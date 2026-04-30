@@ -97,18 +97,19 @@ export default function PersonalStep({ payload, setField, errors }) {
 
   return (
     <div className="fw-step-content">
-      <label className="sf-field" data-field="name_cyr">
-        <span className="sf-label">ФИО кириллицей</span>
+      <label className={`sf-field${errors.name_cyr ? ' has-error' : ''}`} data-field="name_cyr">
+        <span className="sf-label">ФИО кириллицей *</span>
         <input
           type="text"
           value={payload.name_cyr ?? ''}
           onChange={(e) => handleCyrChange(e.target.value)}
           autoComplete="off"
         />
+        {errors.name_cyr && <span className="sf-error">{errors.name_cyr}</span>}
       </label>
 
       <label className={`sf-field${errors.name_lat ? ' has-error' : ''}`} data-field="name_lat">
-        <span className="sf-label">ФИО латиницей</span>
+        <span className="sf-label">ФИО латиницей *</span>
         <input
           type="text"
           value={payload.name_lat ?? ''}
@@ -123,15 +124,15 @@ export default function PersonalStep({ payload, setField, errors }) {
         {errors.name_lat && <span className="sf-error">{errors.name_lat}</span>}
       </label>
 
-      {selectField('gender_ru', 'Пол', [
+      {selectField('gender_ru', 'Пол *', [
         { value: '', label: '—' },
         { value: 'Мужской', label: 'Мужской' },
         { value: 'Женский', label: 'Женский' },
       ])}
 
-      {dateField('birth_date', 'Дата рождения')}
+      {dateField('birth_date', 'Дата рождения *')}
 
-      {selectField('marital_status_ru', 'Семейное положение', [
+      {selectField('marital_status_ru', 'Семейное положение *', [
         { value: '', label: '—' },
         { value: 'Холост/не замужем', label: 'Холост / не замужем' },
         { value: 'Женат/замужем', label: 'Женат / замужем' },
@@ -213,20 +214,33 @@ export default function PersonalStep({ payload, setField, errors }) {
       {/* Phone moved here from TravelDocsStep — it belongs with the
           tourist's personal contact details, not with travel documents.
           Required (visa anketa needs a contact phone). */}
-      {phoneField('phone', 'Телефон')}
+      {phoneField('phone', 'Телефон *')}
     </div>
   );
 }
 
-// Validator for PersonalStep — Latin name regex + phone required.
-// Phone migrated from TravelDocsStep; it is the visa anketa's contact
-// number and the form should not let the tourist past Step 1 without
-// providing it.
+// Validator for PersonalStep — checks every field that the backend's
+// requiredPayloadKeys list requires under the hood, so the tourist can't
+// reach the Submit button without filling them.
 export function validate(payload) {
   const errors = {};
+  if (!String(payload.name_cyr || '').trim()) {
+    errors.name_cyr = 'Укажите ФИО кириллицей';
+  }
   const nameLat = (payload.name_lat || '').trim();
-  if (nameLat && !/^[A-Z ]+$/.test(nameLat)) {
+  if (!nameLat) {
+    errors.name_lat = 'Укажите ФИО латиницей';
+  } else if (!/^[A-Z ]+$/.test(nameLat)) {
     errors.name_lat = 'Только латинские буквы A–Z и пробелы';
+  }
+  if (!String(payload.gender_ru || '').trim()) {
+    errors.gender_ru = 'Выберите пол';
+  }
+  if (!String(payload.birth_date || '').trim()) {
+    errors.birth_date = 'Укажите дату рождения';
+  }
+  if (!String(payload.marital_status_ru || '').trim()) {
+    errors.marital_status_ru = 'Выберите семейное положение';
   }
   if (!String(payload.phone || '').trim()) {
     errors.phone = 'Укажите контактный телефон';

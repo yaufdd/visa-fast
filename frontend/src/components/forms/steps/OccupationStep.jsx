@@ -150,12 +150,6 @@ export default function OccupationStep({ payload, setField, errors }) {
           {phoneField('employer_phone', 'Телефон учебного заведения')}
         </>
       )}
-
-      {BLANK_OCCUPATION_TYPES.has(type) && (
-        <p className="sf-hint sf-occupation-note">
-          Поля раздела «Работа» заполнятся автоматически.
-        </p>
-      )}
     </div>
   );
 }

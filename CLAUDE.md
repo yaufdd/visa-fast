@@ -86,6 +86,8 @@ PORT=8080
 DOCGEN_SCRIPT=../../docgen/generate.py
 DOCGEN_PDF_TEMPLATE=./templates/anketa_template.pdf
 AI_LOG_RETENTION_DAYS=30  # ai_call_logs auto-cleanup; 0 disables
+YANDEX_CAPTCHA_SECRET=     # Yandex SmartCaptcha server key. When set, the public form requires a valid SmartCaptcha token before accepting submissions; when empty, captcha verification is skipped (local dev convenience).
+VITE_YANDEX_CAPTCHA_SITE_KEY=  # Frontend build-time arg (Vite). The public site key embedded in the SmartCaptcha widget; paired with YANDEX_CAPTCHA_SECRET on the backend. Wired through Dockerfile.frontend by the frontend agent.
 ```
 
 Backend **refuses to start** without `APP_SECRET`, `YANDEX_FOLDER_ID`, or

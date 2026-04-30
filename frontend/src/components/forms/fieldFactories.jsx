@@ -180,7 +180,7 @@ export function PassportNumberField({ payload, errors, setField }) {
 
   return (
     <label className={`sf-field${err ? ' has-error' : ''}`} data-field="passport_number">
-      <span className="sf-label">Номер загранпаспорта</span>
+      <span className="sf-label">Номер загранпаспорта *</span>
       <div className="sf-passport-input">
         <div className="sf-passport-col">
           <input

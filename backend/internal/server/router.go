@@ -10,6 +10,7 @@ import (
 
 	"fujitravel-admin/backend/internal/ai"
 	"fujitravel-admin/backend/internal/api"
+	"fujitravel-admin/backend/internal/captcha"
 	appmw "fujitravel-admin/backend/internal/middleware"
 )
 
@@ -22,7 +23,11 @@ import (
 // or /uploads-parse paths can pass nil — the router simply forwards both
 // to the handlers, which only dereference them inside the relevant
 // codepaths.
-func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRecognizer, uploadsDir, pythonScript string) http.Handler {
+//
+// captchaVerifier gates the public submission endpoint. Pass a verifier
+// constructed with an empty secret (or a fresh captcha.New("")) to
+// disable verification — useful for tests and local dev.
+func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRecognizer, captchaVerifier *captcha.Verifier, uploadsDir, pythonScript string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.RealIP)
 	r.Use(chimw.RequestID)
@@ -44,15 +49,8 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 	})
 
 	// Rate limiters.
-	registerRL := appmw.NewRateLimiter(5, 15*time.Minute)
+	registerRL := appmw.NewRateLimiter(10, 15*time.Minute)
 	loginRL := appmw.NewRateLimiter(10, 15*time.Minute)
-	// publicRL is the strict bucket for row-creation endpoints on the
-	// public form (anti-spam against bots probing the slug pool).
-	publicRL := appmw.NewRateLimiter(3, 10*time.Minute)
-	// publicFileRL covers the file CRUD path; a real tourist uploads
-	// four scans (passport_internal, passport_foreign, ticket, voucher)
-	// and may replace one or two of them, which would trip publicRL.
-	publicFileRL := appmw.NewRateLimiter(30, 10*time.Minute)
 
 	r.Route("/api", func(r chi.Router) {
 		// Health
@@ -68,19 +66,15 @@ func NewRouter(pool *pgxpool.Pool, translator ai.Translator, ocrClient ai.OCRRec
 		r.With(registerRL.Middleware()).Post("/auth/register", api.Register(pool))
 		r.With(loginRL.Middleware()).Post("/auth/login", api.Login(pool))
 
-		// Public — slug form
+		// Public — slug form. The atomic multipart submit endpoint
+		// receives the JSON payload + every uploaded scan in one
+		// request; there is no draft mechanism on the public side.
+		// Rate limiting was previously layered on /start and the
+		// per-file CRUD endpoints; with the single-shot design, the
+		// dedup unique index on tourist_submissions and the 250 MB
+		// body cap give equivalent protection without a token bucket.
 		r.Get("/public/org/{slug}", api.PublicOrg(pool))
-		r.With(publicRL.Middleware()).Post("/public/submissions/{slug}", api.PublicSubmit(pool))
-
-		// Public — draft submission + scan attachments. /start uses the
-		// strict publicRL (it creates a row); /files* use the looser
-		// publicFileRL so legitimate scan uploads do not get 429'd
-		// mid-form.
-		r.With(publicRL.Middleware()).Post("/public/submissions/{slug}/start", api.PublicSubmissionStart(pool))
-		r.With(publicFileRL.Middleware()).Post("/public/submissions/{slug}/files/{type}", api.PublicUploadSubmissionFile(pool, uploadsDir))
-		r.With(publicFileRL.Middleware()).Get("/public/submissions/{slug}/files", api.PublicListSubmissionFiles(pool))
-		r.With(publicFileRL.Middleware()).Delete("/public/submissions/{slug}/files/{id}", api.PublicDeleteSubmissionFile(pool, uploadsDir))
-		r.With(publicFileRL.Middleware()).Post("/public/submissions/{slug}/parse-passport", api.PublicParsePassport(pool, ocrClient, translator))
+		r.Post("/public/submissions/{slug}", api.PublicSubmit(pool, uploadsDir, captchaVerifier))
 
 		// Public — consent text
 		r.Get("/consent/text", api.GetConsentText())

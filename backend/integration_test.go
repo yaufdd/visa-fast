@@ -16,12 +16,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"fujitravel-admin/backend/internal/captcha"
 	"fujitravel-admin/backend/internal/server"
 )
 
 func startTestServer(t *testing.T, pool *pgxpool.Pool) *httptest.Server {
 	t.Helper()
-	handler := server.NewRouter(pool, nil, nil, t.TempDir(), "/tmp/generate.py")
+	handler := server.NewRouter(pool, nil, nil, captcha.New(""), t.TempDir(), "/tmp/generate.py")
 	return httptest.NewServer(handler)
 }
 

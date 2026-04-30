@@ -1,12 +1,22 @@
 import { useRef, useState } from 'react';
 
-// Multi-file companion to FileUploadField: a list of already-uploaded files
-// with per-file Скачать / Заменить affordances and a single drop zone at the
-// bottom for adding more. Reuses the .ff-* styles from FileUploadField.
+// Multi-file companion to FileUploadField: a list of selected/uploaded
+// files with per-file Скачать / Заменить affordances and a single drop
+// zone at the bottom for adding more. Reuses the .ff-* styles from
+// FileUploadField.
 //
 // `compact` shrinks the drop zone (no inner labels, just a small "+ файл"
 // button) — used in the Документы step where the section sits inside a
 // stack of three uploaders and full-size drop zones would crowd the page.
+//
+// Two modes (mirror of FileUploadField — see that file's header for the
+// detailed contract):
+//
+//   filesMode === 'upload-now'        → uploads immediately on pick.
+//   filesMode === 'upload-on-submit'  → keeps File refs in component
+//                                       state; multipart submit ships
+//                                       them later. No server calls
+//                                       for delete / replace either.
 
 const MAX_BYTES = 50 * 1024 * 1024;
 
@@ -28,6 +38,16 @@ function mimeAllowed(accept, mime) {
   });
 }
 
+function localFileMeta(file) {
+  return {
+    id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    original_name: file.name,
+    size_bytes: file.size,
+    mime_type: file.type || '',
+    _localFile: file,
+  };
+}
+
 export default function FileMultiUploadField({
   label,
   fileType,
@@ -39,6 +59,7 @@ export default function FileMultiUploadField({
   acceptMime = '',
   compact = false,
   showDelete = false,
+  filesMode = 'upload-now',
 }) {
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
@@ -50,7 +71,10 @@ export default function FileMultiUploadField({
   const replaceTargetRef = useRef(null);
   const [dragging, setDragging] = useState(false);
 
-  const disabled = !submissionId;
+  const localOnly = filesMode === 'upload-on-submit';
+  // In upload-now mode the widget needs a real submission row server-side;
+  // upload-on-submit mode is purely client state, so it's always enabled.
+  const disabled = localOnly ? false : !submissionId;
 
   const validateFile = (file) => {
     if (file.size > MAX_BYTES) return 'Файл слишком большой (>50 МБ)';
@@ -64,6 +88,12 @@ export default function FileMultiUploadField({
     const localErr = validateFile(file);
     if (localErr) { setError(localErr); return; }
     setError('');
+
+    if (localOnly) {
+      onAdded?.(localFileMeta(file));
+      return;
+    }
+
     setUploading(true);
     setProgress(0);
     try {
@@ -92,8 +122,8 @@ export default function FileMultiUploadField({
     const list = Array.from(e.target.files || []);
     e.target.value = '';
     if (list.length === 0) return;
-    // Sequential upload — keeps the progress bar meaningful and prevents
-    // a flood of parallel multipart requests for a tourist on mobile.
+    // Sequential — keeps the progress bar meaningful in upload-now mode
+    // and avoids a flood of state updates in upload-on-submit mode.
     (async () => {
       for (const file of list) {
         // eslint-disable-next-line no-await-in-loop
@@ -116,9 +146,9 @@ export default function FileMultiUploadField({
     })();
   };
 
-  // Replace = upload new + delete old. If upload fails, old stays in place.
-  // If delete fails, both linger (manager can manually clean up later via
-  // the original list).
+  // Replace = upload new + delete old (server) OR swap the local meta in
+  // place (client). In upload-now mode if upload fails, old stays in
+  // place; if delete fails, both linger and the manager can clean up.
   const handleReplaceClick = (file) => {
     if (uploading || busyFileId) return;
     setError('');
@@ -133,6 +163,16 @@ export default function FileMultiUploadField({
     if (!newFile || !oldFile) return;
     const localErr = validateFile(newFile);
     if (localErr) { setError(localErr); return; }
+
+    if (localOnly) {
+      // Pure client-side swap: remove old meta, add new meta. Order
+      // matters — onRemoved before onAdded keeps any duplicate-id guards
+      // happy, though our local ids are unique by construction.
+      onRemoved?.(oldFile.id);
+      onAdded?.(localFileMeta(newFile));
+      return;
+    }
+
     setBusyFileId(oldFile.id);
     setError('');
     try {
@@ -150,6 +190,32 @@ export default function FileMultiUploadField({
       setBusyFileId(null);
     }
   };
+
+  // Delete a single file. Server-side in upload-now mode, in-memory
+  // drop in upload-on-submit mode. The original implementation didn't
+  // have a delete handler at all (showDelete-gated) — we add one here
+  // because the public form needs to let tourists clear a wrong pick.
+  const handleDelete = async (file) => {
+    if (!file?.id || uploading || busyFileId) return;
+    setError('');
+    if (localOnly) {
+      onRemoved?.(file.id);
+      return;
+    }
+    setBusyFileId(file.id);
+    try {
+      await adapter.deleteFile(submissionId, file.id);
+      onRemoved?.(file.id);
+    } catch (err) {
+      setError(err?.message || 'Не удалось удалить файл.');
+    } finally {
+      setBusyFileId(null);
+    }
+  };
+
+  // In upload-on-submit mode the tourist always gets a Delete button —
+  // there is no server row to "preserve" by hiding it.
+  const showDeleteEffective = showDelete || localOnly;
 
   return (
     <div className="ff-wrap" data-field={`file_${fileType}`}>
@@ -185,7 +251,7 @@ export default function FileMultiUploadField({
                 </div>
               </div>
               <div className="ff-file-actions">
-                {adapter?.downloadUrl && f.id && (
+                {!localOnly && adapter?.downloadUrl && f.id && (
                   <a
                     className="ff-btn ff-icon-btn"
                     href={adapter.downloadUrl(submissionId, f.id)}
@@ -216,7 +282,7 @@ export default function FileMultiUploadField({
                     </svg>
                   )}
                 </button>
-                {showDelete && (
+                {showDeleteEffective && (
                   <button
                     type="button"
                     className="ff-btn ff-icon-btn"

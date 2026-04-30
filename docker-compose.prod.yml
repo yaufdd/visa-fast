@@ -39,6 +39,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+      args:
+        # SmartCaptcha public site key — read from .env on the server
+        # (compose substitutes ${VAR} from the same .env it loads for
+        # the backend). Empty / unset → captcha widget isn't rendered.
+        VITE_YANDEX_CAPTCHA_SITE_KEY: ${VITE_YANDEX_CAPTCHA_SITE_KEY:-}
     restart: unless-stopped
     ports:
       - "3000:80"

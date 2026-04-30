@@ -34,16 +34,39 @@ function mimeAllowed(accept, mime) {
   });
 }
 
-// FileUploadField — single-file widget bound to one (submissionId, fileType)
-// pair. Uses the public-form endpoints exposed by api/files.js.
+// Build a synthetic "file meta" object that mimics the backend response
+// shape (id / original_name / size_bytes / mime_type) so the rest of the
+// wizard treats locally-picked and server-uploaded files uniformly. The
+// `_localFile` slot carries the actual File object — the public adapter
+// pulls it out at submit time to attach to the multipart body.
+function localFileMeta(file) {
+  return {
+    id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    original_name: file.name,
+    size_bytes: file.size,
+    mime_type: file.type || '',
+    _localFile: file,
+  };
+}
+
+// FileUploadField — single-file widget. Has two modes:
 //
-// States:
-//   empty      — drop zone visible, "Выбрать файл" button
-//   uploading  — progress bar 0..100%
-//   uploaded   — file name + size + Заменить / Удалить (and Распознать
-//                if onAutoFill is set)
-//   parsing    — spinner while /parse-passport is running
-//   error      — red text under the widget; cleared on next action
+//   filesMode === 'upload-now' (admin)
+//     Picks → uploads to the backend immediately via adapter.uploadFile.
+//     Shows a progress bar while bytes go up. Replace / Delete also hit
+//     the backend. This is what the manager wizard uses — the row exists
+//     server-side from the moment the page mounts.
+//
+//   filesMode === 'upload-on-submit' (public, default)
+//     Picks → keeps the File in component state via onUploaded(meta) where
+//     meta carries `_localFile`. No network call. Replace clears + repicks;
+//     Delete (when shown) clears state. The parent wizard ships the File
+//     refs as part of the final multipart submit.
+//
+// States in 'upload-now' mode:
+//   empty / uploading (progress) / uploaded / parsing / error
+// States in 'upload-on-submit' mode:
+//   empty / uploaded / error  (no uploading or parsing)
 export default function FileUploadField({
   label,
   fileType,
@@ -56,6 +79,7 @@ export default function FileUploadField({
   parseType,
   acceptMime = '',
   showDelete = false,
+  filesMode = 'upload-now',
 }) {
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
@@ -64,13 +88,18 @@ export default function FileUploadField({
   const inputRef = useRef(null);
   const [dragging, setDragging] = useState(false);
 
+  const localOnly = filesMode === 'upload-on-submit';
+
   // Reset progress whenever the parent swaps the underlying file (e.g.
   // after deletion or replacement) so a stale 100% bar doesn't flash.
   useEffect(() => {
     setProgress(0);
   }, [currentFile?.id]);
 
-  const disabled = !submissionId;
+  // In upload-now mode the widget is gated on a real submissionId. In
+  // upload-on-submit mode there is no submission row yet — the picker
+  // is always enabled.
+  const disabled = localOnly ? false : !submissionId;
 
   const pickFile = () => {
     if (disabled || uploading || parsing) return;
@@ -88,13 +117,20 @@ export default function FileUploadField({
     return '';
   };
 
-  const handleUpload = async (file) => {
+  const handlePick = async (file) => {
     const localErr = validateFile(file);
     if (localErr) {
       setError(localErr);
       return;
     }
     setError('');
+
+    if (localOnly) {
+      // No network — hand a synthetic meta carrying the File reference up.
+      onUploaded?.(localFileMeta(file));
+      return;
+    }
+
     setUploading(true);
     setProgress(0);
     try {
@@ -114,7 +150,7 @@ export default function FileUploadField({
 
   const handleInputChange = (e) => {
     const file = e.target.files?.[0];
-    if (file) handleUpload(file);
+    if (file) handlePick(file);
     // Allow re-picking the same file later.
     e.target.value = '';
   };
@@ -124,12 +160,17 @@ export default function FileUploadField({
     setDragging(false);
     if (disabled || uploading || parsing) return;
     const file = e.dataTransfer.files?.[0];
-    if (file) handleUpload(file);
+    if (file) handlePick(file);
   };
 
   const handleDelete = async () => {
     if (!currentFile?.id || uploading || parsing) return;
     setError('');
+    if (localOnly) {
+      // No backend call — just drop the reference.
+      onDeleted?.();
+      return;
+    }
     try {
       await adapter.deleteFile(submissionId, currentFile.id);
       onDeleted?.();
@@ -153,6 +194,11 @@ export default function FileUploadField({
   };
 
   const showEmpty = !currentFile && !uploading;
+
+  // Recognition is only meaningful when the file lives on the server.
+  // In upload-on-submit mode (public), hide the parse affordance so we
+  // don't dangle a button that can't fire.
+  const canParse = !localOnly && onAutoFill && parseType;
 
   return (
     <div className="ff-wrap" data-field={`file_${fileType}`}>
@@ -204,7 +250,7 @@ export default function FileUploadField({
             </div>
           </div>
           <div className="ff-file-actions">
-            {onAutoFill && parseType && (
+            {canParse && (
               <button
                 type="button"
                 className="ff-btn ff-btn-accent btn-magic"
@@ -215,7 +261,7 @@ export default function FileUploadField({
                 {parsing ? <span className="spinner" /> : '✦ Распознать'}
               </button>
             )}
-            {adapter?.downloadUrl && currentFile.id && (
+            {!localOnly && adapter?.downloadUrl && currentFile.id && (
               <a
                 className="ff-btn ff-icon-btn"
                 href={adapter.downloadUrl(submissionId, currentFile.id)}
@@ -245,7 +291,9 @@ export default function FileUploadField({
                   stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </button>
-            {showDelete && (
+            {/* In upload-on-submit mode the tourist always gets a Delete
+                button — there's no server row to "preserve" by hiding it. */}
+            {(showDelete || localOnly) && (
               <button
                 type="button"
                 className="ff-btn ff-icon-btn"

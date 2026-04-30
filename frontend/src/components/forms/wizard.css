@@ -147,6 +147,21 @@
   gap: 14px;
 }
 
+/* SmartCaptcha block on the Review step. Sits between the consent
+   panel and the wizard's bottom action bar. We reserve a minimum
+   height on the host so the widget appearing async doesn't shift the
+   submit button down. */
+.fw-captcha-section {
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+}
+
+.fw-captcha-host {
+  display: flex;
+  justify-content: flex-start;
+}
+
 /* Bottom action bar */
 .fw-actions {
   display: flex;
@@ -219,6 +234,51 @@
   text-transform: uppercase;
   color: var(--accent);
   font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fw-review-clickable {
+  cursor: pointer;
+  transition: border-color 400ms ease, box-shadow 400ms ease;
+}
+
+.fw-review-clickable:hover,
+.fw-review-clickable:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* Glow when the server flagged this section as containing missing
+   required fields. The transition above (border-color 400ms) drives the
+   smooth fade-in: the class is applied after a failed submit, and the
+   border-color animates from the default neutral to the danger red. */
+.fw-review-missing {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px var(--danger);
+}
+
+.fw-review-missing:hover,
+.fw-review-missing:focus-visible {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px var(--danger), 0 0 0 4px rgba(220, 60, 60, 0.18);
+}
+
+.fw-review-edit {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--white-dim);
+  opacity: 0.7;
+}
+
+.fw-review-clickable:hover .fw-review-edit,
+.fw-review-clickable:focus-visible .fw-review-edit {
+  color: var(--accent);
+  opacity: 1;
 }
 
 .fw-review-dl {

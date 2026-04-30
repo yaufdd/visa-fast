@@ -44,13 +44,12 @@ func CreateDraftSubmissionAsManager(pool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-// Manager-facing counterparts of handlers_public_files.go: list, download,
-// and (rarely) delete the files a tourist attached via the public wizard.
+// Manager-facing handlers for the files a tourist attached on the public
+// form: list, download, and (rarely) delete.
 //
 // Enumeration safety: wrong-org / missing-row collapses to 404 — same
-// convention as resolveDraftSubmission used by the public siblings, and
-// every other authenticated handler in this codebase. Cross-org access
-// must NOT leak existence via 403.
+// convention every other authenticated handler in this codebase uses.
+// Cross-org access must NOT leak existence via 403.
 //
 // Defence in depth on download/delete: even with a session cookie, we
 // re-verify that the file row's submission_id matches the URL path
@@ -183,10 +182,10 @@ func DeleteSubmissionFile(pool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 
-		// Confirm the file row belongs to this submission before deleting,
-		// mirroring PublicDeleteSubmissionFile. Cheaper than relying on the
-		// DELETE itself to enforce the relationship since the org-scoped
-		// DELETE wouldn't catch a (different submission, same org) leak.
+		// Confirm the file row belongs to this submission before deleting.
+		// Cheaper than relying on the DELETE itself to enforce the
+		// relationship since the org-scoped DELETE wouldn't catch a
+		// (different submission, same org) leak.
 		f, err := db.GetSubmissionFile(r.Context(), pool, orgID, fileID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {

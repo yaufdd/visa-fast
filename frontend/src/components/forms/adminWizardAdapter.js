@@ -25,6 +25,11 @@ export function adminWizardAdapter() {
   return {
     persistEnabled: false,
     isPublic: false,
+    // 'upload-now' — the manager has a real submission row from the
+    // moment the page mounts (createDraftSubmission ran on /submissions/new),
+    // so per-file uploads happen as soon as the picker returns. Public
+    // mode is 'upload-on-submit' instead.
+    filesMode: 'upload-now',
     startSubmission: () =>
       createDraftSubmission().then((data) => ({ submissionId: data.submission_id })),
     uploadFile: (submissionId, fileType, file, onProgress) =>

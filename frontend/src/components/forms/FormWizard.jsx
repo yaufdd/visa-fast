@@ -11,6 +11,21 @@
 // the public /form/<slug> page and the manager-side /submissions/<id>
 // page.
 //
+// Files are tracked in two flavours, controlled by `adapter.filesMode`:
+//
+//   'upload-now' (admin)
+//     The wizard has a real submissionId from mount. Each pick fires an
+//     immediate upload to the backend; the meta returned by the server
+//     (id, original_name, size_bytes, mime_type, file_type) lands in
+//     `files`. onSubmit just gets the payload — files are already
+//     persisted server-side under the same row.
+//
+//   'upload-on-submit' (public)
+//     No submissionId. Picks store synthetic meta records carrying
+//     `_localFile: File` in `files`. On final submit the wizard hands
+//     the entire `files` object to onSubmit so the adapter can pack it
+//     into a multipart body.
+//
 // localStorage draft persistence is opt-in via `adapter.persistEnabled`:
 //   - public mode → true (tourist may close the tab mid-anketa)
 //   - admin  mode → false (server is the source of truth; persisting per
@@ -18,6 +33,11 @@
 // The persistence key is namespaced by the optional `persistKey` prop
 // (the slug, in public mode); admin mode passes nothing and short-
 // circuits the persistence layer entirely.
+//
+// Public-mode persistence intentionally omits `files` and `submissionId`:
+// File objects can't be serialised, and there is no draft row to rebind.
+// On reload the typed text returns; selected files have to be picked
+// again.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getConsentText } from '../../api/client';
@@ -126,16 +146,13 @@ export default function FormWizard({
   // mode hides it because the consent stamp from the original tourist
   // submission is preserved on the row.
   showConsent = true,
-  // onRestoreSubmissionId — invoked once when the wizard finds a saved
-  // submissionId in localStorage on mount. The parent (SubmissionFormPage)
-  // uses this to skip its draft-allocation call so a reload doesn't orphan
-  // the previous draft + its uploaded files. Only relevant in public mode.
-  onRestoreSubmissionId = null,
-  // onResetDraft — invoked when the tourist clicks "Начать заново" in the
-  // restore banner. Lets the parent issue a fresh draft.
-  onResetDraft = null,
 }) {
   const persistEnabled = Boolean(adapter?.persistEnabled && persistKey);
+  // 'upload-now' (admin) vs 'upload-on-submit' (public). Defaults to
+  // 'upload-on-submit' if the adapter forgot to declare it — the safer
+  // default for any new entry point because it avoids a server round-
+  // trip per pick.
+  const filesMode = adapter?.filesMode || 'upload-on-submit';
   // Step list — wrapped in useMemo so step navigation / validation refs
   // stay stable across renders. Only the last step's label depends on
   // adapter.isPublic right now.
@@ -145,6 +162,10 @@ export default function FormWizard({
   // only). We split the load out so the initial state for every piece of
   // wizard state can be seeded from it without an extra effect+setState
   // round-trip (which would briefly flash the empty form).
+  //
+  // The blob no longer carries `files` or `submissionId` — see the file
+  // header comment for why. A v1 blob written by an older build will
+  // still load (those fields are simply ignored).
   const restoredBlob = useMemo(
     () => (persistEnabled ? loadWizardBlob(persistKey) : null),
     [persistEnabled, persistKey],
@@ -154,8 +175,6 @@ export default function FormWizard({
     && (
       Object.keys(restoredBlob.payload || {}).length > 0
       || (restoredBlob.currentStep ?? 0) > 0
-      || restoredBlob.submissionId
-      || restoredBlob.files
     ),
   );
 
@@ -253,6 +272,9 @@ export default function FormWizard({
   }, [initialPayload, restoredBlob]);
 
   const [payload, setPayload] = useState(initialState);
+  // Files state. Admin path receives `initialFiles` from the parent
+  // (server-loaded list); public path always starts empty — there are
+  // no File refs to restore from localStorage.
   const [files, setFiles] = useState(() => {
     const empty = {
       passport_internal: [],
@@ -260,11 +282,7 @@ export default function FormWizard({
       ticket: [],
       voucher: [],
     };
-    // Server-provided seeds (admin edit mode) take precedence over
-    // localStorage. In public mode initialFiles is usually null and the
-    // restoredBlob path runs.
-    const seed = initialFiles || restoredBlob?.files || null;
-    if (!seed) return empty;
+    if (!initialFiles) return empty;
     // Backwards compat: ticket/voucher used to be single objects (one per
     // submission). After 000023 they are arrays. passport_internal joined
     // the array types in 000024. Promote any legacy single-object seed
@@ -276,10 +294,10 @@ export default function FormWizard({
       return [v];
     };
     return {
-      passport_internal: toArr(seed.passport_internal),
-      passport_foreign: seed.passport_foreign ?? null,
-      ticket: toArr(seed.ticket),
-      voucher: toArr(seed.voucher),
+      passport_internal: toArr(initialFiles.passport_internal),
+      passport_foreign: initialFiles.passport_foreign ?? null,
+      ticket: toArr(initialFiles.ticket),
+      voucher: toArr(initialFiles.voucher),
     };
   });
   const [currentStep, setCurrentStep] = useState(() => {
@@ -297,6 +315,22 @@ export default function FormWizard({
   });
   const [errors, setErrors] = useState({});
   const [apiError, setApiError] = useState('');
+  // SmartCaptcha state. Only used when the wizard is in public mode AND
+  // a build-time site key is present (see siteKey below). The token is
+  // single-use, so we bump captchaResetSignal after every failed submit
+  // attempt to refresh the widget for a retry. Both pieces of state
+  // are no-ops when captcha is disabled.
+  const [captchaToken, setCaptchaToken] = useState('');
+  const [captchaResetSignal, setCaptchaResetSignal] = useState(0);
+  // SmartCaptcha public site key, baked in at build time via Vite. Empty
+  // string → captcha is soft-disabled on this build (no widget rendered,
+  // no token sent, backend treats it as "captcha off" provided its own
+  // server secret is also unset).
+  const siteKey = (import.meta.env && import.meta.env.VITE_YANDEX_CAPTCHA_SITE_KEY) || '';
+  // Server-reported missing fields (set when the backend returns the
+  // "missing fields" 400 with a `missing` array). Used by ReviewStep to
+  // glow the relevant section so the tourist can find what's empty.
+  const [missingFields, setMissingFields] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [autoFillNotice, setAutoFillNotice] = useState('');
   const [showRestoreBanner, setShowRestoreBanner] = useState(wasRestored);
@@ -330,18 +364,6 @@ export default function FormWizard({
     return () => clearTimeout(t);
   }, [autoFillNotice]);
 
-  // Hand the restored submission id back to the parent ONCE so it can
-  // skip its draft-allocation call. We do this in an effect (not at render
-  // time) to avoid setState-during-render warnings in the parent.
-  const restoreNotifiedRef = useRef(false);
-  useEffect(() => {
-    if (restoreNotifiedRef.current) return;
-    restoreNotifiedRef.current = true;
-    if (restoredBlob?.submissionId && onRestoreSubmissionId) {
-      onRestoreSubmissionId(restoredBlob.submissionId);
-    }
-  }, [restoredBlob, onRestoreSubmissionId]);
-
   // Auto-dismiss the restore banner after 5 s. The tourist can also
   // dismiss it manually via the close button.
   useEffect(() => {
@@ -350,25 +372,22 @@ export default function FormWizard({
     return () => clearTimeout(t);
   }, [showRestoreBanner]);
 
-  // Debounced persistence — re-save 250 ms after the last change to any
-  // tracked piece of state. Public mode only; admin mode skips entirely.
+  // Debounced persistence — re-save 250 ms after the last change to
+  // payload / step. Public mode only; admin mode skips entirely. Files
+  // and submissionId are NOT persisted (see file header comment).
   useEffect(() => {
     if (!persistEnabled) return undefined;
     const t = setTimeout(() => {
       saveWizardBlob(persistKey, {
         payload,
         currentStep,
-        files,
-        submissionId,
       });
     }, 250);
     return () => clearTimeout(t);
-  }, [persistEnabled, persistKey, payload, currentStep, files, submissionId]);
+  }, [persistEnabled, persistKey, payload, currentStep]);
 
   // "Начать заново" — clears the persisted blob and resets every piece
-  // of in-memory state to defaults. The parent is asked (via callback)
-  // to issue a fresh draft so any uploads on the new draft land on a
-  // clean submission row.
+  // of in-memory state to defaults.
   const buildDefaults = () => {
     const base = {};
     for (const name of ALL_FIELDS) {
@@ -392,7 +411,6 @@ export default function FormWizard({
     setApiError('');
     setConsentChecked(!showConsent);
     setShowRestoreBanner(false);
-    onResetDraft?.();
   };
 
   const clearError = (name) => {
@@ -420,14 +438,15 @@ export default function FormWizard({
   };
 
   const handleNext = () => {
+    // Per-step validation deliberately does NOT fire here — we let the
+    // tourist navigate freely between steps. All required-field checks
+    // run on the Submit attempt at the end (handleSubmit), which jumps
+    // the wizard to the first step that has an error and highlights the
+    // empty fields. This keeps the wizard's "Далее" feeling responsive
+    // and unrestricted while still guaranteeing a valid payload reaches
+    // the backend.
     setApiError('');
-    const validator = STEPS[currentStep].validate;
-    const errs = validator(payload) || {};
-    setErrors(errs);
-    if (Object.keys(errs).length > 0) {
-      scrollToFirstError(errs);
-      return;
-    }
+    setErrors({});
     setCurrentStep((s) => Math.min(s + 1, STEPS.length - 1));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -447,8 +466,27 @@ export default function FormWizard({
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // Strip locally-collected `_localFile` references out of the meta we
+  // hand to onSubmit's first arg path, etc. We need the real File refs
+  // when the public adapter packs the multipart body — extract them
+  // here into a {category: File[] | File | null} shape.
+  const collectLocalFiles = () => {
+    const fileOrNull = (v) => (v && v._localFile) || null;
+    const arrFiles = (arr) =>
+      (Array.isArray(arr) ? arr : [])
+        .map((m) => (m && m._localFile) || null)
+        .filter(Boolean);
+    return {
+      passport_internal: arrFiles(files.passport_internal),
+      passport_foreign: fileOrNull(files.passport_foreign),
+      ticket: arrFiles(files.ticket),
+      voucher: arrFiles(files.voucher),
+    };
+  };
+
   const handleSubmit = async () => {
     setApiError('');
+    setMissingFields([]);
 
     const finalPayload = applyOccupationAutoFill(payload);
 
@@ -467,14 +505,50 @@ export default function FormWizard({
       return;
     }
 
+    // Captcha gate: only meaningful when public-mode AND a site key is
+    // baked into the build. Order matches the spec: required fields →
+    // consent → captcha → submit.
+    const captchaActive = Boolean(adapter?.isPublic) && Boolean(siteKey);
+    if (captchaActive && !captchaToken) {
+      setApiError('Подтвердите, что вы не робот.');
+      return;
+    }
+
     setSubmitting(true);
     try {
-      await onSubmit(finalPayload, consentChecked);
+      // In upload-on-submit mode (public) we hand the wizard's collected
+      // File refs up so the adapter can build the multipart body. In
+      // upload-now mode (admin) the files are already on the server, so
+      // onSubmit doesn't need them — we still pass an empty bag so the
+      // signature is uniform.
+      const filesArg = filesMode === 'upload-on-submit'
+        ? collectLocalFiles()
+        : { passport_internal: [], passport_foreign: null, ticket: [], voucher: [] };
+      // Public callers receive the captcha token as a 4th arg; admin
+      // mode never reads it (no captcha rendered).
+      await onSubmit(finalPayload, consentChecked, filesArg, captchaToken);
       // Submission accepted — drop the persisted draft so a back-nav
       // starts fresh. Public mode only.
       if (persistEnabled) clearWizardBlob(persistKey);
     } catch (err) {
-      setApiError(err?.message || 'Не удалось отправить анкету.');
+      // If the server reported a list of missing keys, we surface them
+      // via missingFields so ReviewStep can highlight the offending
+      // sections — and we keep the message short and Russian here so
+      // the toast under the action bar stays clean.
+      if (Array.isArray(err?.missing) && err.missing.length > 0) {
+        setMissingFields(err.missing);
+        setApiError('Заполнены не все обязательные поля. Проверьте подсвеченные разделы.');
+      } else {
+        setApiError(err?.message || 'Не удалось отправить анкету.');
+      }
+      // Token is single-use even on a 409 — bump the reset signal so
+      // the widget refreshes before the next attempt. This also covers
+      // the backend's "Не удалось подтвердить, что вы не робот" case
+      // where the user simply needs to press the challenge again.
+      if (captchaActive) {
+        setCaptchaToken('');
+        setCaptchaResetSignal((n) => n + 1);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -486,7 +560,8 @@ export default function FormWizard({
 
   // Step prop bag — every step receives the same shape. The adapter is
   // forwarded so passport / ticket / voucher upload widgets can drive
-  // the right backend without the wizard switching on mode.
+  // the right backend without the wizard switching on mode. `filesMode`
+  // tells the file widgets whether to upload-now or hold-and-ship.
   const stepProps = {
     payload,
     setField,
@@ -498,6 +573,17 @@ export default function FormWizard({
     setPayload,
     autoFillNotice,
     setAutoFillNotice,
+    filesMode,
+    // Review step uses this to jump back to a specific step when the
+    // tourist clicks one of the summary section headers.
+    goToStepById: (id) => {
+      const idx = STEPS.findIndex((s) => s.id === id);
+      if (idx >= 0) handleJump(idx);
+    },
+    // List of payload keys the server flagged as missing in the last
+    // submit attempt. ReviewStep maps each key to the step that owns it
+    // and glows the matching summary section.
+    missingFields,
     // Review step needs consent state.
     consent: showConsent ? consent : undefined,
     consentLoading,
@@ -505,6 +591,15 @@ export default function FormWizard({
     setConsentChecked,
     consentExpanded,
     setConsentExpanded,
+    // SmartCaptcha plumbing — ReviewStep renders the widget and pipes
+    // the token back up via setCaptchaToken. captchaResetSignal lets us
+    // refresh the widget after a failed submit (token is single-use).
+    // siteKey doubles as the on/off switch: empty → no widget, captcha
+    // soft-disabled.
+    captchaToken,
+    setCaptchaToken,
+    captchaResetSignal,
+    siteKey,
   };
 
   const mobileProgressPct = ((currentStep + 1) / STEPS.length) * 100;
@@ -576,7 +671,11 @@ export default function FormWizard({
               type="button"
               className="fw-btn fw-btn-primary"
               onClick={handleSubmit}
-              disabled={submitting || (showConsent && !consentChecked)}
+              disabled={
+                submitting
+                || (showConsent && !consentChecked)
+                || (Boolean(adapter?.isPublic) && Boolean(siteKey) && !captchaToken)
+              }
             >
               {submitting
                 ? (adapter?.isPublic ? 'Отправка…' : 'Сохранение…')

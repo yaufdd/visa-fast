@@ -57,7 +57,7 @@ function SectionActions({ children }) {
 
 export default function DocumentsStep({
   payload, setField, errors, files, setFiles, adapter, submissionId,
-  setPayload, autoFillNotice, setAutoFillNotice,
+  setPayload, autoFillNotice, setAutoFillNotice, filesMode,
 }) {
   const isAdmin = !adapter?.isPublic;
 
@@ -198,6 +198,7 @@ export default function DocumentsStep({
         acceptMime="application/pdf,image/jpeg,image/png"
         compact
         showDelete={!isAdmin}
+        filesMode={filesMode}
       />
       {isAdmin && autoFillNotice && (
         <div className="sf-autofill-notice">{autoFillNotice}</div>
@@ -251,6 +252,7 @@ export default function DocumentsStep({
         acceptMime="application/pdf,image/jpeg,image/png"
         compact
         showDelete={!isAdmin}
+        filesMode={filesMode}
       />
       {isAdmin && ticketParseError && (
         <div className="error-message" style={{ marginTop: 6 }}>{ticketParseError}</div>
@@ -301,6 +303,7 @@ export default function DocumentsStep({
         acceptMime="application/pdf,image/jpeg,image/png"
         compact
         showDelete={!isAdmin}
+        filesMode={filesMode}
       />
       {isAdmin && voucherParseError && (
         <div className="error-message" style={{ marginTop: 6 }}>{voucherParseError}</div>

@@ -20,9 +20,18 @@ async function apiFetch(path, opts = {}) {
 async function errFromRes(res) {
   try {
     const data = await res.json()
-    return new Error(data.error || 'request failed')
+    const err = new Error(data.error || 'request failed')
+    // Pass through extra fields the backend attached to the error so
+    // callers can react to them (e.g. `missing` list of unfilled keys
+    // surfaced by validateSubmissionPayload). status is also handy when
+    // the caller wants to branch on 409 / 413 / etc.
+    if (Array.isArray(data.missing)) err.missing = data.missing
+    err.status = res.status
+    return err
   } catch {
-    return new Error(`${res.status} ${res.statusText}`)
+    const err = new Error(`${res.status} ${res.statusText}`)
+    err.status = res.status
+    return err
   }
 }
 
@@ -606,17 +615,55 @@ export async function publicGetOrg(slug) {
   return res.json()
 }
 
-// publicCreateSubmission posts the final form payload. When `submissionId`
-// is provided (Phase 3 flow), the backend finalises an existing draft row
-// — the same id that was returned by /start and used to attach scans. Old
-// callers that omit it get the legacy "create new pending row" behaviour.
-export async function publicCreateSubmission(slug, payload, consentAccepted, submissionId) {
-  const body = { payload, consent_accepted: consentAccepted }
-  if (submissionId) body.submission_id = submissionId
+// publicSubmit posts the final form payload + selected file scans as a
+// single multipart/form-data request. The backend's MultipartReader walks
+// parts in order: text fields first, then any number of file parts under
+// the four well-known names (passport_internal, passport_foreign, ticket,
+// voucher). 0-or-more file parts is fine for every category — the public
+// form has no required scans.
+//
+// `files` shape (matches FormWizard's internal `files` state):
+//   {
+//     passport_internal: File[],
+//     passport_foreign: File | null,
+//     ticket: File[],
+//     voucher: File[],
+//   }
+//
+// Errors are surfaced through the same Error-with-message convention as
+// the rest of api/client.js. 409 (duplicate submission) is preserved
+// verbatim so the wizard can show its dedicated "уже отправляли" banner.
+export async function publicSubmit(slug, payload, consentAccepted, files, captchaToken) {
+  const fd = new FormData()
+  fd.append('payload', JSON.stringify(payload))
+  fd.append('consent_accepted', consentAccepted ? 'true' : 'false')
+
+  // SmartCaptcha token. Only attach the field when we actually have a
+  // value — empty/missing token is skipped entirely so the backend can
+  // distinguish "captcha disabled on this build" from "user clicked
+  // submit before solving the challenge". The backend treats a missing
+  // smart-token as "captcha disabled" only when its server-side secret
+  // is also unset; otherwise an empty token is rejected.
+  if (typeof captchaToken === 'string' && captchaToken !== '') {
+    fd.append('smart-token', captchaToken)
+  }
+
+  const f = files || {}
+  for (const file of Array.isArray(f.passport_internal) ? f.passport_internal : []) {
+    if (file) fd.append('passport_internal', file)
+  }
+  if (f.passport_foreign) fd.append('passport_foreign', f.passport_foreign)
+  for (const file of Array.isArray(f.ticket) ? f.ticket : []) {
+    if (file) fd.append('ticket', file)
+  }
+  for (const file of Array.isArray(f.voucher) ? f.voucher : []) {
+    if (file) fd.append('voucher', file)
+  }
+
+  // No Content-Type header — let the browser set the boundary string.
   const res = await fetch(`${API}/public/submissions/${slug}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: fd,
   })
   if (!res.ok) throw await errFromRes(res)
   return res.json()

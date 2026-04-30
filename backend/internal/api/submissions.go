@@ -80,6 +80,7 @@ func copyAttachedSubmissionDocs(ctx context.Context, pool *pgxpool.Pool, uploads
 // without ever typing internal-passport numbers.
 var requiredPayloadKeys = []string{
 	"name_lat", "name_cyr", "gender_ru", "birth_date",
+	"marital_status_ru",
 	"passport_number", "issue_date", "expiry_date",
 	"phone", "home_address_ru",
 }

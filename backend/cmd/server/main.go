@@ -15,6 +15,7 @@ import (
 
 	"fujitravel-admin/backend/internal/ai"
 	"fujitravel-admin/backend/internal/ai/yandex"
+	"fujitravel-admin/backend/internal/captcha"
 	dbrepo "fujitravel-admin/backend/internal/db"
 	"fujitravel-admin/backend/internal/server"
 )
@@ -62,6 +63,17 @@ func main() {
 	// AI audit log.
 	ocrRaw := yandex.NewOCRClientFromSource(tokenSource, yandexFolderID, "")
 	ocrClient := ai.NewYandexOCRAdapter(ocrRaw)
+
+	// Yandex SmartCaptcha gate for the public submission endpoint.
+	// Soft-optional: an empty secret means verification is skipped
+	// entirely, which keeps local dev working without a captcha key.
+	// Production deployments set YANDEX_CAPTCHA_SECRET to flip this on.
+	captchaVerifier := captcha.New(os.Getenv("YANDEX_CAPTCHA_SECRET"))
+	if captchaVerifier.Enabled() {
+		slog.Info("smartcaptcha verification enabled")
+	} else {
+		slog.Info("smartcaptcha verification disabled (YANDEX_CAPTCHA_SECRET not set)")
+	}
 
 	// Resolve uploads dir to absolute path relative to cwd.
 	if !filepath.IsAbs(uploadsDir) {
@@ -115,7 +127,7 @@ func main() {
 	}
 
 	// ── Router ────────────────────────────────────────────────────────────────
-	r := server.NewRouter(pool, translator, ocrClient, uploadsDir, pythonScript)
+	r := server.NewRouter(pool, translator, ocrClient, captchaVerifier, uploadsDir, pythonScript)
 
 	slog.Info("starting server", "port", port)
 	if err := http.ListenAndServe(":"+port, r); err != nil {
