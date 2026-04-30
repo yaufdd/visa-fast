@@ -299,8 +299,12 @@ export default function FormWizard({
       return [v];
     };
     return {
-      passport_internal: toArr(initialFiles.passport_internal),
-      passport_main: [],
+      passport_internal: [],
+      // Existing passport files (admin loading a saved submission) land in
+      // passport_main — they can't be distinguished by page type after the
+      // fact, so the first slot is the best home. The manager can move files
+      // by deleting and re-uploading into the correct slot.
+      passport_main: toArr(initialFiles.passport_internal),
       passport_reg: [],
       passport_foreign: initialFiles.passport_foreign ?? null,
       ticket: toArr(initialFiles.ticket),

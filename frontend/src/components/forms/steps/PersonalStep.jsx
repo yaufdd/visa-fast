@@ -98,7 +98,7 @@ export default function PersonalStep({ payload, setField, errors }) {
   return (
     <div className="fw-step-content">
       <label className={`sf-field${errors.name_cyr ? ' has-error' : ''}`} data-field="name_cyr">
-        <span className="sf-label">ФИО кириллицей *</span>
+        <span className="sf-label">ФИО кириллицей</span>
         <input
           type="text"
           value={payload.name_cyr ?? ''}
@@ -109,7 +109,7 @@ export default function PersonalStep({ payload, setField, errors }) {
       </label>
 
       <label className={`sf-field${errors.name_lat ? ' has-error' : ''}`} data-field="name_lat">
-        <span className="sf-label">ФИО латиницей *</span>
+        <span className="sf-label">ФИО латиницей</span>
         <input
           type="text"
           value={payload.name_lat ?? ''}
@@ -124,15 +124,15 @@ export default function PersonalStep({ payload, setField, errors }) {
         {errors.name_lat && <span className="sf-error">{errors.name_lat}</span>}
       </label>
 
-      {selectField('gender_ru', 'Пол *', [
+      {selectField('gender_ru', 'Пол', [
         { value: '', label: '—' },
         { value: 'Мужской', label: 'Мужской' },
         { value: 'Женский', label: 'Женский' },
       ])}
 
-      {dateField('birth_date', 'Дата рождения *')}
+      {dateField('birth_date', 'Дата рождения')}
 
-      {selectField('marital_status_ru', 'Семейное положение *', [
+      {selectField('marital_status_ru', 'Семейное положение', [
         { value: '', label: '—' },
         { value: 'Холост/не замужем', label: 'Холост / не замужем' },
         { value: 'Женат/замужем', label: 'Женат / замужем' },
@@ -214,7 +214,7 @@ export default function PersonalStep({ payload, setField, errors }) {
       {/* Phone moved here from TravelDocsStep — it belongs with the
           tourist's personal contact details, not with travel documents.
           Required (visa anketa needs a contact phone). */}
-      {phoneField('phone', 'Телефон *')}
+      {phoneField('phone', 'Телефон')}
     </div>
   );
 }
@@ -241,6 +241,15 @@ export function validate(payload) {
   }
   if (!String(payload.marital_status_ru || '').trim()) {
     errors.marital_status_ru = 'Выберите семейное положение';
+  }
+  if (!String(payload.place_of_birth_ru || '').trim()) {
+    errors.place_of_birth_ru = 'Укажите место рождения';
+  }
+  if (payload.nationality_choice === 'other' && !String(payload.nationality_ru || '').trim()) {
+    errors.nationality_ru = 'Укажите гражданство';
+  }
+  if (payload.had_other_name === 'Да' && !String(payload.maiden_name_ru || '').trim()) {
+    errors.maiden_name_ru = 'Укажите прежнюю фамилию';
   }
   if (!String(payload.phone || '').trim()) {
     errors.phone = 'Укажите контактный телефон';

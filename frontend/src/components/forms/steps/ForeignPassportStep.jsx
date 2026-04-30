@@ -28,8 +28,8 @@ export default function ForeignPassportStep({
         { value: 'Дипломатический', label: 'Дипломатический' },
         { value: 'Служебный', label: 'Служебный' },
       ])}
-      {dateField('issue_date', 'Дата выдачи *')}
-      {dateField('expiry_date', 'Дата окончания *')}
+      {dateField('issue_date', 'Дата выдачи')}
+      {dateField('expiry_date', 'Дата окончания')}
       {boxedField('issued_by_ru', 'Кем выдан')}
 
       {isAdmin && (

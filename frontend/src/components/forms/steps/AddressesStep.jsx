@@ -50,7 +50,7 @@ export default function AddressesStep({ payload, setField, errors }) {
       {sameAddress
         ? (
           <label className="sf-field" data-field="home_address_ru">
-            <span className="sf-label">Домашний адрес *</span>
+            <span className="sf-label">Домашний адрес</span>
             <textarea
               value={payload.home_address_ru ?? ''}
               rows={3}
@@ -58,7 +58,7 @@ export default function AddressesStep({ payload, setField, errors }) {
             />
           </label>
         )
-        : textareaField('home_address_ru', 'Домашний адрес *')
+        : textareaField('home_address_ru', 'Домашний адрес')
       }
     </div>
   );

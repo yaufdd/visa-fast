@@ -80,7 +80,12 @@ export default function DocumentsStep({
 
   const [parsingPassport, setParsingPassport] = useState(false);
   const [passportParseError, setPassportParseError] = useState(null);
-  const passportFiles = Array.isArray(files.passport_internal) ? files.passport_internal : [];
+  // Combine both UI slots — admin recognition button processes all pages.
+  const passportFiles = [
+    ...(Array.isArray(files.passport_main) ? files.passport_main : []),
+    ...(Array.isArray(files.passport_reg) ? files.passport_reg : []),
+    ...(Array.isArray(files.passport_internal) ? files.passport_internal : []),
+  ];
   const handleParsePassport = async () => {
     if (passportFiles.length === 0 || !onPassportAutoFill) return;
     setParsingPassport(true);
@@ -181,103 +186,81 @@ export default function DocumentsStep({
   return (
     <div className="fw-step-content">
       {/* ── Внутренний паспорт ─────────────────────────────────────── */}
-      {isAdmin ? (
-        <>
-          <FileMultiUploadField
-            label="Скан внутреннего паспорта"
-            fileType="passport_internal"
-            adapter={adapter}
-            submissionId={submissionId}
-            currentFiles={passportFiles}
-            onAdded={(meta) => setFiles((f) => ({
-              ...f,
-              passport_internal: [...(Array.isArray(f.passport_internal) ? f.passport_internal : []), meta],
-            }))}
-            onRemoved={(fileId) => setFiles((f) => ({
-              ...f,
-              passport_internal: (Array.isArray(f.passport_internal) ? f.passport_internal : []).filter((x) => x.id !== fileId),
-            }))}
-            acceptMime="application/pdf,image/jpeg,image/png"
-            compact
-            showDelete={false}
-            filesMode={filesMode}
-          />
-          {autoFillNotice && (
-            <div className="sf-autofill-notice">{autoFillNotice}</div>
-          )}
-          {passportParseError && (
-            <div className="error-message" style={{ marginTop: 6 }}>{passportParseError}</div>
-          )}
-          <SectionActions>
-            <button
-              type="button"
-              className="btn btn-sm btn-magic"
-              onClick={handleParsePassport}
-              disabled={passportFiles.length === 0 || parsingPassport}
-              title={passportFiles.length > 0
-                ? 'Распознать сканы паспорта и заполнить поля'
-                : 'Загрузите хотя бы один скан паспорта, чтобы запустить распознавание'}
-              aria-label="Распознать"
-              style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '4px 8px' }}
-            >
-              {parsingPassport ? <span className="spinner" /> : <MagicIcon />}
-            </button>
-            <button
-              type="button"
-              className={`btn btn-secondary btn-sm${winkPassport ? ' btn-wink' : ''}`}
-              onClick={() => { setWinkPassport(false); setPassportModalOpen(true); }}
-              title="Просмотреть и отредактировать поля паспорта"
-              aria-label="Открыть"
-              style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '4px 8px' }}
-            >
-              <EyeIcon />
-            </button>
-          </SectionActions>
-        </>
-      ) : (
-        <>
-          <FileMultiUploadField
-            label="Первая страница паспорта"
-            fileType="passport_main"
-            adapter={adapter}
-            submissionId={submissionId}
-            currentFiles={Array.isArray(files.passport_main) ? files.passport_main : []}
-            onAdded={(meta) => setFiles((f) => ({
-              ...f,
-              passport_main: [...(Array.isArray(f.passport_main) ? f.passport_main : []), meta],
-            }))}
-            onRemoved={(fileId) => setFiles((f) => ({
-              ...f,
-              passport_main: (Array.isArray(f.passport_main) ? f.passport_main : []).filter((x) => x.id !== fileId),
-            }))}
-            acceptMime="application/pdf,image/jpeg,image/png"
-            compact
-            showDelete={false}
-            filesMode={filesMode}
-          />
-          <FileMultiUploadField
-            label="Страница с регистрацией"
-            fileType="passport_reg"
-            adapter={adapter}
-            submissionId={submissionId}
-            currentFiles={Array.isArray(files.passport_reg) ? files.passport_reg : []}
-            onAdded={(meta) => setFiles((f) => ({
-              ...f,
-              passport_reg: [...(Array.isArray(f.passport_reg) ? f.passport_reg : []), meta],
-            }))}
-            onRemoved={(fileId) => setFiles((f) => ({
-              ...f,
-              passport_reg: (Array.isArray(f.passport_reg) ? f.passport_reg : []).filter((x) => x.id !== fileId),
-            }))}
-            acceptMime="application/pdf,image/jpeg,image/png"
-            compact
-            showDelete={false}
-            filesMode={filesMode}
-          />
-          <p className="sf-hint" style={{ marginTop: 4 }}>
-            Страница с актуальной регистрацией. Если в паспорте есть страницы с предыдущими регистрациями — приложите их тоже.
-          </p>
-        </>
+      <FileMultiUploadField
+        label="Первая страница паспорта"
+        fileType="passport_main"
+        uploadFileType="passport_internal"
+        adapter={adapter}
+        submissionId={submissionId}
+        currentFiles={Array.isArray(files.passport_main) ? files.passport_main : []}
+        onAdded={(meta) => setFiles((f) => ({
+          ...f,
+          passport_main: [...(Array.isArray(f.passport_main) ? f.passport_main : []), meta],
+        }))}
+        onRemoved={(fileId) => setFiles((f) => ({
+          ...f,
+          passport_main: (Array.isArray(f.passport_main) ? f.passport_main : []).filter((x) => x.id !== fileId),
+        }))}
+        acceptMime="application/pdf,image/jpeg,image/png"
+        compact
+        showDelete={false}
+        filesMode={filesMode}
+      />
+      <FileMultiUploadField
+        label="Страница с регистрацией"
+        fileType="passport_reg"
+        uploadFileType="passport_internal"
+        adapter={adapter}
+        submissionId={submissionId}
+        currentFiles={Array.isArray(files.passport_reg) ? files.passport_reg : []}
+        onAdded={(meta) => setFiles((f) => ({
+          ...f,
+          passport_reg: [...(Array.isArray(f.passport_reg) ? f.passport_reg : []), meta],
+        }))}
+        onRemoved={(fileId) => setFiles((f) => ({
+          ...f,
+          passport_reg: (Array.isArray(f.passport_reg) ? f.passport_reg : []).filter((x) => x.id !== fileId),
+        }))}
+        acceptMime="application/pdf,image/jpeg,image/png"
+        compact
+        showDelete={false}
+        filesMode={filesMode}
+      />
+      <p className="sf-hint" style={{ marginTop: 4 }}>
+        Страница с актуальной регистрацией. Если в паспорте есть страницы с предыдущими регистрациями — приложите их тоже.
+      </p>
+      {isAdmin && autoFillNotice && (
+        <div className="sf-autofill-notice">{autoFillNotice}</div>
+      )}
+      {isAdmin && passportParseError && (
+        <div className="error-message" style={{ marginTop: 6 }}>{passportParseError}</div>
+      )}
+      {isAdmin && (
+        <SectionActions>
+          <button
+            type="button"
+            className="btn btn-sm btn-magic"
+            onClick={handleParsePassport}
+            disabled={passportFiles.length === 0 || parsingPassport}
+            title={passportFiles.length > 0
+              ? 'Распознать сканы паспорта и заполнить поля'
+              : 'Загрузите хотя бы один скан паспорта, чтобы запустить распознавание'}
+            aria-label="Распознать"
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '4px 8px' }}
+          >
+            {parsingPassport ? <span className="spinner" /> : <MagicIcon />}
+          </button>
+          <button
+            type="button"
+            className={`btn btn-secondary btn-sm${winkPassport ? ' btn-wink' : ''}`}
+            onClick={() => { setWinkPassport(false); setPassportModalOpen(true); }}
+            title="Просмотреть и отредактировать поля паспорта"
+            aria-label="Открыть"
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '4px 8px' }}
+          >
+            <EyeIcon />
+          </button>
+        </SectionActions>
       )}
 
       {/* ── Авиабилеты ─────────────────────────────────────────────── */}

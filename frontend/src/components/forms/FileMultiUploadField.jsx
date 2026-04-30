@@ -51,6 +51,11 @@ function localFileMeta(file) {
 export default function FileMultiUploadField({
   label,
   fileType,
+  // Optional override for the actual server file type used when uploading.
+  // Lets two UI slots share one backend type (e.g. passport_main and
+  // passport_reg both upload as passport_internal). Ignored in
+  // upload-on-submit mode where no server call is made during pick.
+  uploadFileType,
   adapter,
   submissionId,
   currentFiles = [],
@@ -99,7 +104,7 @@ export default function FileMultiUploadField({
     try {
       const meta = await adapter.uploadFile(
         submissionId,
-        fileType,
+        uploadFileType || fileType,
         file,
         (pct) => setProgress(pct),
       );
@@ -176,7 +181,7 @@ export default function FileMultiUploadField({
     setBusyFileId(oldFile.id);
     setError('');
     try {
-      const meta = await adapter.uploadFile(submissionId, fileType, newFile);
+      const meta = await adapter.uploadFile(submissionId, uploadFileType || fileType, newFile);
       onAdded?.(meta);
       try {
         await adapter.deleteFile(submissionId, oldFile.id);
