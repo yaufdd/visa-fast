@@ -80,6 +80,7 @@ export default function FileUploadField({
   acceptMime = '',
   showDelete = false,
   filesMode = 'upload-now',
+  compact = false,
 }) {
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
@@ -214,7 +215,7 @@ export default function FileUploadField({
 
       {showEmpty && (
         <div
-          className={`ff-drop${dragging ? ' is-dragging' : ''}${disabled ? ' is-disabled' : ''}`}
+          className={`ff-drop${compact ? ' ff-drop-compact' : ''}${dragging ? ' is-dragging' : ''}${disabled ? ' is-disabled' : ''}`}
           onClick={pickFile}
           onDragOver={(e) => { e.preventDefault(); if (!disabled) setDragging(true); }}
           onDragLeave={() => setDragging(false)}
@@ -223,9 +224,15 @@ export default function FileUploadField({
           tabIndex={disabled ? -1 : 0}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickFile(); } }}
         >
-          <div className="ff-drop-title">Перетащите файл сюда</div>
-          <div className="ff-drop-sub">или нажмите, чтобы выбрать</div>
-          <div className="ff-drop-hint">PDF, JPEG, PNG · до 50 МБ</div>
+          {compact ? (
+            <div className="ff-drop-compact-label">+ файл</div>
+          ) : (
+            <>
+              <div className="ff-drop-title">Перетащите файл сюда</div>
+              <div className="ff-drop-sub">или нажмите, чтобы выбрать</div>
+              <div className="ff-drop-hint">PDF, JPEG, PNG · до 50 МБ</div>
+            </>
+          )}
         </div>
       )}
 
